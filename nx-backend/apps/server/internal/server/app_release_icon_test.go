@@ -185,10 +185,17 @@ func newAppReleaseIconService(t *testing.T, body []byte) *stubAppReleaseService 
 }
 
 type stubAppReleaseService struct {
-	openIconRelease apprelease.Release
-	openIconPath    string
-	openIconErr     error
-	openIconCalls   int
+	openIconRelease     apprelease.Release
+	openIconPath        string
+	openIconErr         error
+	openIconCalls       int
+	updatePolicyRelease apprelease.Release
+	updatePolicyErr     error
+	updatePolicy        apprelease.AppReleasePolicy
+	updatePolicyID      int64
+	updatePolicyCalls   int
+	latestRelease       apprelease.Release
+	latestErr           error
 }
 
 func (s *stubAppReleaseService) List(context.Context, int, int) (apprelease.ListResult, error) {
@@ -213,8 +220,15 @@ func (s *stubAppReleaseService) Archive(context.Context, int64) (apprelease.Rele
 	return apprelease.Release{}, nil
 }
 
+func (s *stubAppReleaseService) UpdatePolicy(_ context.Context, id int64, policy apprelease.AppReleasePolicy) (apprelease.Release, error) {
+	s.updatePolicyCalls++
+	s.updatePolicyID = id
+	s.updatePolicy = policy
+	return s.updatePolicyRelease, s.updatePolicyErr
+}
+
 func (s *stubAppReleaseService) Latest(context.Context, string) (apprelease.Release, error) {
-	return apprelease.Release{}, nil
+	return s.latestRelease, s.latestErr
 }
 
 func (s *stubAppReleaseService) Open(context.Context, int64) (apprelease.Release, *os.File, error) {

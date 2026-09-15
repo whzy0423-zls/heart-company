@@ -20,6 +20,7 @@ type CertificateProvider func() (string, error)
 type releaseStore interface {
 	CreateDraft(context.Context, Release) (Release, error)
 	FindByID(context.Context, int64) (Release, error)
+	UpdatePolicy(context.Context, int64, AppReleasePolicy) (Release, error)
 	Publish(context.Context, int64, string) (Release, error)
 	Archive(context.Context, int64, string) (Release, error)
 	List(context.Context, int, int) (ListResult, error)
@@ -81,17 +82,18 @@ func (s *Service) CreateDraftFromStaged(ctx context.Context, staged StagedFile, 
 		}
 	}
 	release, err := s.store.CreateDraft(ctx, Release{
-		Platform:     "android",
-		AppName:      info.AppName,
-		PackageName:  info.PackageName,
-		IconPath:     iconKey,
-		VersionName:  info.VersionName,
-		VersionCode:  info.VersionCode,
-		ReleaseNotes: notes,
-		FileName:     saved.OriginalName,
-		FilePath:     saved.Key,
-		FileSize:     saved.Size,
-		SHA256:       saved.SHA256,
+		Platform:          "android",
+		AppName:           info.AppName,
+		PackageName:       info.PackageName,
+		IconPath:          iconKey,
+		VersionName:       info.VersionName,
+		VersionCode:       info.VersionCode,
+		RolloutPercentage: 100,
+		ReleaseNotes:      notes,
+		FileName:          saved.OriginalName,
+		FilePath:          saved.Key,
+		FileSize:          saved.Size,
+		SHA256:            saved.SHA256,
 	})
 	if err != nil {
 		cleanupErrors := []error{err}
@@ -145,6 +147,25 @@ func (s *Service) Archive(ctx context.Context, id int64) (Release, error) {
 	}
 	return s.enrichRelease(archived), nil
 }
+
+func (s *Service) UpdatePolicy(ctx context.Context, id int64, policy AppReleasePolicy) (Release, error) {
+	if policy.MinSupportedVersionCode < 0 || policy.RolloutPercentage < 1 || policy.RolloutPercentage > 100 {
+		return Release{}, ErrInvalidPolicy
+	}
+	release, err := s.store.FindByID(ctx, id)
+	if err != nil {
+		return Release{}, err
+	}
+	if policy.MinSupportedVersionCode > release.VersionCode {
+		return Release{}, ErrConflict
+	}
+	updated, err := s.store.UpdatePolicy(ctx, id, policy)
+	if err != nil {
+		return Release{}, err
+	}
+	return s.enrichRelease(updated), nil
+}
+
 func (s *Service) List(ctx context.Context, page, size int) (ListResult, error) {
 	r, err := s.store.List(ctx, page, size)
 	if err != nil {
