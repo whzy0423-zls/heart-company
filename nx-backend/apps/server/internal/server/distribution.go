@@ -486,3 +486,59 @@ func (s *Server) adminDistributionSettlementsRouter(w http.ResponseWriter, r *ht
 	}
 	s.adminDistributionSettlements(w, r)
 }
+
+func (s *Server) appDistributionUsers(w http.ResponseWriter, r *http.Request) {
+	u, ok := appUserFromContext(r)
+	if !ok {
+		httpx.Fail(w, 401, "unauthorized")
+		return
+	}
+	rows, err := s.db.QueryContext(r.Context(), `SELECT u.id,u.nickname,u.member_level,r.direct_agent_id,r.bound_at FROM distribution_user_relations r JOIN distribution_agents direct ON direct.id=r.direct_agent_id JOIN distribution_agents me ON direct.agent_path LIKE me.agent_path || '%' JOIN app_users u ON u.id=r.app_user_id WHERE me.app_user_id=$1 ORDER BY r.bound_at DESC LIMIT 200`, u.ID)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+	type item struct {
+		ID                    int64
+		Nickname, MemberLevel string
+		DirectAgentID         int64
+		BoundAt               string
+	}
+	out := []item{}
+	for rows.Next() {
+		var x item
+		var tm time.Time
+		if err := rows.Scan(&x.ID, &x.Nickname, &x.MemberLevel, &x.DirectAgentID, &tm); err != nil {
+			httpx.Fail(w, 500, err.Error())
+			return
+		}
+		x.BoundAt = tm.Format(time.RFC3339)
+		out = append(out, x)
+	}
+	httpx.OK(w, map[string]any{"items": out, "total": len(out)})
+}
+
+func (s *Server) appDistributionAgents(w http.ResponseWriter, r *http.Request) {
+	u, ok := appUserFromContext(r)
+	if !ok {
+		httpx.Fail(w, 401, "unauthorized")
+		return
+	}
+	rows, err := s.db.QueryContext(r.Context(), `SELECT child.id,child.app_user_id,child.agent_code,child.level,COALESCE(child.parent_agent_id,0),child.root_agent_id,child.agent_path,child.status FROM distribution_agents parent JOIN distribution_agents child ON child.parent_agent_id=parent.id WHERE parent.app_user_id=$1 ORDER BY child.id DESC`, u.ID)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+	out := []distributionAgentResponse{}
+	for rows.Next() {
+		var a distributionAgentResponse
+		if err := rows.Scan(&a.ID, &a.AppUserID, &a.AgentCode, &a.Level, &a.ParentAgentID, &a.RootAgentID, &a.Path, &a.Status); err != nil {
+			httpx.Fail(w, 500, err.Error())
+			return
+		}
+		out = append(out, a)
+	}
+	httpx.OK(w, map[string]any{"items": out, "total": len(out)})
+}
