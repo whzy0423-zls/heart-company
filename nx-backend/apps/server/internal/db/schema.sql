@@ -4955,3 +4955,13 @@ CREATE TABLE IF NOT EXISTS distribution_settlement_items (
   commission_id   BIGINT NOT NULL UNIQUE REFERENCES distribution_commission_records(id) ON DELETE RESTRICT,
   amount          BIGINT NOT NULL CHECK (amount >= 0)
 );
+
+-- Keep existing installations aligned with the settlement state machine.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'distribution_settlements_status_check') THEN
+    ALTER TABLE distribution_settlements DROP CONSTRAINT distribution_settlements_status_check;
+  END IF;
+  ALTER TABLE distribution_settlements ADD CONSTRAINT distribution_settlements_status_check
+    CHECK (status IN ('draft','approved','pending','paid','rejected','cancelled'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
