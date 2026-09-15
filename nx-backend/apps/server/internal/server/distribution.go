@@ -255,3 +255,57 @@ func (s *Server) adminDistributionAgentsRouter(w http.ResponseWriter, r *http.Re
 	}
 	s.adminDistributionAgents(w, r)
 }
+
+func (s *Server) adminDistributionCommissions(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.QueryContext(r.Context(), `SELECT id,order_id,agent_id,app_user_id,agent_level,order_amount,rate_bps,commission_amount,rule_version,status,created_at FROM distribution_commission_records ORDER BY id DESC LIMIT 500`)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+	type row struct {
+		ID, OrderID, AgentID, AppUserID           int64
+		Level                                     int
+		OrderAmount, RateBPS, Amount, RuleVersion int64
+		Status                                    string
+		CreatedAt                                 string
+	}
+	out := []row{}
+	for rows.Next() {
+		var x row
+		var tm time.Time
+		if err := rows.Scan(&x.ID, &x.OrderID, &x.AgentID, &x.AppUserID, &x.Level, &x.OrderAmount, &x.RateBPS, &x.Amount, &x.RuleVersion, &x.Status, &tm); err != nil {
+			httpx.Fail(w, 500, err.Error())
+			return
+		}
+		x.CreatedAt = tm.Format(time.RFC3339)
+		out = append(out, x)
+	}
+	httpx.OK(w, map[string]any{"items": out, "total": len(out)})
+}
+
+func (s *Server) adminDistributionCommissionReverse(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/api/admin/distribution/commissions/"), 10, 64)
+	if err != nil || id <= 0 {
+		httpx.Fail(w, 400, "invalid id")
+		return
+	}
+	var in struct {
+		Reason string `json:"reason"`
+	}
+	if json.NewDecoder(r.Body).Decode(&in) != nil || strings.TrimSpace(in.Reason) == "" {
+		httpx.Fail(w, 400, "reason is required")
+		return
+	}
+	res, err := s.db.ExecContext(r.Context(), `UPDATE distribution_commission_records SET status='reversed',updated_at=now() WHERE id=$1 AND status<>'reversed'`, id)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		httpx.Fail(w, 404, "commission not found or already reversed")
+		return
+	}
+	httpx.OK(w, map[string]any{"reversed": true, "reason": in.Reason})
+}

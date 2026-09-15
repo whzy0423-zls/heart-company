@@ -1150,6 +1150,8 @@ func (s *Server) routes() {
 	}, s.system.HandleUserByID))
 	s.mux.HandleFunc("/api/admin/distribution/agents", s.requireMethodPermission(map[string]string{http.MethodGet: "Customer:App:List", http.MethodPost: "Customer:App:Write"}, s.adminDistributionAgentsRouter))
 	s.mux.HandleFunc("/api/admin/distribution/agents/", s.requireMethodPermission(map[string]string{http.MethodPatch: "Customer:App:Write"}, s.adminDistributionAgentStatus))
+	s.mux.HandleFunc("/api/admin/distribution/commissions/", s.requireMethodPermission(map[string]string{http.MethodPost: "Customer:App:Write"}, s.adminDistributionCommissionReverse))
+	s.mux.HandleFunc("/api/admin/distribution/commissions", s.method(http.MethodGet, s.requirePermission("Customer:App:List", s.adminDistributionCommissions)))
 	s.mux.HandleFunc("/api/app-users/list", s.method(http.MethodGet, s.requirePermission("Customer:App:List", s.appUsers.HandleAppUsers)))
 	s.mux.HandleFunc("/api/app-orders/list", s.method(http.MethodGet, s.requirePermission("Customer:AppOrders:List", s.adminAppOrders)))
 	s.mux.HandleFunc("/api/app-orders/", s.method(http.MethodPost, s.requirePermission("Customer:AppOrders:Write", s.adminAppOrderAction)))
