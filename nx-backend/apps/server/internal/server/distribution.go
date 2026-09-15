@@ -35,7 +35,7 @@ func (s *Server) adminDistributionAgentCreate(w http.ResponseWriter, r *http.Req
 		code = "A" + strconv.FormatInt(in.AppUserID, 10)
 	}
 	var out distributionAgentResponse
-	err := s.db.QueryRowContext(r.Context(), `INSERT INTO distribution_agents(app_user_id,agent_code,level,root_agent_id,agent_path,status) VALUES($1,$2,1,0,'/','active') RETURNING id,app_user_id,agent_code,level,COALESCE(parent_agent_id,0),root_agent_id,agent_path,status`, in.AppUserID, code).Scan(&out.ID, &out.AppUserID, &out.AgentCode, &out.Level, &out.ParentAgentID, &out.RootAgentID, &out.Path, &out.Status)
+	err := s.db.QueryRowContext(r.Context(), `INSERT INTO distribution_agents(id,app_user_id,agent_code,level,root_agent_id,agent_path,status) VALUES(nextval('distribution_agents_id_seq'),$1,$2,1,currval('distribution_agents_id_seq'),'/'||currval('distribution_agents_id_seq')||'/','active') RETURNING id,app_user_id,agent_code,level,COALESCE(parent_agent_id,0),root_agent_id,agent_path,status`, in.AppUserID, code).Scan(&out.ID, &out.AppUserID, &out.AgentCode, &out.Level, &out.ParentAgentID, &out.RootAgentID, &out.Path, &out.Status)
 	if err != nil {
 		httpx.Fail(w, http.StatusConflict, err.Error())
 		return
