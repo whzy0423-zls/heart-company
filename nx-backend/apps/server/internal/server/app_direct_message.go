@@ -25,6 +25,18 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/app/direct/")
 	switch {
+	case strings.HasPrefix(path, "peers/") && strings.HasSuffix(path, "/insights") && r.Method == http.MethodGet:
+		peerID, valid := parseDirectPathID(path, "peers/", "/insights")
+		if !valid || peerID == user.ID {
+			httpx.Fail(w, http.StatusBadRequest, "insight.invalid_peer")
+			return
+		}
+		items, err := s.relationshipInsights.ListByPeer(r.Context(), user.ID, peerID)
+		if err != nil {
+			mapRelationshipInsightError(w, err)
+			return
+		}
+		httpx.OK(w, map[string]any{"items": items})
 	case strings.HasPrefix(path, "conversations/") && strings.HasSuffix(path, "/media"):
 		s.appDirectMedia(w, r)
 	case strings.HasPrefix(path, "conversations/") && strings.HasSuffix(path, "/appearance"):
@@ -132,7 +144,7 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 			mapDirectMessageError(w, err)
 			return
 		}
-		s.directRealtimeHub.Publish(id, map[string]any{"type": "message", "data": item})
+		s.publishDirectMessageEvent(item)
 		if shouldNotifyDirectMessage(item) {
 			senderName := strings.TrimSpace(user.RealName)
 			if senderName == "" {
@@ -162,7 +174,7 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 			mapDirectMessageError(w, err)
 			return
 		}
-		s.directRealtimeHub.Publish(body.ConversationID, directReadEvent(body.ConversationID, user.ID, body.Sequence))
+		s.publishDirectReadEvent(body.ConversationID, user.ID, body.Sequence)
 		httpx.OK(w, nil)
 	case strings.HasPrefix(path, "messages/") && strings.HasSuffix(path, "/recall") && r.Method == http.MethodPost:
 		id, ok := parseDirectPathID(path, "messages/", "/recall")
@@ -184,6 +196,30 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 
 func shouldNotifyDirectMessage(message directmessage.Message) bool {
 	return message.WasCreated && message.ID > 0 && message.RecipientID > 0
+}
+
+func (s *Server) publishDirectMessageEvent(message directmessage.Message) {
+	if s == nil || s.directRealtimeHub == nil {
+		return
+	}
+	event := map[string]any{"type": "message", "data": message}
+	s.directRealtimeHub.Publish(message.ConversationID, event)
+	if !message.WasCreated {
+		return
+	}
+	s.directRealtimeHub.PublishUser(message.SenderID, event)
+	if message.RecipientID != message.SenderID {
+		s.directRealtimeHub.PublishUser(message.RecipientID, event)
+	}
+}
+
+func (s *Server) publishDirectReadEvent(conversationID, userID, sequence int64) {
+	if s == nil || s.directRealtimeHub == nil {
+		return
+	}
+	event := directReadEvent(conversationID, userID, sequence)
+	s.directRealtimeHub.Publish(conversationID, event)
+	s.directRealtimeHub.PublishUser(userID, event)
 }
 
 func directMessageNotificationPayload(message directmessage.Message, senderName string) (title, content, deepLink, source string) {
