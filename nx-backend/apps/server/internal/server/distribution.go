@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -681,4 +682,21 @@ func (s *Server) adminDistributionRulesRouter(w http.ResponseWriter, r *http.Req
 		return
 	}
 	s.adminDistributionRules(w, r)
+}
+
+func (s *Server) appDistributionProfile(w http.ResponseWriter, r *http.Request) {
+	u, ok := appUserFromContext(r)
+	if !ok {
+		httpx.Fail(w, 401, "unauthorized")
+		return
+	}
+	var a distributionAgentResponse
+	if err := s.db.QueryRowContext(r.Context(), `SELECT id,app_user_id,agent_code,level,COALESCE(parent_agent_id,0),root_agent_id,agent_path,status FROM distribution_agents WHERE app_user_id=$1`, u.ID).Scan(&a.ID, &a.AppUserID, &a.AgentCode, &a.Level, &a.ParentAgentID, &a.RootAgentID, &a.Path, &a.Status); err == sql.ErrNoRows {
+		httpx.Fail(w, 404, "not an agent")
+		return
+	} else if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	httpx.OK(w, map[string]any{"agent": a, "inviteUrl": "/invite?agent=" + url.QueryEscape(a.AgentCode)})
 }
