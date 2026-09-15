@@ -142,6 +142,35 @@ func TestCompatibleChatPromptIncludesBoundedSecondaryConversationCard(t *testing
 	}
 }
 
+func TestCompatibleChatPromptUsesCurrentConversationTypeAsReplyPersona(t *testing.T) {
+	t.Parallel()
+
+	prompt := buildCompatibleChatUserMessage(rag.GenerateInput{
+		Question: "我切到妈妈这张卡后，按她的方式聊聊沟通。",
+		UserProfile: rag.UserProfile{
+			Nickname: "小林",
+			MainType: 9,
+		},
+		ConversationCard: rag.ConversationCard{
+			CardType: "secondary",
+			Name:     "妈妈",
+			Relation: "家人",
+			MainType: 2,
+			WingType: 1,
+		},
+	})
+
+	for _, want := range []string{
+		"本轮回答主型=2号",
+		"回答口吻、共情重点、建议切入角度都按本轮回答主型展开",
+		"不要沿用用户档案里的最近主型=9号作为本轮口吻",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing current-type priority %q: %s", want, prompt)
+		}
+	}
+}
+
 func TestCompatibleChatDefaultResponseContract(t *testing.T) {
 	t.Parallel()
 

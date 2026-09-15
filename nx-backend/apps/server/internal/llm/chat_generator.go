@@ -159,6 +159,11 @@ func buildCompatibleChatReference(input rag.GenerateInput) string {
 	}
 	if cardReference := buildCompatibleConversationCardReference(input.ConversationCard); cardReference != "" {
 		reference.WriteString(cardReference + "\n")
+		if input.ConversationCard.MainType >= 1 && input.ConversationCard.MainType <= 9 &&
+			input.UserProfile.MainType >= 1 && input.UserProfile.MainType <= 9 &&
+			input.UserProfile.MainType != input.ConversationCard.MainType {
+			reference.WriteString(fmt.Sprintf("不要沿用用户档案里的最近主型=%d号作为本轮口吻。\n", input.UserProfile.MainType))
+		}
 	}
 	if len(input.UserProfile.Memories) > 0 {
 		written := 0
@@ -225,6 +230,9 @@ func buildCompatibleConversationCardReference(card rag.ConversationCard) string 
 	}
 	if profile != "" {
 		reference.WriteString("画像=" + profile + "；")
+	}
+	if validMainType {
+		reference.WriteString(fmt.Sprintf("\n本轮回答主型=%d号；回答口吻、共情重点、建议切入角度都按本轮回答主型展开，优先于其他历史或档案主型。", card.MainType))
 	}
 	if strings.EqualFold(strings.TrimSpace(card.CardType), "secondary") {
 		reference.WriteString("\n当前关注对象是用户正在咨询的 TA，仅作为关注对象；不要把当前关注对象当成正在输入的用户本人，也不要冒充当前关注对象；请围绕用户与 TA 的关系提供分析和建议。")
