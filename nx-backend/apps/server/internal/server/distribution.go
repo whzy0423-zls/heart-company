@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 )
@@ -166,4 +167,91 @@ func (s *Server) appDistributionCreateChild(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	httpx.OK(w, out)
+}
+
+func (s *Server) adminDistributionAgents(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.QueryContext(r.Context(), `SELECT id,app_user_id,agent_code,level,COALESCE(parent_agent_id,0),root_agent_id,agent_path,status FROM distribution_agents ORDER BY id DESC LIMIT 200`)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+	items := []distributionAgentResponse{}
+	for rows.Next() {
+		var a distributionAgentResponse
+		if err := rows.Scan(&a.ID, &a.AppUserID, &a.AgentCode, &a.Level, &a.ParentAgentID, &a.RootAgentID, &a.Path, &a.Status); err != nil {
+			httpx.Fail(w, 500, err.Error())
+			return
+		}
+		items = append(items, a)
+	}
+	httpx.OK(w, map[string]any{"items": items, "total": len(items)})
+}
+
+func (s *Server) adminDistributionAgentStatus(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/api/admin/distribution/agents/"), 10, 64)
+	if err != nil || id <= 0 {
+		httpx.Fail(w, 400, "invalid id")
+		return
+	}
+	var in struct {
+		Status string `json:"status"`
+	}
+	if json.NewDecoder(r.Body).Decode(&in) != nil || (in.Status != "active" && in.Status != "paused" && in.Status != "disabled") {
+		httpx.Fail(w, 400, "invalid status")
+		return
+	}
+	res, err := s.db.ExecContext(r.Context(), `UPDATE distribution_agents SET status=$2,updated_at=now() WHERE id=$1`, id, in.Status)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		httpx.Fail(w, 404, "agent not found")
+		return
+	}
+	httpx.OK(w, map[string]any{"updated": true})
+}
+
+func (s *Server) appDistributionCommissions(w http.ResponseWriter, r *http.Request) {
+	u, ok := appUserFromContext(r)
+	if !ok {
+		httpx.Fail(w, 401, "unauthorized")
+		return
+	}
+	rows, err := s.db.QueryContext(r.Context(), `SELECT c.id,c.order_id,c.agent_level,c.order_amount,c.rate_bps,c.commission_amount,c.rule_version,c.status,c.created_at FROM distribution_commission_records c JOIN distribution_agents a ON a.id=c.agent_id WHERE a.app_user_id=$1 ORDER BY c.id DESC LIMIT 200`, u.ID)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+	type item struct {
+		ID, OrderID                  int64
+		Level                        int
+		OrderAmount, RateBPS, Amount int64
+		RuleVersion                  int64
+		Status                       string
+		CreatedAt                    string
+	}
+	out := []item{}
+	for rows.Next() {
+		var x item
+		var tm time.Time
+		if err := rows.Scan(&x.ID, &x.OrderID, &x.Level, &x.OrderAmount, &x.RateBPS, &x.Amount, &x.RuleVersion, &x.Status, &tm); err != nil {
+			httpx.Fail(w, 500, err.Error())
+			return
+		}
+		x.CreatedAt = tm.Format(time.RFC3339)
+		out = append(out, x)
+	}
+	httpx.OK(w, map[string]any{"items": out, "total": len(out)})
+}
+
+func (s *Server) adminDistributionAgentsRouter(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		s.adminDistributionAgentCreate(w, r)
+		return
+	}
+	s.adminDistributionAgents(w, r)
 }
