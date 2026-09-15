@@ -49,6 +49,7 @@ const routes: RouteRecordRaw[] = [
         name: 'AppStoryManagement',
         path: 'story-management',
       },
+      { component: () => import('#/views/app/distribution-settlements.vue'), meta: { authority: ['Customer:App:List'], icon: 'lucide:wallet-cards', title: '分销结算' }, name: 'AppDistributionSettlements', path: 'distribution-settlements' },
       {
         component: () => import('#/views/app/distribution-management.vue'),
         meta: { authority: ['Customer:App:List'], icon: 'lucide:share-2', title: '分销代理' },
