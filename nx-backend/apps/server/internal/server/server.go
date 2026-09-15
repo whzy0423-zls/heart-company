@@ -907,6 +907,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/health", s.method(http.MethodGet, s.appHealth))
 	s.mux.HandleFunc("/api/app/features", s.method(http.MethodGet, s.requireAppAuth(s.appFeatures)))
 	s.mux.HandleFunc("/api/app/distribution/overview", s.method(http.MethodGet, s.requireAppAuth(s.appDistributionOverview)))
+	s.mux.HandleFunc("/api/app/distribution/bind", s.method(http.MethodPost, s.requireAppAuth(s.appDistributionBind)))
+	s.mux.HandleFunc("/api/app/distribution/children", s.method(http.MethodPost, s.requireAppAuth(s.appDistributionCreateChild)))
 	s.mux.HandleFunc("/api/app/auth/send-sms", s.method(http.MethodPost, s.appSendSMS))
 	s.mux.HandleFunc("/api/app/auth/sms", s.method(http.MethodPost, s.appSendSMS))
 	s.mux.HandleFunc("/api/app/auth/sms/send", s.method(http.MethodPost, s.appSendSMS))
