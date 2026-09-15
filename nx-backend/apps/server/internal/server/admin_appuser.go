@@ -14,6 +14,16 @@ import (
 )
 
 func (s *Server) adminAppUserByID(w http.ResponseWriter, r *http.Request) {
+	if appTrialCreditRoute(r.URL.Path) {
+		permission, err := appTrialCreditPermission(r.Method)
+		if err != nil {
+			httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+			return
+		}
+		s.requirePermission(permission, s.adminAppTrialCredits)(w, r)
+		return
+	}
+
 	permission := "Customer:App:List"
 	if r.Method == http.MethodPut || r.Method == http.MethodPatch {
 		permission = "Customer:App:Write"
