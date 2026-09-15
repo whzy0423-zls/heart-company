@@ -700,3 +700,57 @@ func (s *Server) appDistributionProfile(w http.ResponseWriter, r *http.Request) 
 	}
 	httpx.OK(w, map[string]any{"agent": a, "inviteUrl": "/invite?agent=" + url.QueryEscape(a.AgentCode)})
 }
+
+func (s *Server) adminDistributionUsers(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.QueryContext(r.Context(), `SELECT u.id,u.nickname,u.member_level,r.direct_agent_id,r.bound_at FROM distribution_user_relations r JOIN app_users u ON u.id=r.app_user_id ORDER BY r.bound_at DESC LIMIT 500`)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+	type item struct {
+		ID                    int64
+		Nickname, MemberLevel string
+		DirectAgentID         int64
+		BoundAt               string
+	}
+	out := []item{}
+	for rows.Next() {
+		var x item
+		var tm time.Time
+		if err := rows.Scan(&x.ID, &x.Nickname, &x.MemberLevel, &x.DirectAgentID, &tm); err != nil {
+			httpx.Fail(w, 500, err.Error())
+			return
+		}
+		x.BoundAt = tm.Format(time.RFC3339)
+		out = append(out, x)
+	}
+	httpx.OK(w, map[string]any{"items": out, "total": len(out)})
+}
+
+func (s *Server) adminDistributionOrders(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.QueryContext(r.Context(), `SELECT o.id,o.out_trade_no,o.app_user_id,o.amount,o.status,o.paid_at FROM app_orders o JOIN distribution_user_relations rel ON rel.app_user_id=o.app_user_id ORDER BY o.id DESC LIMIT 500`)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+	type item struct {
+		ID, AppUserID, Amount      int64
+		OutTradeNo, Status, PaidAt string
+	}
+	out := []item{}
+	for rows.Next() {
+		var x item
+		var tm sql.NullTime
+		if err := rows.Scan(&x.ID, &x.OutTradeNo, &x.AppUserID, &x.Amount, &x.Status, &tm); err != nil {
+			httpx.Fail(w, 500, err.Error())
+			return
+		}
+		if tm.Valid {
+			x.PaidAt = tm.Time.Format(time.RFC3339)
+		}
+		out = append(out, x)
+	}
+	httpx.OK(w, map[string]any{"items": out, "total": len(out)})
+}
