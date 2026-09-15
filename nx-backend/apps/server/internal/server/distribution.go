@@ -450,3 +450,39 @@ func bindDistributionAgent(ctx context.Context, db *sql.DB, userID int64, code s
 	}
 	_, _ = db.ExecContext(ctx, `INSERT INTO distribution_user_relations(app_user_id,direct_agent_id) SELECT $1,id FROM distribution_agents WHERE lower(agent_code)=lower($2) AND status='active' ON CONFLICT(app_user_id) DO NOTHING`, userID, code)
 }
+
+func (s *Server) adminDistributionSettlements(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.QueryContext(r.Context(), `SELECT id,agent_id,period_start,period_end,amount,status,created_at FROM distribution_settlements ORDER BY id DESC LIMIT 200`)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	defer rows.Close()
+	type item struct {
+		ID, AgentID, Amount                       int64
+		PeriodStart, PeriodEnd, Status, CreatedAt string
+	}
+	out := []item{}
+	for rows.Next() {
+		var x item
+		var a, b time.Time
+		var c time.Time
+		if err := rows.Scan(&x.ID, &x.AgentID, &a, &b, &x.Amount, &x.Status, &c); err != nil {
+			httpx.Fail(w, 500, err.Error())
+			return
+		}
+		x.PeriodStart = a.Format("2006-01-02")
+		x.PeriodEnd = b.Format("2006-01-02")
+		x.CreatedAt = c.Format(time.RFC3339)
+		out = append(out, x)
+	}
+	httpx.OK(w, map[string]any{"items": out, "total": len(out)})
+}
+
+func (s *Server) adminDistributionSettlementsRouter(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		s.adminDistributionSettlementCreate(w, r)
+		return
+	}
+	s.adminDistributionSettlements(w, r)
+}
