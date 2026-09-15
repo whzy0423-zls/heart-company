@@ -363,7 +363,7 @@ func (s *Server) adminDistributionSettlementCreate(w http.ResponseWriter, r *htt
 		httpx.Fail(w, 500, err.Error())
 		return
 	}
-	if _, err = tx.ExecContext(r.Context(), `UPDATE distribution_commission_records SET status='settled',updated_at=now() WHERE agent_id=$1 AND status='pending' AND created_at >= $2::date AND created_at < ($3::date + INTERVAL '1 day')`, in.AgentID, in.Start, in.End); err != nil {
+	if _, err = tx.ExecContext(r.Context(), `UPDATE distribution_commission_records SET status='pending',updated_at=now() WHERE agent_id=$1 AND status='pending' AND created_at >= $2::date AND created_at < ($3::date + INTERVAL '1 day')`, in.AgentID, in.Start, in.End); err != nil {
 		httpx.Fail(w, 500, err.Error())
 		return
 	}
@@ -412,6 +412,12 @@ func (s *Server) adminDistributionSettlementAction(w http.ResponseWriter, r *htt
 	if n == 0 {
 		httpx.Fail(w, 409, "invalid settlement state or not found")
 		return
+	}
+	if next == "paid" {
+		if _, err = s.db.ExecContext(r.Context(), `UPDATE distribution_commission_records SET status='settled', updated_at=now() WHERE id IN (SELECT commission_id FROM distribution_settlement_items WHERE settlement_id=$1) AND status='pending'`, id); err != nil {
+			httpx.Fail(w, 500, err.Error())
+			return
+		}
 	}
 	httpx.OK(w, map[string]any{"updated": true, "status": next})
 }
