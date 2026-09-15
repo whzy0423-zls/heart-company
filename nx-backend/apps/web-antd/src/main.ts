@@ -3,6 +3,36 @@ import { unmountGlobalLoading } from '@vben/utils';
 
 import { overridesPreferences, preferencesExtension } from './preferences';
 
+const deploymentRecoveryKey = 'admin-deployment-recovery-at';
+const deploymentRecoveryWindowMs = 30_000;
+
+function installDeploymentRecovery() {
+  window.addEventListener('vite:preloadError', (event) => {
+    const now = Date.now();
+    const lastRecoveryAt = Number(
+      window.sessionStorage.getItem(deploymentRecoveryKey) || 0,
+    );
+    if (now - lastRecoveryAt < deploymentRecoveryWindowMs) {
+      return;
+    }
+
+    event.preventDefault();
+    window.sessionStorage.setItem(deploymentRecoveryKey, String(now));
+    const recoveryUrl = new URL(window.location.href);
+    recoveryUrl.searchParams.set('__admin_reload', String(now));
+    window.location.replace(recoveryUrl.toString());
+  });
+}
+
+function clearDeploymentRecovery() {
+  window.sessionStorage.removeItem(deploymentRecoveryKey);
+  const currentUrl = new URL(window.location.href);
+  if (currentUrl.searchParams.has('__admin_reload')) {
+    currentUrl.searchParams.delete('__admin_reload');
+    window.history.replaceState(null, '', currentUrl.toString());
+  }
+}
+
 /**
  * 应用初始化完成之后再进行页面加载渲染
  */
@@ -27,6 +57,8 @@ async function initApplication() {
 
   // 移除并销毁loading
   unmountGlobalLoading();
+  clearDeploymentRecovery();
 }
 
+installDeploymentRecovery();
 initApplication();
