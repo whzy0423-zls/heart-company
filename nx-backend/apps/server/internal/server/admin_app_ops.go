@@ -52,6 +52,8 @@ func (s *Server) adminAppOrderAction(w http.ResponseWriter, r *http.Request) {
 		s.adminAppOrderGrant(w, r)
 	case strings.HasSuffix(path, "/reconcile"):
 		s.adminAppOrderReconcile(w, r)
+	case strings.HasSuffix(path, "/refund"):
+		s.adminAppOrderRefund(w, r)
 	default:
 		httpx.Fail(w, http.StatusNotFound, "订单操作不存在")
 	}
@@ -116,6 +118,8 @@ func (s *Server) adminAppOrderGrant(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "订单商品不是可开通的会员套餐")
 		return
 	}
+	durationDays, _ := membershipDurationDays(before.ProductID)
+	_ = tx.QueryRowContext(r.Context(), `SELECT duration_days FROM app_orders WHERE id=$1`, id).Scan(&durationDays)
 	var currentStartedAt, currentExpiresAt sql.NullTime
 	if err := tx.QueryRowContext(r.Context(), `SELECT member_started_at, member_expires_at FROM app_users WHERE id=$1 FOR UPDATE`, before.AppUserID).Scan(&currentStartedAt, &currentExpiresAt); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
@@ -125,7 +129,7 @@ func (s *Server) adminAppOrderGrant(w http.ResponseWriter, r *http.Request) {
 	if currentExpiresAt.Valid {
 		currentExpiry = &currentExpiresAt.Time
 	}
-	period, err := calculateMembershipPeriod(before.ProductID, activationAt, currentExpiry)
+	period, err := calculateMembershipPeriodDays(durationDays, activationAt, currentExpiry)
 	if err != nil {
 		httpx.Fail(w, http.StatusBadRequest, err.Error())
 		return
@@ -375,4 +379,54 @@ func formatAdminTime(t time.Time) string {
 		return ""
 	}
 	return t.Format("2006/01/02 15:04:05")
+}
+
+func (s *Server) adminAppOrderRefund(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseTrailingIntID(w, r, "/api/app-orders/", "/refund")
+	if !ok {
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&body) != nil || strings.TrimSpace(body.Reason) == "" {
+		httpx.Fail(w, 400, "退款原因不能为空")
+		return
+	}
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	defer tx.Rollback()
+	var status string
+	var userID int64
+	if err = tx.QueryRowContext(r.Context(), `SELECT status,app_user_id FROM app_orders WHERE id=$1 FOR UPDATE`, id).Scan(&status, &userID); err == sql.ErrNoRows {
+		httpx.Fail(w, 404, "order not found")
+		return
+	} else if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	if status == "refunded" {
+		httpx.OK(w, map[string]any{"refunded": true})
+		return
+	}
+	if status != "paid" {
+		httpx.Fail(w, 409, "only paid orders can be refunded")
+		return
+	}
+	if _, err = tx.ExecContext(r.Context(), `UPDATE app_orders SET status='refunded',payment_error=$2,update_time=now() WHERE id=$1`, id, "refund: "+strings.TrimSpace(body.Reason)); err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	if _, err = tx.ExecContext(r.Context(), `UPDATE distribution_commission_records SET status='reversed',updated_at=now() WHERE order_id=$1 AND status<>'reversed'`, id); err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	httpx.OK(w, map[string]any{"refunded": true, "orderId": id, "userId": userID})
 }
