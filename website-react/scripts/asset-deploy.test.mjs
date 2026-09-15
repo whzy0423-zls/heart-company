@@ -39,4 +39,10 @@ assert.match(
   '安装字幕必须声明 text/vtt MIME，避免浏览器拒绝 application/octet-stream 字幕',
 )
 
+assert.match(
+  nginxSource,
+  /location\s+=\s+\/index\.html\s*\{[^}]*add_header\s+Cache-Control\s+"no-cache, no-store, must-revalidate"\s+always;/s,
+  'SPA 入口必须禁用缓存，确保 /app 能及时加载最新带哈希静态资源',
+)
+
 console.log('website asset deployment tests passed')
