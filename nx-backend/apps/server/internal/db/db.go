@@ -136,6 +136,9 @@ func seed(ctx context.Context, database *sql.DB, adminUser, adminPassword string
 	if err := seedStoryManagementMenu(ctx, database); err != nil {
 		return err
 	}
+	if err := seedAppPlanManagementMenu(ctx, database); err != nil {
+		return err
+	}
 	if err := seedCustomerMiniappMenuBindings(ctx, database); err != nil {
 		return err
 	}
@@ -195,10 +198,12 @@ var defaultMenus = []seedMenu{
 	{ID: 1405, PID: 1401, Name: "MiniappClassroomUpload", AuthCode: "Miniapp:Classroom:Upload", Type: "button", Sort: 2, Icon: "lucide:upload", Title: "上传课件"},
 	{ID: 1406, PID: 1401, Name: "MiniappClassroomPublish", AuthCode: "Miniapp:Classroom:Publish", Type: "button", Sort: 3, Icon: "lucide:send", Title: "发布/下线课件"},
 	{ID: 1407, PID: 1401, Name: "MiniappClassroomPrice", AuthCode: "Miniapp:Classroom:Price", Type: "button", Sort: 4, Icon: "lucide:badge-dollar-sign", Title: "设置课件价格"},
+	{ID: 1600, PID: 0, Name: "AppManage", Path: "/app", Type: "catalog", Sort: 14, Icon: "lucide:panels-top-left", Title: "App 管理"},
 	{ID: 500, PID: 0, Name: "CustomerManage", Path: "/customer", Type: "catalog", Sort: 15, Icon: "lucide:contact-round", Title: "客户管理"},
 	{ID: 501, PID: 500, Name: "CustomerSignupLeads", Path: "/customer/signups", Component: "/site-config/signup-leads", AuthCode: "Customer:Signup:List", Type: "menu", Sort: 1, Icon: "lucide:inbox", Title: "报名信息"},
 	{ID: 502, PID: 1600, Name: "CustomerAppUsers", Path: "/customer/app-users", Component: "/customer/app-users", AuthCode: "Customer:App:List", Type: "menu", Sort: 2, Icon: "lucide:users-round", Title: "App 客户"},
 	{ID: 503, PID: 502, Name: "CustomerAppUsersEdit", AuthCode: "Customer:App:Write", Type: "button", Sort: 1, Icon: "lucide:pencil", Title: "编辑 App 客户"},
+	{ID: 512, PID: 502, Name: "CustomerAppTrialCreditGrant", AuthCode: "Customer:AppTrialCredit:Grant", Type: "button", Sort: 2, Icon: "lucide:gift", Title: "赠送试用额度"},
 	{ID: 504, PID: 1600, Name: "CustomerUserInsights", Path: "/customer/user-insights", Component: "/customer/user-insights", AuthCode: "Customer:UserInsights:List", Type: "menu", Sort: 3, Icon: "lucide:user-search", Title: "用户提炼数据"},
 	{ID: 505, PID: 1600, Name: "CustomerAppOrders", Path: "/customer/app-orders", Component: "/customer/app-orders", AuthCode: "Customer:AppOrders:List", Type: "menu", Sort: 4, Icon: "lucide:receipt-text", Title: "App 订单"},
 	{ID: 506, PID: 505, Name: "CustomerAppOrdersGrant", AuthCode: "Customer:AppOrders:Write", Type: "button", Sort: 1, Icon: "lucide:badge-check", Title: "补发订单权益"},
@@ -315,9 +320,11 @@ const deprecatedMenusSQL = `DELETE FROM menus
 func migrateLegacyVideoMenuBindings(ctx context.Context, database *sql.DB) error {
 	_, err := database.ExecContext(ctx,
 		`INSERT INTO role_menus (role_id, menu_id)
-		 SELECT DISTINCT role_id, 1001
-		   FROM role_menus
-		  WHERE menu_id IN (1001,1002,1003,1004,1005,1006,1007,1008,1010)
+		 SELECT DISTINCT rm.role_id, 1001
+		   FROM role_menus rm
+		   JOIN menus m ON m.id = rm.menu_id
+		  WHERE rm.menu_id IN (1001,1002,1003,1004,1005,1006,1007,1008,1010)
+		    AND EXISTS (SELECT 1 FROM menus target WHERE target.id = 1001)
 		 ON CONFLICT (role_id, menu_id) DO NOTHING`)
 	return err
 }
