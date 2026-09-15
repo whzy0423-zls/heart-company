@@ -250,7 +250,7 @@ func generateDistributionCommissionsTx(ctx context.Context, tx *sql.Tx, orderID,
 			WHERE r.app_user_id=$1
 			UNION ALL
 			SELECT p.id, p.app_user_id, p.level, p.parent_agent_id, p.root_agent_id,
-			       ('/'||p.id||'/'||c.path)::text
+			       ('/'||p.id||'/'||trim(c.path,'/')||'/')::text
 			FROM chain c JOIN distribution_agents p ON p.id=c.parent_agent_id
 		), active_rule AS (
 			SELECT id, version FROM distribution_commission_rules WHERE status='active' ORDER BY version DESC LIMIT 1
