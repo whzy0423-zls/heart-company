@@ -126,6 +126,8 @@ function openPolicy(record: AppRelease) {
 function closePolicy() {
   if (policySaving.value) return;
   policyOpen.value = false;
+}
+function onPolicyAfterClose() {
   policyRelease.value = null;
   policyForm.value = {
     forceUpdate: false,
@@ -167,7 +169,6 @@ async function savePolicy() {
       item.id === updated.id ? updated : item,
     );
     policyOpen.value = false;
-    policyRelease.value = null;
     message.success('更新策略已保存');
   } catch {
     message.error('更新策略保存失败，请重试');
@@ -424,7 +425,9 @@ onMounted(load);
       "
       width="min(520px, calc(100vw - 32px))"
       @cancel="closePolicy"
+      @after-close="onPolicyAfterClose"
       @ok="savePolicy"
+      :cancel-button-props="{ disabled: policySaving }"
     >
       <Form layout="vertical">
         <Form.Item label="最低支持版本号">

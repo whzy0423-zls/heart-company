@@ -1,7 +1,7 @@
 /* eslint-disable vue/one-component-per-file */
 import type { AppRelease } from '#/api';
 
-import { defineComponent, h } from 'vue';
+import { defineComponent, h, ref, watch } from 'vue';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -117,27 +117,54 @@ vi.mock('ant-design-vue', async () => {
       name: 'ModalStub',
       inheritAttrs: false,
       props: {
+        cancelButtonProps: { default: () => ({}), type: Object },
         confirmLoading: { default: false, type: Boolean },
         open: { default: false, type: Boolean },
         title: { default: '', type: String },
       },
-      emits: ['cancel', 'ok', 'update:open'],
+      emits: ['afterClose', 'cancel', 'ok', 'update:open'],
       setup(props, { attrs, emit, slots }) {
+        const rendered = ref(props.open);
+        watch(
+          () => props.open,
+          (open) => {
+            if (open) rendered.value = true;
+          },
+        );
         return () =>
-          props.open
-            ? h('div', { ...attrs, role: 'dialog' }, [
-                props.title,
-                slots.default?.(),
-                h(
-                  'button',
-                  {
-                    disabled: props.confirmLoading,
-                    onClick: () => emit('ok'),
-                  },
-                  '保存策略',
-                ),
-                h('button', { onClick: () => emit('cancel') }, '取消'),
-              ])
+          rendered.value
+            ? h(
+                'div',
+                { ...attrs, 'data-open': String(props.open), role: 'dialog' },
+                [
+                  props.title,
+                  slots.default?.(),
+                  h(
+                    'button',
+                    {
+                      disabled: props.confirmLoading,
+                      onClick: () => emit('ok'),
+                    },
+                    '保存策略',
+                  ),
+                  h(
+                    'button',
+                    {
+                      disabled: Boolean(
+                        (props.cancelButtonProps as { disabled?: boolean })
+                          .disabled,
+                      ),
+                      onClick: () => emit('cancel'),
+                    },
+                    '取消',
+                  ),
+                  h(
+                    'button',
+                    { onClick: () => emit('afterClose') },
+                    '完成关闭动画',
+                  ),
+                ],
+              )
             : null;
       },
     }),
@@ -442,6 +469,7 @@ describe('App release metadata page', () => {
     await flushVuePromises();
 
     expect(mocks.updatePolicy).toHaveBeenCalledTimes(1);
+    expect(wrapper.button('取消')?.disabled).toBe(true);
     expect(mocks.updatePolicy).toHaveBeenCalledWith(10, {
       forceUpdate: true,
       minSupportedVersionCode: 250,
@@ -461,7 +489,35 @@ describe('App release metadata page', () => {
     expect(wrapper.text().match(/最低支持版本 #250/g)).toHaveLength(2);
     expect(wrapper.text().match(/灰度 30%/g)).toHaveLength(2);
     expect(mocks.messageSuccess).toHaveBeenCalledWith('更新策略已保存');
-    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+    expect(
+      (document.body.querySelector('[role="dialog"]') as HTMLElement | null)
+        ?.dataset.open,
+    ).toBe('false');
+    expect(
+      document.body.querySelector('[role="dialog"]')?.textContent,
+    ).toContain('更新 3.2.1 (#321) 的更新策略');
+    expect(
+      document.body.querySelector<HTMLInputElement>(
+        '[aria-label="最低支持版本号"]',
+      )?.value,
+    ).toBe('250');
+    expect(
+      document.body
+        .querySelector('[aria-label="最低支持版本号"]')
+        ?.getAttribute('max'),
+    ).toBe('321');
+    wrapper.button('完成关闭动画')?.click();
+    await flushVuePromises();
+    expect(
+      document.body.querySelector<HTMLInputElement>(
+        '[aria-label="最低支持版本号"]',
+      )?.value,
+    ).toBe('0');
+    expect(
+      document.body
+        .querySelector('[aria-label="最低支持版本号"]')
+        ?.getAttribute('max'),
+    ).toBe('0');
     wrapper.unmount();
   });
 
@@ -531,6 +587,35 @@ describe('App release metadata page', () => {
 
     wrapper.button('取消')?.click();
     await flushVuePromises();
+    expect(
+      (document.body.querySelector('[role="dialog"]') as HTMLElement | null)
+        ?.dataset.open,
+    ).toBe('false');
+    expect(
+      document.body.querySelector('[role="dialog"]')?.textContent,
+    ).toContain('更新 2.1.0 (#210) 的更新策略');
+    expect(
+      document.body.querySelector<HTMLInputElement>(
+        '[aria-label="最低支持版本号"]',
+      )?.value,
+    ).toBe('100');
+    expect(
+      document.body
+        .querySelector('[aria-label="最低支持版本号"]')
+        ?.getAttribute('max'),
+    ).toBe('210');
+    wrapper.button('完成关闭动画')?.click();
+    await flushVuePromises();
+    expect(
+      document.body.querySelector<HTMLInputElement>(
+        '[aria-label="最低支持版本号"]',
+      )?.value,
+    ).toBe('0');
+    expect(
+      document.body
+        .querySelector('[aria-label="最低支持版本号"]')
+        ?.getAttribute('max'),
+    ).toBe('0');
     wrapper.button('更新策略')?.click();
     await flushVuePromises();
     expect(
