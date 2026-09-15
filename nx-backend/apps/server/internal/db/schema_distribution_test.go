@@ -38,3 +38,14 @@ func TestSchemaSupportsSettlementApprovalStates(t *testing.T) {
 		}
 	}
 }
+
+func TestSchemaSeedsSafeBaselineCommissionRule(t *testing.T) {
+	b, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if !strings.Contains(s, "VALUES (1,'active')") || !strings.Contains(s, "VALUES (rule_id,1,0),(rule_id,2,0),(rule_id,3,0)") {
+		t.Fatal("schema is missing safe baseline rule seed")
+	}
+}

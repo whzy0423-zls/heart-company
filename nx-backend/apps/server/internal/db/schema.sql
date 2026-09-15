@@ -4965,3 +4965,15 @@ DO $$ BEGIN
     CHECK (status IN ('draft','approved','pending','paid','rejected','cancelled'));
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
+
+-- Seed a disabled-by-default business baseline only when no rule exists.
+-- Rates are zero until the operator publishes a commercial policy.
+DO $$
+DECLARE rule_id BIGINT;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM distribution_commission_rules) THEN
+    INSERT INTO distribution_commission_rules(version,status) VALUES (1,'active') RETURNING id INTO rule_id;
+    INSERT INTO distribution_commission_rule_items(rule_id,agent_level,rate_bps)
+      VALUES (rule_id,1,0),(rule_id,2,0),(rule_id,3,0);
+  END IF;
+END $$;
