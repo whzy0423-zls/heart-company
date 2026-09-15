@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -106,5 +107,72 @@ func TestConfiguredChatSystemPromptsKeepFixedDirectAnswerRules(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCurrentCardVoiceMapsEveryEnneagramType(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		mainType int
+		markers  []string
+	}{
+		{mainType: 1, markers: []string{"一号", "原则清晰", "条理严谨"}},
+		{mainType: 2, markers: []string{"二号", "温暖体贴", "关注感受"}},
+		{mainType: 3, markers: []string{"三号", "目标明确", "行动导向"}},
+		{mainType: 4, markers: []string{"四号", "细腻真诚", "重视独特体验"}},
+		{mainType: 5, markers: []string{"五号", "冷静客观", "先讲原理"}},
+		{mainType: 6, markers: []string{"六号", "审慎可靠", "提前识别风险"}},
+		{mainType: 7, markers: []string{"七号", "轻快乐观", "提供多种可能"}},
+		{mainType: 8, markers: []string{"八号", "直接有力", "强调边界"}},
+		{mainType: 9, markers: []string{"九号", "平和包容", "协调不同立场"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("type_%d", tt.mainType), func(t *testing.T) {
+			prompt := resolveRuntimeSystemPrompt("普通会话规则", rag.GenerateInput{
+				ConversationCard: rag.ConversationCard{MainType: tt.mainType},
+			})
+			for _, marker := range append([]string{"当前人物卡口吻", "优先于用户档案中的主型"}, tt.markers...) {
+				if !strings.Contains(prompt, marker) {
+					t.Fatalf("type %d prompt missing %q: %s", tt.mainType, marker, prompt)
+				}
+			}
+		})
+	}
+}
+
+func TestCurrentCardVoiceIgnoresMissingAndInvalidTypes(t *testing.T) {
+	t.Parallel()
+
+	for _, mainType := range []int{0, -1, 10} {
+		t.Run(fmt.Sprintf("type_%d", mainType), func(t *testing.T) {
+			const ordinary = "普通会话规则"
+			prompt := resolveRuntimeSystemPrompt(ordinary, rag.GenerateInput{
+				ConversationCard: rag.ConversationCard{MainType: mainType},
+			})
+			if prompt != ordinary {
+				t.Fatalf("invalid type %d changed ordinary prompt: %s", mainType, prompt)
+			}
+		})
+	}
+}
+
+func TestCurrentCardVoiceOverridesUserProfileMainType(t *testing.T) {
+	t.Parallel()
+
+	prompt := resolveRuntimeSystemPrompt("普通会话规则", rag.GenerateInput{
+		UserProfile:      rag.UserProfile{MainType: 8},
+		ConversationCard: rag.ConversationCard{MainType: 2},
+	})
+	for _, required := range []string{"二号", "温暖体贴", "优先于用户档案中的主型"} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("current card voice missing %q: %s", required, prompt)
+		}
+	}
+	for _, forbidden := range []string{"八号", "直接有力"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Fatalf("profile main type leaked into voice as %q: %s", forbidden, prompt)
+		}
 	}
 }
