@@ -2797,7 +2797,7 @@ BEGIN
     END;
 
     BEGIN
-      EXECUTE 'ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS embedding vector(1536)';
+      EXECUTE 'ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS embedding vector(1024)';
       EXECUTE 'CREATE INDEX IF NOT EXISTS idx_knowledge_documents_embedding_hnsw ON knowledge_documents USING hnsw (embedding vector_cosine_ops)';
     EXCEPTION WHEN OTHERS THEN
       RAISE NOTICE 'LangChain 知识库 vector 列或索引不可用，保留词法检索：%', SQLERRM;

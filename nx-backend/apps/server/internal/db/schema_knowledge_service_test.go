@@ -20,7 +20,7 @@ func TestSchemaDefinesScopedKnowledgeDocumentsAndOptionalVectorIndex(t *testing.
 		"safety_level INT",
 		"content_hash TEXT NOT NULL",
 		"index_version TEXT NOT NULL",
-		"ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS embedding vector(1536)",
+		"ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS embedding vector(1024)",
 		"idx_knowledge_documents_embedding_hnsw",
 	} {
 		if !strings.Contains(schema, fragment) {

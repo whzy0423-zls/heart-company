@@ -40,7 +40,7 @@ async def retrieve(
         requestId=query.request_id,
         documents=limited,
         trace=RetrievalTrace(
-            retrievalMethod="fixture",
+            retrievalMethod=getattr(retriever, "method", "fixture"),
             candidateCount=len(documents),
             returnedCount=len(limited),
         ),

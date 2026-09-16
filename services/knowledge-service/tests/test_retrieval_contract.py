@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.dependencies import get_retriever
 
 
 client = TestClient(app)
@@ -67,3 +68,19 @@ def test_retrieve_rejects_invalid_request_schema() -> None:
     response = client.post("/internal/v1/retrieve", json=body, headers=AUTH)
 
     assert response.status_code == 422
+
+
+def test_retrieve_reports_selected_retrieval_method() -> None:
+    class HybridRetriever:
+        method = "hybrid"
+
+        async def __call__(self, _query):
+            return []
+
+    app.dependency_overrides[get_retriever] = lambda: HybridRetriever()
+    try:
+        response = TestClient(app).post("/internal/v1/retrieve", json=request_body(), headers=AUTH)
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.json()["trace"]["retrievalMethod"] == "hybrid"
