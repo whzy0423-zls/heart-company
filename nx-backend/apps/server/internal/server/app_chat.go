@@ -264,12 +264,24 @@ type appChatStore interface {
 }
 
 func (s *Server) retrieveAppChatKnowledge(ctx context.Context, userID, sessionID, cardID int64, query string) ([]rag.Document, *chat.KnowledgeTrace, error) {
-	if s.appKnowledge == nil {
+	return s.retrieveKnowledgeForScene(ctx, s.appKnowledge, "app_chat", userID, sessionID, cardID, query)
+}
+
+func (s *Server) retrieveXinzhiliKnowledge(ctx context.Context, userID, sessionID, cardID int64, query string) ([]rag.Document, *chat.KnowledgeTrace, error) {
+	coordinator := s.xinzhiliKnowledge
+	if coordinator == nil {
+		coordinator = s.appKnowledge
+	}
+	return s.retrieveKnowledgeForScene(ctx, coordinator, "xinzhili", userID, sessionID, cardID, query)
+}
+
+func (s *Server) retrieveKnowledgeForScene(ctx context.Context, coordinator *appknowledge.Coordinator, scene string, userID, sessionID, cardID int64, query string) ([]rag.Document, *chat.KnowledgeTrace, error) {
+	if coordinator == nil {
 		documents, _ := s.retrieveAppDocsForQuery(ctx, query, 6)
 		return documents, nil, nil
 	}
-	result, err := s.appKnowledge.Retrieve(ctx, appknowledge.Input{
-		UserID: userID, SessionID: sessionID, CardID: cardID, Query: query,
+	result, err := coordinator.Retrieve(ctx, appknowledge.Input{
+		UserID: userID, SessionID: sessionID, CardID: cardID, Query: query, Scene: scene,
 	})
 	if err != nil {
 		return nil, nil, err

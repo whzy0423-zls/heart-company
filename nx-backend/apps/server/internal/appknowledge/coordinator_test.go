@@ -93,6 +93,19 @@ func TestCoordinatorGeneratesRemoteRequestIDWhenCallerHasNone(t *testing.T) {
 	}
 }
 
+func TestCoordinatorPassesRequestedKnowledgeScene(t *testing.T) {
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{CardID: 9, CardRevision: 1}}
+	remote := &remoteRetrieverStub{}
+	coordinator := NewCoordinator(resolver, &publicSearchStub{}, &releaseSearchStub{}, WithRemote("langchain", remote, nil))
+
+	if _, err := coordinator.Retrieve(context.Background(), Input{UserID: 7, SessionID: 8, CardID: 9, Query: "问题", Scene: "xinzhili"}); err != nil {
+		t.Fatal(err)
+	}
+	if remote.input.Scene != "xinzhili" {
+		t.Fatalf("scene=%q", remote.input.Scene)
+	}
+}
+
 func TestCoordinatorFallbackUsesLocalOnlyForRetryableRemoteErrors(t *testing.T) {
 	resolver := &coordinatorResolverStub{resolution: ConversationResolution{CardID: 9, CardRevision: 1}}
 	public := &publicSearchStub{docs: []rag.Document{{ID: "local", Title: "本地", Content: "结果"}}}

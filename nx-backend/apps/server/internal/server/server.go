@@ -178,6 +178,7 @@ type Server struct {
 	appChatQuota                   appChatQuotaManager
 	appChatPlanLoader              func(context.Context, int64) (appPlanConfig, error)
 	appKnowledge                   *appknowledge.Coordinator
+	xinzhiliKnowledge              *appknowledge.Coordinator
 	skillCatalog                   *skillcatalog.Store
 	skillChat                      *skillchat.Store
 	skillChatRuntime               *skillchat.Runtime
@@ -461,7 +462,6 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	}
 	s.appChat = chat.NewStore(database)
 	s.appChatQuota = newDatabaseAppChatQuotaManager(database)
-	knowledgeOptions := []appknowledge.Option{appknowledge.WithRolloutPercent(env.Knowledge.RolloutPercent)}
 	var remoteKnowledge appknowledge.RemoteRetriever
 	if env.Knowledge.Backend != "" && env.Knowledge.Backend != "local" {
 		if err := env.Knowledge.Validate(); err != nil {
@@ -480,18 +480,30 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		}
 		adapter := appKnowledgeRemoteAdapter{client: client, retrieveTimeout: time.Duration(env.Knowledge.RetrieveTimeoutMS) * time.Millisecond, metrics: s.metrics}
 		remoteKnowledge = adapter
-		knowledgeOptions = append(knowledgeOptions, appknowledge.WithRemote(env.Knowledge.Backend, adapter, func(comparison appknowledge.ShadowComparison) {
-			observeKnowledgeShadow(s.metrics, comparison, log.Printf)
-		}))
-		knowledgeOptions = append(knowledgeOptions, appknowledge.WithFallbackObserver(func(error) {
-			s.metrics.KnowledgeFallback()
-		}))
+	}
+	knowledgeOptionsFor := func(rolloutPercent int) []appknowledge.Option {
+		options := []appknowledge.Option{appknowledge.WithRolloutPercent(rolloutPercent)}
+		if remoteKnowledge != nil {
+			options = append(options, appknowledge.WithRemote(env.Knowledge.Backend, remoteKnowledge, func(comparison appknowledge.ShadowComparison) {
+				observeKnowledgeShadow(s.metrics, comparison, log.Printf)
+			}))
+			options = append(options, appknowledge.WithFallbackObserver(func(error) {
+				s.metrics.KnowledgeFallback()
+			}))
+		}
+		return options
 	}
 	s.appKnowledge = appknowledge.NewCoordinator(
 		appknowledge.NewResolver(database),
 		appKnowledgePublicSearcher{server: s},
 		theorystore.NewStore(database),
-		knowledgeOptions...,
+		knowledgeOptionsFor(env.Knowledge.RolloutPercent)...,
+	)
+	s.xinzhiliKnowledge = appknowledge.NewCoordinator(
+		appknowledge.NewResolver(database),
+		appKnowledgePublicSearcher{server: s},
+		theorystore.NewStore(database),
+		knowledgeOptionsFor(env.Knowledge.XinzhiliRolloutPercent)...,
 	)
 	s.skillCatalog = skillcatalog.NewStore(database)
 	s.skillChat = skillchat.NewStore(database)

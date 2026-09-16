@@ -18,6 +18,7 @@ var ErrInvalidInput = errors.New("app knowledge input is invalid")
 
 type Input struct {
 	RequestID string
+	Scene     string
 	UserID    int64
 	SessionID int64
 	CardID    int64
@@ -276,7 +277,11 @@ func remoteRequestFromResolution(input Input, resolved ConversationResolution) R
 			requestID = fmt.Sprintf("app-chat-%d-%d", input.SessionID, input.CardID)
 		}
 	}
-	request := RemoteRequest{RequestID: requestID, Query: input.Query, Scene: "app_chat", Public: true, MainType: resolved.MainType}
+	scene := strings.TrimSpace(input.Scene)
+	if scene == "" {
+		scene = "app_chat"
+	}
+	request := RemoteRequest{RequestID: requestID, Query: input.Query, Scene: scene, Public: true, MainType: resolved.MainType}
 	if resolved.Theory != nil {
 		request.TheoryReleaseIDs = []int64{resolved.Theory.ReleaseID}
 	}

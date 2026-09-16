@@ -18,6 +18,7 @@ func TestLoadKnowledgeDefaults(t *testing.T) {
 		"LANGCHAIN_GENERATE_TIMEOUT_SECONDS", "LANGCHAIN_STREAM_IDLE_TIMEOUT_SECONDS",
 		"LANGCHAIN_ROLLOUT_PERCENT",
 		"LANGCHAIN_SKILL_ROLLOUT_PERCENT",
+		"LANGCHAIN_XINZHILI_ROLLOUT_PERCENT",
 	} {
 		t.Setenv(key, "")
 	}
@@ -31,7 +32,7 @@ func TestLoadKnowledgeDefaults(t *testing.T) {
 		env.Knowledge.GenerateTimeoutSeconds != 90 || env.Knowledge.StreamIdleTimeoutSeconds != 30 {
 		t.Fatalf("unexpected knowledge timeout defaults: %+v", env.Knowledge)
 	}
-	if env.Knowledge.RolloutPercent != 100 || env.Knowledge.SkillRolloutPercent != 0 {
+	if env.Knowledge.RolloutPercent != 100 || env.Knowledge.SkillRolloutPercent != 0 || env.Knowledge.XinzhiliRolloutPercent != 0 {
 		t.Fatalf("unexpected rollout default: %+v", env.Knowledge)
 	}
 }
@@ -83,16 +84,22 @@ func TestKnowledgeConfigValidatesRolloutPercent(t *testing.T) {
 	if err := invalidSkill.Validate(); err == nil || !strings.Contains(err.Error(), "LANGCHAIN_SKILL_ROLLOUT_PERCENT") {
 		t.Fatalf("expected skill rollout validation error, got %v", err)
 	}
+	invalidXinzhili := valid
+	invalidXinzhili.XinzhiliRolloutPercent = -1
+	if err := invalidXinzhili.Validate(); err == nil || !strings.Contains(err.Error(), "LANGCHAIN_XINZHILI_ROLLOUT_PERCENT") {
+		t.Fatalf("expected xinzhili rollout validation error, got %v", err)
+	}
 }
 
 func TestLoadKnowledgeRolloutPercent(t *testing.T) {
 	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
 	t.Setenv("LANGCHAIN_ROLLOUT_PERCENT", "5")
 	t.Setenv("LANGCHAIN_SKILL_ROLLOUT_PERCENT", "20")
+	t.Setenv("LANGCHAIN_XINZHILI_ROLLOUT_PERCENT", "50")
 
 	env := Load()
 
-	if env.Knowledge.RolloutPercent != 5 || env.Knowledge.SkillRolloutPercent != 20 {
+	if env.Knowledge.RolloutPercent != 5 || env.Knowledge.SkillRolloutPercent != 20 || env.Knowledge.XinzhiliRolloutPercent != 50 {
 		t.Fatalf("rollout config=%+v", env.Knowledge)
 	}
 }
