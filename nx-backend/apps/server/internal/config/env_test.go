@@ -32,7 +32,7 @@ func TestLoadKnowledgeDefaults(t *testing.T) {
 }
 
 func TestKnowledgeConfigRejectsInvalidBackendAndURL(t *testing.T) {
-	valid := KnowledgeConfig{Backend: "shadow", ServiceURL: "http://knowledge-service:8081"}
+	valid := KnowledgeConfig{Backend: "shadow", ServiceURL: "http://knowledge-service:8081", ServiceToken: "TOKEN"}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
@@ -47,6 +47,17 @@ func TestKnowledgeConfigRejectsInvalidBackendAndURL(t *testing.T) {
 	invalidURL.ServiceURL = "knowledge-service:8081"
 	if err := invalidURL.Validate(); err == nil || !strings.Contains(err.Error(), "LANGCHAIN_SERVICE_URL") {
 		t.Fatalf("expected URL validation error, got %v", err)
+	}
+}
+
+func TestKnowledgeConfigRequiresTokenForRemoteModes(t *testing.T) {
+	config := KnowledgeConfig{Backend: "shadow", ServiceURL: "http://knowledge-service:8081"}
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "LANGCHAIN_SERVICE_TOKEN") {
+		t.Fatalf("expected service token validation error, got %v", err)
+	}
+	config.Backend = "local"
+	if err := config.Validate(); err != nil {
+		t.Fatalf("local backend does not require a service token: %v", err)
 	}
 }
 

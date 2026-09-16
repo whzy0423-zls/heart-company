@@ -187,7 +187,8 @@ type KnowledgeConfig struct {
 }
 
 func (c KnowledgeConfig) Validate() error {
-	switch strings.ToLower(strings.TrimSpace(c.Backend)) {
+	backend := strings.ToLower(strings.TrimSpace(c.Backend))
+	switch backend {
 	case "local", "shadow", "langchain", "fallback":
 	default:
 		return fmt.Errorf("KNOWLEDGE_BACKEND must be one of local, shadow, langchain, fallback")
@@ -195,6 +196,9 @@ func (c KnowledgeConfig) Validate() error {
 	parsed, err := url.Parse(strings.TrimSpace(c.ServiceURL))
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return fmt.Errorf("LANGCHAIN_SERVICE_URL must be an absolute http(s) URL")
+	}
+	if backend != "local" && strings.TrimSpace(c.ServiceToken) == "" {
+		return fmt.Errorf("LANGCHAIN_SERVICE_TOKEN must be set for remote knowledge modes")
 	}
 	return nil
 }
