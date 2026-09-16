@@ -10,6 +10,107 @@ import (
 	"testing"
 )
 
+func TestLoadKnowledgeDefaults(t *testing.T) {
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+	for _, key := range []string{
+		"KNOWLEDGE_BACKEND", "LANGCHAIN_SERVICE_URL", "LANGCHAIN_SERVICE_TOKEN",
+		"LANGCHAIN_CONNECT_TIMEOUT_MS", "LANGCHAIN_RETRIEVE_TIMEOUT_MS",
+		"LANGCHAIN_GENERATE_TIMEOUT_SECONDS", "LANGCHAIN_STREAM_IDLE_TIMEOUT_SECONDS",
+		"LANGCHAIN_ROLLOUT_PERCENT",
+		"LANGCHAIN_SKILL_ROLLOUT_PERCENT",
+		"LANGCHAIN_XINZHILI_ROLLOUT_PERCENT",
+		"LANGCHAIN_XINZHILI_REALTIME_ROLLOUT_PERCENT",
+	} {
+		t.Setenv(key, "")
+	}
+
+	env := Load()
+
+	if env.Knowledge.Backend != "local" || env.Knowledge.ServiceURL != "http://knowledge-service:8081" {
+		t.Fatalf("unexpected knowledge defaults: %+v", env.Knowledge)
+	}
+	if env.Knowledge.ConnectTimeoutMS != 500 || env.Knowledge.RetrieveTimeoutMS != 1200 ||
+		env.Knowledge.GenerateTimeoutSeconds != 90 || env.Knowledge.StreamIdleTimeoutSeconds != 30 {
+		t.Fatalf("unexpected knowledge timeout defaults: %+v", env.Knowledge)
+	}
+	if env.Knowledge.RolloutPercent != 100 || env.Knowledge.SkillRolloutPercent != 0 || env.Knowledge.XinzhiliRolloutPercent != 0 || env.Knowledge.XinzhiliRealtimeRolloutPercent != 0 {
+		t.Fatalf("unexpected rollout default: %+v", env.Knowledge)
+	}
+}
+
+func TestKnowledgeConfigRejectsInvalidBackendAndURL(t *testing.T) {
+	valid := KnowledgeConfig{Backend: "shadow", ServiceURL: "http://knowledge-service:8081", ServiceToken: "TOKEN"}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid config rejected: %v", err)
+	}
+
+	invalidBackend := valid
+	invalidBackend.Backend = "sometimes"
+	if err := invalidBackend.Validate(); err == nil || !strings.Contains(err.Error(), "KNOWLEDGE_BACKEND") {
+		t.Fatalf("expected backend validation error, got %v", err)
+	}
+
+	invalidURL := valid
+	invalidURL.ServiceURL = "knowledge-service:8081"
+	if err := invalidURL.Validate(); err == nil || !strings.Contains(err.Error(), "LANGCHAIN_SERVICE_URL") {
+		t.Fatalf("expected URL validation error, got %v", err)
+	}
+}
+
+func TestKnowledgeConfigRequiresTokenForRemoteModes(t *testing.T) {
+	config := KnowledgeConfig{Backend: "shadow", ServiceURL: "http://knowledge-service:8081"}
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "LANGCHAIN_SERVICE_TOKEN") {
+		t.Fatalf("expected service token validation error, got %v", err)
+	}
+	config.Backend = "local"
+	if err := config.Validate(); err != nil {
+		t.Fatalf("local backend does not require a service token: %v", err)
+	}
+}
+
+func TestKnowledgeConfigValidatesRolloutPercent(t *testing.T) {
+	valid := KnowledgeConfig{Backend: "fallback", ServiceURL: "http://knowledge-service:8081", ServiceToken: "TOKEN", RolloutPercent: 5}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid rollout rejected: %v", err)
+	}
+	for _, percent := range []int{-1, 101} {
+		invalid := valid
+		invalid.RolloutPercent = percent
+		if err := invalid.Validate(); err == nil || !strings.Contains(err.Error(), "LANGCHAIN_ROLLOUT_PERCENT") {
+			t.Fatalf("expected rollout validation error for %d, got %v", percent, err)
+		}
+	}
+	invalidSkill := valid
+	invalidSkill.SkillRolloutPercent = 101
+	if err := invalidSkill.Validate(); err == nil || !strings.Contains(err.Error(), "LANGCHAIN_SKILL_ROLLOUT_PERCENT") {
+		t.Fatalf("expected skill rollout validation error, got %v", err)
+	}
+	invalidXinzhili := valid
+	invalidXinzhili.XinzhiliRolloutPercent = -1
+	if err := invalidXinzhili.Validate(); err == nil || !strings.Contains(err.Error(), "LANGCHAIN_XINZHILI_ROLLOUT_PERCENT") {
+		t.Fatalf("expected xinzhili rollout validation error, got %v", err)
+	}
+	invalidRealtime := valid
+	invalidRealtime.XinzhiliRealtimeRolloutPercent = 101
+	if err := invalidRealtime.Validate(); err == nil || !strings.Contains(err.Error(), "LANGCHAIN_XINZHILI_REALTIME_ROLLOUT_PERCENT") {
+		t.Fatalf("expected xinzhili realtime rollout validation error, got %v", err)
+	}
+}
+
+func TestLoadKnowledgeRolloutPercent(t *testing.T) {
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("LANGCHAIN_ROLLOUT_PERCENT", "5")
+	t.Setenv("LANGCHAIN_SKILL_ROLLOUT_PERCENT", "20")
+	t.Setenv("LANGCHAIN_XINZHILI_ROLLOUT_PERCENT", "50")
+	t.Setenv("LANGCHAIN_XINZHILI_REALTIME_ROLLOUT_PERCENT", "75")
+
+	env := Load()
+
+	if env.Knowledge.RolloutPercent != 5 || env.Knowledge.SkillRolloutPercent != 20 || env.Knowledge.XinzhiliRolloutPercent != 50 || env.Knowledge.XinzhiliRealtimeRolloutPercent != 75 {
+		t.Fatalf("rollout config=%+v", env.Knowledge)
+	}
+}
+
 func TestLoadDefaultsVideoGatewayContract(t *testing.T) {
 	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
 	t.Setenv("VIDEO_MODEL_PROFILE", "")

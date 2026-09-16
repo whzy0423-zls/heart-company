@@ -71,6 +71,91 @@ func TestAppChatAskStreamUsesLayeredKnowledgeAndPersistsInternalTrace(t *testing
 	assertSourceIDs(t, generator.lastSources(), "public", "theory", "type-6")
 }
 
+func TestAppChatAskSurfacesNonRetryableKnowledgeFailure(t *testing.T) {
+	store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	store.cardID = 77
+	resolver := &layeredKnowledgeResolver{mainType: 3, revision: 1}
+	server := newLayeredKnowledgeServer(t, store, resolver, newLayeredKnowledgeSearcher(), &layeredKnowledgeGenerator{})
+	server.appKnowledge = appknowledge.NewCoordinator(
+		resolver,
+		newLayeredKnowledgeSearcher(),
+		newLayeredKnowledgeSearcher(),
+		appknowledge.WithRemote("langchain", failingKnowledgeRetriever{err: &appknowledge.RemoteError{StatusCode: 422}}, nil),
+	)
+
+	response := httptest.NewRecorder()
+	server.appChatRouter(response, layeredKnowledgeRequest(t, "/api/app/chat/sessions/42/ask", layeredKnowledgeQuestion))
+
+	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "知识检索失败") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if store.saveCallCount() != 0 {
+		t.Fatalf("saved messages after knowledge failure: %d", store.saveCallCount())
+	}
+}
+
+func TestAppChatAskStreamEmitsKnowledgeFailureWithoutDone(t *testing.T) {
+	store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	store.cardID = 77
+	resolver := &layeredKnowledgeResolver{mainType: 3, revision: 1}
+	server := newLayeredKnowledgeServer(t, store, resolver, newLayeredKnowledgeSearcher(), &layeredKnowledgeGenerator{})
+	server.appKnowledge = appknowledge.NewCoordinator(
+		resolver,
+		newLayeredKnowledgeSearcher(),
+		newLayeredKnowledgeSearcher(),
+		appknowledge.WithRemote("langchain", failingKnowledgeRetriever{err: &appknowledge.RemoteError{StatusCode: 422}}, nil),
+	)
+	writer := newAppChatBlockingStreamWriter()
+
+	server.appChatRouter(writer, layeredKnowledgeRequest(t, "/api/app/chat/sessions/42/ask/stream", layeredKnowledgeQuestion))
+
+	body := writer.BodyString()
+	if !strings.Contains(body, "event: error\n") || !strings.Contains(body, "知识检索失败") || strings.Contains(body, "event: done\n") {
+		t.Fatalf("stream body=%q", body)
+	}
+	if store.saveCallCount() != 0 {
+		t.Fatalf("saved messages after knowledge failure: %d", store.saveCallCount())
+	}
+}
+
+func TestAppChatAskExposesDisplaySafeRemoteCitations(t *testing.T) {
+	store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	store.cardID = 77
+	resolver := &layeredKnowledgeResolver{mainType: 3, revision: 1}
+	server := newLayeredKnowledgeServer(t, store, resolver, newLayeredKnowledgeSearcher(), &layeredKnowledgeGenerator{})
+	server.appKnowledge = appknowledge.NewCoordinator(
+		resolver,
+		newLayeredKnowledgeSearcher(),
+		newLayeredKnowledgeSearcher(),
+		appknowledge.WithRemote("langchain", failingKnowledgeRetriever{result: appknowledge.RemoteResult{
+			Documents: []rag.Document{{ID: "doc-1", Title: "学习之道", Content: "划小圈"}},
+			Citations: []rag.Citation{{DocumentID: "doc-1", Source: "学习之道", Locator: map[string]any{"chapter": "划小圈"}}},
+			TraceID:   "trace-1", RetrievalMethod: "hybrid",
+		}}, nil),
+	)
+
+	response := httptest.NewRecorder()
+	server.appChatRouter(response, layeredKnowledgeRequest(t, "/api/app/chat/sessions/42/ask", layeredKnowledgeQuestion))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	for _, expected := range []string{`"documentId":"doc-1"`, `"source":"学习之道"`, `"traceId":"trace-1"`, `"retrievalMethod":"hybrid"`} {
+		if !strings.Contains(response.Body.String(), expected) {
+			t.Fatalf("response missing %s: %s", expected, response.Body.String())
+		}
+	}
+}
+
+type failingKnowledgeRetriever struct {
+	result appknowledge.RemoteResult
+	err    error
+}
+
+func (r failingKnowledgeRetriever) Retrieve(context.Context, appknowledge.RemoteRequest) (appknowledge.RemoteResult, error) {
+	return r.result, r.err
+}
+
 func TestAppChatTextEndpointsResolveAndPassRequestedTier(t *testing.T) {
 	for _, path := range []string{
 		"/api/app/chat/sessions/42/ask",
@@ -348,6 +433,12 @@ func (s *layeredKnowledgeChatStore) singleTrace(t *testing.T) chat.KnowledgeTrac
 
 func newLayeredKnowledgeServer(t *testing.T, store appChatStore, resolver appknowledge.ConversationResolver, searcher *layeredKnowledgeSearcher, generator rag.Generator) *Server {
 	t.Helper()
+	if current, ok := store.(*layeredKnowledgeChatStore); ok && current.cardID <= 0 {
+		current.cardID = 77
+	}
+	if current, ok := resolver.(*layeredKnowledgeResolver); ok && current.revision <= 0 {
+		current.revision = 1
+	}
 	server := newAppChatStreamServer(store, generator)
 	database, _ := openIdentityDependencyDB(t)
 	server.db = database

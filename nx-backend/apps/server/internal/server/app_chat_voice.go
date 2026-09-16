@@ -177,7 +177,11 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		extraction = preparedExtraction
-		docs, trace := s.retrieveAppChatKnowledge(ctx, userInfo.ID, sessionID, sess.CardID, transcript)
+		docs, trace, knowledgeErr := s.retrieveAppChatKnowledge(ctx, userInfo.ID, sessionID, sess.CardID, transcript)
+		if knowledgeErr != nil {
+			httpx.Fail(w, http.StatusBadGateway, "知识检索失败，请重试")
+			return
+		}
 		knowledgeTrace = trace
 		profile, conversationCard := s.appChatProfilesForCard(ctx, userInfo.ID, sess.CardID)
 		if memories, memoryErr := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); memoryErr == nil {
@@ -199,6 +203,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
 			return
 		}
+		attachKnowledgeMetadata(&answer, knowledgeTrace)
 		answer.Answer = answerhygiene.Clean(transcript, answer.Answer)
 	}
 

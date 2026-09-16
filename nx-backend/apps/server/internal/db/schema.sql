@@ -942,6 +942,35 @@ CREATE TABLE IF NOT EXISTS rag_documents (
   update_time TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ============ LangChain 知识服务文档 ============
+-- release_id 由 Go 网关解析并作为不可变检索范围传入；public 文档必须为 NULL。
+CREATE TABLE IF NOT EXISTS knowledge_documents (
+  id              TEXT PRIMARY KEY,
+  library_kind    TEXT NOT NULL CHECK (library_kind IN ('public','theory','enneagram','skill')),
+  release_id      BIGINT,
+  enneagram_type  INT CHECK (enneagram_type IS NULL OR enneagram_type BETWEEN 1 AND 9),
+  safety_level    INT NOT NULL DEFAULT 0 CHECK (safety_level >= 0),
+  title           TEXT NOT NULL DEFAULT '',
+  content         TEXT NOT NULL,
+  source          TEXT NOT NULL,
+  locator         JSONB NOT NULL DEFAULT '{}'::jsonb,
+  metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  content_hash    TEXT NOT NULL,
+  embedding_model TEXT NOT NULL DEFAULT '',
+  index_version   TEXT NOT NULL DEFAULT 'v1',
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((library_kind = 'public' AND release_id IS NULL) OR
+         (library_kind <> 'public' AND release_id IS NOT NULL))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_documents_embedding_identity
+  ON knowledge_documents(content_hash, embedding_model, index_version, library_kind, COALESCE(release_id, 0));
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_scope
+  ON knowledge_documents(library_kind, release_id, enneagram_type, safety_level);
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_lexical
+  ON knowledge_documents USING gin (to_tsvector('simple', title || ' ' || content));
+
 -- ============ 阅读管理（H5 文章）============
 -- 后台维护、H5 读书页展示的文章。正文为 Markdown 文本。
 CREATE TABLE IF NOT EXISTS articles (
@@ -2765,6 +2794,13 @@ BEGIN
       EXECUTE 'CREATE INDEX IF NOT EXISTS idx_rag_documents_embedding ON rag_documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)';
     EXCEPTION WHEN OTHERS THEN
       RAISE NOTICE '知识库 ivfflat 索引不可用，跳过向量索引：%', SQLERRM;
+    END;
+
+    BEGIN
+      EXECUTE 'ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS embedding vector(1024)';
+      EXECUTE 'CREATE INDEX IF NOT EXISTS idx_knowledge_documents_embedding_hnsw ON knowledge_documents USING hnsw (embedding vector_cosine_ops)';
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'LangChain 知识库 vector 列或索引不可用，保留词法检索：%', SQLERRM;
     END;
   END IF;
 END $$;

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"mime"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -44,6 +45,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/friends"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/image"
+	"nine-xing/nx-backend/apps/server/internal/knowledgeclient"
 	"nine-xing/nx-backend/apps/server/internal/lifestory"
 	"nine-xing/nx-backend/apps/server/internal/llm"
 	"nine-xing/nx-backend/apps/server/internal/location"
@@ -176,6 +178,8 @@ type Server struct {
 	appChatQuota                   appChatQuotaManager
 	appChatPlanLoader              func(context.Context, int64) (appPlanConfig, error)
 	appKnowledge                   *appknowledge.Coordinator
+	xinzhiliKnowledge              *appknowledge.Coordinator
+	xinzhiliRealtimeKnowledge      *appknowledge.Coordinator
 	skillCatalog                   *skillcatalog.Store
 	skillChat                      *skillchat.Store
 	skillChatRuntime               *skillchat.Runtime
@@ -459,14 +463,62 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	}
 	s.appChat = chat.NewStore(database)
 	s.appChatQuota = newDatabaseAppChatQuotaManager(database)
+	var remoteKnowledge appknowledge.RemoteRetriever
+	if env.Knowledge.Backend != "" && env.Knowledge.Backend != "local" {
+		if err := env.Knowledge.Validate(); err != nil {
+			panic("knowledge config: " + err.Error())
+		}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.DialContext = (&net.Dialer{Timeout: time.Duration(env.Knowledge.ConnectTimeoutMS) * time.Millisecond}).DialContext
+		client, clientErr := knowledgeclient.New(knowledgeclient.Config{
+			BaseURL:           env.Knowledge.ServiceURL,
+			Token:             env.Knowledge.ServiceToken,
+			HTTPClient:        &http.Client{Transport: transport},
+			StreamIdleTimeout: time.Duration(env.Knowledge.StreamIdleTimeoutSeconds) * time.Second,
+		})
+		if clientErr != nil {
+			panic("knowledge client: " + clientErr.Error())
+		}
+		adapter := appKnowledgeRemoteAdapter{client: client, retrieveTimeout: time.Duration(env.Knowledge.RetrieveTimeoutMS) * time.Millisecond, metrics: s.metrics}
+		remoteKnowledge = adapter
+	}
+	knowledgeOptionsFor := func(rolloutPercent int) []appknowledge.Option {
+		options := []appknowledge.Option{appknowledge.WithRolloutPercent(rolloutPercent)}
+		if remoteKnowledge != nil {
+			options = append(options, appknowledge.WithRemote(env.Knowledge.Backend, remoteKnowledge, func(comparison appknowledge.ShadowComparison) {
+				observeKnowledgeShadow(s.metrics, comparison, log.Printf)
+			}))
+			options = append(options, appknowledge.WithFallbackObserver(func(error) {
+				s.metrics.KnowledgeFallback()
+			}))
+		}
+		return options
+	}
 	s.appKnowledge = appknowledge.NewCoordinator(
 		appknowledge.NewResolver(database),
 		appKnowledgePublicSearcher{server: s},
 		theorystore.NewStore(database),
+		knowledgeOptionsFor(env.Knowledge.RolloutPercent)...,
+	)
+	s.xinzhiliKnowledge = appknowledge.NewCoordinator(
+		appknowledge.NewResolver(database),
+		appKnowledgePublicSearcher{server: s},
+		theorystore.NewStore(database),
+		knowledgeOptionsFor(env.Knowledge.XinzhiliRolloutPercent)...,
+	)
+	s.xinzhiliRealtimeKnowledge = appknowledge.NewCoordinator(
+		appknowledge.NewResolver(database),
+		appKnowledgePublicSearcher{server: s},
+		theorystore.NewStore(database),
+		knowledgeOptionsFor(env.Knowledge.XinzhiliRealtimeRolloutPercent)...,
 	)
 	s.skillCatalog = skillcatalog.NewStore(database)
 	s.skillChat = skillchat.NewStore(database)
-	s.skillChatRuntime = skillchat.NewRuntime(s.skillChat, theorystore.NewStore(database), skillChatRuntimeGenerator{server: s})
+	skillRuntimeOptions := []skillchat.RuntimeOption{}
+	if remoteKnowledge != nil {
+		skillRuntimeOptions = append(skillRuntimeOptions, skillchat.WithRemoteKnowledge(env.Knowledge.Backend, remoteKnowledge, env.Knowledge.SkillRolloutPercent))
+	}
+	s.skillChatRuntime = skillchat.NewRuntime(s.skillChat, theorystore.NewStore(database), skillChatRuntimeGenerator{server: s}, skillRuntimeOptions...)
 	s.userPreferences = userpreference.NewStore(database)
 	s.preferenceAsyncSlots = make(chan struct{}, 2)
 	s.preferenceAsyncTimeout = 2 * time.Second

@@ -887,6 +887,30 @@ func TestRealtimeGenerationUsesCurrentCardLayeredKnowledgeAndPersistsTrace(t *te
 	}
 }
 
+func TestRealtimeLayeredKnowledgeFailureStopsGenerationWithSpecificError(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.session.Close()
+	fixture.deps.LayeredKnowledge = &fakeLayeredKnowledgeRetriever{err: errors.New("knowledge unavailable")}
+	fixture.session = NewSession(fixture.deps)
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-knowledge-fail")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "担心风险时怎么办", Stable: true})
+
+	event := fixture.sink.waitControl(t, EventError)
+	var payload ErrorPayload
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Code != "knowledge_retrieval_failed" || payload.Message != "知识检索连接异常，请稍后重试" {
+		t.Fatalf("error payload=%+v", payload)
+	}
+	if fixture.generator.count != 0 {
+		t.Fatalf("generator calls=%d", fixture.generator.count)
+	}
+}
+
 func TestGenerationRetrievesKnowledgeBeforeTheory(t *testing.T) {
 	fixture := newSessionFixture(t)
 	fixture.session.Close()
@@ -1844,12 +1868,13 @@ type fakeLayeredKnowledgeRetriever struct {
 	query          string
 	documents      []rag.Document
 	trace          KnowledgeTrace
+	err            error
 }
 
 func (r *fakeLayeredKnowledgeRetriever) Retrieve(_ context.Context, userID, conversationID, cardID int64, query string) (LayeredKnowledgeResult, error) {
 	r.calls++
 	r.userID, r.conversationID, r.cardID, r.query = userID, conversationID, cardID, query
-	return LayeredKnowledgeResult{Documents: append([]rag.Document(nil), r.documents...), Trace: &r.trace}, nil
+	return LayeredKnowledgeResult{Documents: append([]rag.Document(nil), r.documents...), Trace: &r.trace}, r.err
 }
 
 func intPointer(value int) *int { return &value }

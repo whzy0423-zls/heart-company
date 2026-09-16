@@ -32,10 +32,13 @@ site-config.backup.json
 
 # 理论库原始抽取/OCR 工作底稿（仅本地，不提交全文）
 var/theory-work/
+var/knowledge/
 
 # Python 本地缓存
 __pycache__/
 *.py[cod]
+**/.venv/
+**/*.egg-info/
 
 # 本地临时检查产物
 tmp/
