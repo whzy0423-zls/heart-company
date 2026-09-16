@@ -194,7 +194,11 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 	var docs []rag.Document
 	var knowledgeTrace *chat.KnowledgeTrace
 	if s.appKnowledge != nil {
-		docs, knowledgeTrace = s.retrieveAppChatKnowledge(ctx, userInfo.ID, session.ID, session.CardID, transcript)
+		docs, knowledgeTrace, err = s.retrieveAppChatKnowledge(ctx, userInfo.ID, session.ID, session.CardID, transcript)
+		if err != nil {
+			_ = writeAppChatSSE(w, flusher, "error", map[string]string{"code": "knowledge_failed", "message": "知识检索失败，请重试"})
+			return
+		}
 	} else {
 		docs, _ = s.retrieveXinzhiliDocs(ctx, transcript, 8)
 	}

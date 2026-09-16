@@ -263,27 +263,27 @@ type appChatStore interface {
 	SearchMessages(ctx context.Context, appUserID, cardID int64, keyword string) ([]chat.SearchResult, error)
 }
 
-func (s *Server) retrieveAppChatKnowledge(ctx context.Context, userID, sessionID, cardID int64, query string) ([]rag.Document, *chat.KnowledgeTrace) {
+func (s *Server) retrieveAppChatKnowledge(ctx context.Context, userID, sessionID, cardID int64, query string) ([]rag.Document, *chat.KnowledgeTrace, error) {
 	if s.appKnowledge == nil {
 		documents, _ := s.retrieveAppDocsForQuery(ctx, query, 6)
-		return documents, nil
+		return documents, nil, nil
 	}
 	result, err := s.appKnowledge.Retrieve(ctx, appknowledge.Input{
 		UserID: userID, SessionID: sessionID, CardID: cardID, Query: query,
 	})
 	if err != nil {
-		return nil, nil
+		return nil, nil, err
 	}
 	layerHits, err := json.Marshal(result.Trace.LayerHits)
 	if err != nil {
-		return result.Documents, nil
+		return result.Documents, nil, nil
 	}
 	return result.Documents, &chat.KnowledgeTrace{
 		CardID:        result.Trace.CardID,
 		EnneagramType: result.Trace.EnneagramType,
 		CardRevision:  result.Trace.CardRevision,
 		LayerHits:     layerHits,
-	}
+	}, nil
 }
 
 func (s *Server) saveAppChatPair(ctx context.Context, sessionID int64, question, answer string, sources json.RawMessage, trace *chat.KnowledgeTrace) (int64, error) {
@@ -539,7 +539,11 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	docs, knowledgeTrace := s.retrieveAppChatKnowledge(ctx, userInfo.ID, sessionID, sess.CardID, body.Question)
+	docs, knowledgeTrace, knowledgeErr := s.retrieveAppChatKnowledge(ctx, userInfo.ID, sessionID, sess.CardID, body.Question)
+	if knowledgeErr != nil {
+		httpx.Fail(w, http.StatusBadGateway, "知识检索失败，请重试")
+		return
+	}
 	profile, conversationCard := s.appChatProfilesForCard(ctx, userInfo.ID, sess.CardID)
 	if memories, err := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); err == nil {
 		profile.Memories = memories
@@ -746,7 +750,11 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			return
 		}
 
-		docs, trace := s.retrieveAppChatKnowledge(ctx, input.userID, input.sessionID, input.cardID, input.question)
+		docs, trace, knowledgeErr := s.retrieveAppChatKnowledge(ctx, input.userID, input.sessionID, input.cardID, input.question)
+		if knowledgeErr != nil {
+			send(appChatStreamEvent{kind: appChatStreamError, publicError: "知识检索失败，请重试", errorPhase: "knowledge"})
+			return
+		}
 		knowledgeTrace = trace
 		profile, conversationCard := s.appChatProfilesForCard(ctx, input.userID, input.cardID)
 		if memories, err := s.appChatMemoriesForPrompt(ctx, input.userID, input.cardID, 6); err == nil {

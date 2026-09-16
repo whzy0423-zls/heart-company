@@ -322,6 +322,9 @@ func remoteDocumentIDs(documents []rag.Document) []string {
 }
 
 func remoteErrorAllowsFallback(err error) bool {
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
 	var remoteErr *RemoteError
 	if !errors.As(err, &remoteErr) || remoteErr.StatusCode == 0 {
 		return true

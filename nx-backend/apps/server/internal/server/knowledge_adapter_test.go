@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/appknowledge"
 	"nine-xing/nx-backend/apps/server/internal/knowledgeclient"
@@ -15,6 +16,13 @@ type knowledgeRetrieveClientStub struct {
 	request  knowledgeclient.RetrievalRequest
 	response knowledgeclient.RetrievalResponse
 	err      error
+}
+
+type blockingKnowledgeRetrieveClient struct{}
+
+func (blockingKnowledgeRetrieveClient) Retrieve(ctx context.Context, _ knowledgeclient.RetrievalRequest) (knowledgeclient.RetrievalResponse, error) {
+	<-ctx.Done()
+	return knowledgeclient.RetrievalResponse{}, ctx.Err()
 }
 
 func (s *knowledgeRetrieveClientStub) Retrieve(_ context.Context, request knowledgeclient.RetrievalRequest) (knowledgeclient.RetrievalResponse, error) {
@@ -84,5 +92,19 @@ func TestAppKnowledgeRemoteAdapterRecordsLowCardinalityMetrics(t *testing.T) {
 	snapshot := metrics.Snapshot()
 	if snapshot.KnowledgeRemoteTotal != 2 || snapshot.KnowledgeRemoteErrors != 1 {
 		t.Fatalf("knowledge metrics=%+v", snapshot)
+	}
+}
+
+func TestAppKnowledgeRemoteAdapterEnforcesRetrieveTimeout(t *testing.T) {
+	adapter := appKnowledgeRemoteAdapter{client: blockingKnowledgeRetrieveClient{}, retrieveTimeout: 20 * time.Millisecond}
+	started := time.Now()
+
+	_, err := adapter.Retrieve(context.Background(), appknowledge.RemoteRequest{})
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("timeout error=%v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
+		t.Fatalf("retrieve timeout took %v", elapsed)
 	}
 }

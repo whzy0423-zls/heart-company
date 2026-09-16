@@ -110,6 +110,30 @@ func TestCoordinatorFallbackUsesLocalOnlyForRetryableRemoteErrors(t *testing.T) 
 	}
 }
 
+func TestRemoteErrorAllowsFallbackClassifiesTimeoutTransportAndClientErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "deadline", err: context.DeadlineExceeded, want: true},
+		{name: "transport", err: errors.New("connection reset"), want: true},
+		{name: "request timeout", err: &RemoteError{StatusCode: 408}, want: true},
+		{name: "rate limited", err: &RemoteError{StatusCode: 429}, want: true},
+		{name: "server error", err: &RemoteError{StatusCode: 503}, want: true},
+		{name: "canceled", err: context.Canceled, want: false},
+		{name: "unauthorized", err: &RemoteError{StatusCode: 401}, want: false},
+		{name: "contract", err: &RemoteError{StatusCode: 422}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := remoteErrorAllowsFallback(tt.err); got != tt.want {
+				t.Fatalf("remoteErrorAllowsFallback(%v)=%v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCoordinatorReportsOnlyExecutedFallbacks(t *testing.T) {
 	resolver := &coordinatorResolverStub{resolution: ConversationResolution{CardID: 9, CardRevision: 1}}
 	public := &publicSearchStub{docs: []rag.Document{{ID: "local", Title: "本地", Content: "结果"}}}

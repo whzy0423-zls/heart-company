@@ -71,6 +71,59 @@ func TestAppChatAskStreamUsesLayeredKnowledgeAndPersistsInternalTrace(t *testing
 	assertSourceIDs(t, generator.lastSources(), "public", "theory", "type-6")
 }
 
+func TestAppChatAskSurfacesNonRetryableKnowledgeFailure(t *testing.T) {
+	store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	store.cardID = 77
+	resolver := &layeredKnowledgeResolver{mainType: 3, revision: 1}
+	server := newLayeredKnowledgeServer(t, store, resolver, newLayeredKnowledgeSearcher(), &layeredKnowledgeGenerator{})
+	server.appKnowledge = appknowledge.NewCoordinator(
+		resolver,
+		newLayeredKnowledgeSearcher(),
+		newLayeredKnowledgeSearcher(),
+		appknowledge.WithRemote("langchain", failingKnowledgeRetriever{err: &appknowledge.RemoteError{StatusCode: 422}}, nil),
+	)
+
+	response := httptest.NewRecorder()
+	server.appChatRouter(response, layeredKnowledgeRequest(t, "/api/app/chat/sessions/42/ask", layeredKnowledgeQuestion))
+
+	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "知识检索失败") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if store.saveCallCount() != 0 {
+		t.Fatalf("saved messages after knowledge failure: %d", store.saveCallCount())
+	}
+}
+
+func TestAppChatAskStreamEmitsKnowledgeFailureWithoutDone(t *testing.T) {
+	store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	store.cardID = 77
+	resolver := &layeredKnowledgeResolver{mainType: 3, revision: 1}
+	server := newLayeredKnowledgeServer(t, store, resolver, newLayeredKnowledgeSearcher(), &layeredKnowledgeGenerator{})
+	server.appKnowledge = appknowledge.NewCoordinator(
+		resolver,
+		newLayeredKnowledgeSearcher(),
+		newLayeredKnowledgeSearcher(),
+		appknowledge.WithRemote("langchain", failingKnowledgeRetriever{err: &appknowledge.RemoteError{StatusCode: 422}}, nil),
+	)
+	writer := newAppChatBlockingStreamWriter()
+
+	server.appChatRouter(writer, layeredKnowledgeRequest(t, "/api/app/chat/sessions/42/ask/stream", layeredKnowledgeQuestion))
+
+	body := writer.BodyString()
+	if !strings.Contains(body, "event: error\n") || !strings.Contains(body, "知识检索失败") || strings.Contains(body, "event: done\n") {
+		t.Fatalf("stream body=%q", body)
+	}
+	if store.saveCallCount() != 0 {
+		t.Fatalf("saved messages after knowledge failure: %d", store.saveCallCount())
+	}
+}
+
+type failingKnowledgeRetriever struct{ err error }
+
+func (r failingKnowledgeRetriever) Retrieve(context.Context, appknowledge.RemoteRequest) (appknowledge.RemoteResult, error) {
+	return appknowledge.RemoteResult{}, r.err
+}
+
 func TestAppChatTextEndpointsResolveAndPassRequestedTier(t *testing.T) {
 	for _, path := range []string{
 		"/api/app/chat/sessions/42/ask",
