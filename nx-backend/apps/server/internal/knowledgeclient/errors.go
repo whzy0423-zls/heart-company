@@ -8,6 +8,7 @@ import (
 var (
 	ErrResponseTooLarge  = errors.New("knowledge service response too large")
 	ErrStreamInterrupted = errors.New("knowledge service stream interrupted before done")
+	ErrStreamIdleTimeout = errors.New("knowledge service stream idle timeout")
 )
 
 type ResponseError struct {

@@ -188,3 +188,22 @@ func TestStreamAnswerReportsTruncatedStream(t *testing.T) {
 		t.Fatalf("expected ErrStreamInterrupted, got %v", err)
 	}
 }
+
+func TestStreamAnswerEnforcesIdleTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		flusher := w.(http.Flusher)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: retrieval_started\ndata: {}\n\n")
+		flusher.Flush()
+		time.Sleep(200 * time.Millisecond)
+	}))
+	defer server.Close()
+	client, _ := New(Config{BaseURL: server.URL, Token: "TOKEN", StreamIdleTimeout: 20 * time.Millisecond})
+
+	events, errs := client.StreamAnswer(context.Background(), AnswerRequest{})
+	for range events {
+	}
+	if err := <-errs; !errors.Is(err, ErrStreamIdleTimeout) {
+		t.Fatalf("expected ErrStreamIdleTimeout, got %v", err)
+	}
+}

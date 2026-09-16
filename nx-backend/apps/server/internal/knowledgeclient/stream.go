@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 func (c *Client) StreamAnswer(ctx context.Context, request AnswerRequest) (<-chan StreamEvent, <-chan error) {
@@ -32,8 +33,48 @@ func (c *Client) StreamAnswer(ctx context.Context, request AnswerRequest) (<-cha
 			return
 		}
 
-		scanner := bufio.NewScanner(response.Body)
-		scanner.Buffer(make([]byte, 64*1024), int(c.maxResponseBytes))
+		scanCtx, cancelScan := context.WithCancel(ctx)
+		defer cancelScan()
+		type scanResult struct {
+			line string
+			err  error
+			done bool
+		}
+		scanResults := make(chan scanResult, 1)
+		go func() {
+			scanner := bufio.NewScanner(response.Body)
+			scanner.Buffer(make([]byte, 64*1024), int(c.maxResponseBytes))
+			for scanner.Scan() {
+				select {
+				case scanResults <- scanResult{line: scanner.Text()}:
+				case <-scanCtx.Done():
+					return
+				}
+			}
+			select {
+			case scanResults <- scanResult{err: scanner.Err(), done: true}:
+			case <-scanCtx.Done():
+			}
+		}()
+		var idleTimer *time.Timer
+		var idle <-chan time.Time
+		if c.streamIdleTimeout > 0 {
+			idleTimer = time.NewTimer(c.streamIdleTimeout)
+			idle = idleTimer.C
+			defer idleTimer.Stop()
+		}
+		resetIdle := func() {
+			if idleTimer == nil {
+				return
+			}
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
+			idleTimer.Reset(c.streamIdleTimeout)
+		}
 		var eventType string
 		var data strings.Builder
 		done := false
@@ -66,8 +107,28 @@ func (c *Client) StreamAnswer(ctx context.Context, request AnswerRequest) (<-cha
 			return true
 		}
 
-		for scanner.Scan() {
-			line := scanner.Text()
+		for {
+			var scanned scanResult
+			select {
+			case <-idle:
+				_ = response.Body.Close()
+				errs <- ErrStreamIdleTimeout
+				return
+			case <-ctx.Done():
+				_ = response.Body.Close()
+				errs <- ctx.Err()
+				return
+			case scanned = <-scanResults:
+			}
+			if scanned.done {
+				if scanned.err != nil {
+					errs <- scanned.err
+					return
+				}
+				break
+			}
+			resetIdle()
+			line := scanned.line
 			switch {
 			case line == "":
 				if !dispatch() {
@@ -81,10 +142,6 @@ func (c *Client) StreamAnswer(ctx context.Context, request AnswerRequest) (<-cha
 				}
 				data.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 			}
-		}
-		if err := scanner.Err(); err != nil {
-			errs <- err
-			return
 		}
 		if eventType != "" && !dispatch() {
 			return

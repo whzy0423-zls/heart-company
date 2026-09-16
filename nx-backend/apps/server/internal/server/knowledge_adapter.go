@@ -50,6 +50,9 @@ func (a appKnowledgeRemoteAdapter) Retrieve(ctx context.Context, input appknowle
 	}
 	documents := make([]rag.Document, 0, len(response.Documents))
 	for _, document := range response.Documents {
+		if !remoteDocumentInScope(document, input) {
+			return appknowledge.RemoteResult{}, &appknowledge.RemoteError{StatusCode: 502, Err: errors.New("knowledge service returned document outside requested scope")}
+		}
 		title := strings.TrimSpace(document.Source)
 		if title == "" {
 			title = document.ID
@@ -61,4 +64,26 @@ func (a appKnowledgeRemoteAdapter) Retrieve(ctx context.Context, input appknowle
 		documents = append(documents, rag.Document{ID: document.ID, Title: title, Content: document.Content, Tags: tags})
 	}
 	return appknowledge.RemoteResult{Documents: documents, RetrievalMethod: response.Trace.RetrievalMethod}, nil
+}
+
+func remoteDocumentInScope(document knowledgeclient.Document, input appknowledge.RemoteRequest) bool {
+	switch document.Library {
+	case "public":
+		return input.Public && document.ReleaseID == nil
+	case "theory":
+		return document.ReleaseID != nil && containsReleaseID(input.TheoryReleaseIDs, *document.ReleaseID)
+	case "enneagram":
+		return document.ReleaseID != nil && containsReleaseID(input.EnneagramReleaseIDs, *document.ReleaseID)
+	default:
+		return false
+	}
+}
+
+func containsReleaseID(releases []int64, value int64) bool {
+	for _, releaseID := range releases {
+		if releaseID == value {
+			return true
+		}
+	}
+	return false
 }

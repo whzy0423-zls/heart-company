@@ -55,3 +55,17 @@ func TestAppKnowledgeRemoteAdapterPreservesHTTPStatusForFallbackPolicy(t *testin
 		t.Fatalf("expected mapped remote error, got %v", err)
 	}
 }
+
+func TestAppKnowledgeRemoteAdapterRejectsDocumentOutsideRequestedScope(t *testing.T) {
+	wrongRelease := int64(999)
+	client := &knowledgeRetrieveClientStub{response: knowledgeclient.RetrievalResponse{
+		Documents: []knowledgeclient.Document{{ID: "leak", Content: "不应返回", Library: "theory", ReleaseID: &wrongRelease, Source: "other.pdf"}},
+	}}
+	adapter := appKnowledgeRemoteAdapter{client: client}
+
+	_, err := adapter.Retrieve(context.Background(), appknowledge.RemoteRequest{TheoryReleaseIDs: []int64{101}})
+	var remoteErr *appknowledge.RemoteError
+	if !errors.As(err, &remoteErr) || remoteErr.StatusCode != 502 {
+		t.Fatalf("expected cross-scope response to fail closed, got %v", err)
+	}
+}
