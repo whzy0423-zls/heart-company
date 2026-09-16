@@ -3,6 +3,7 @@ package appknowledge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -231,6 +232,30 @@ func TestCoordinatorRolloutDoesNotLimitShadowComparison(t *testing.T) {
 	<-reported
 	if remote.calls != 1 {
 		t.Fatalf("shadow remote calls=%d", remote.calls)
+	}
+}
+
+func TestCoordinatorRolloutSupportsPromotionStages(t *testing.T) {
+	for _, percent := range []int{5, 20, 50, 100} {
+		t.Run(fmt.Sprintf("%d_percent", percent), func(t *testing.T) {
+			resolver := &coordinatorResolverStub{resolution: ConversationResolution{CardID: 9, CardRevision: 1}}
+			remote := &remoteRetrieverStub{}
+			coordinator := NewCoordinator(
+				resolver,
+				&publicSearchStub{},
+				&releaseSearchStub{},
+				WithRemote("langchain", remote, nil),
+				WithRolloutPercent(percent),
+			)
+			for userID := int64(1); userID <= 100; userID++ {
+				if _, err := coordinator.Retrieve(context.Background(), Input{UserID: userID, SessionID: 8, CardID: 9, Query: "问题"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if remote.calls != percent {
+				t.Fatalf("remote calls=%d, want %d", remote.calls, percent)
+			}
+		})
 	}
 }
 
