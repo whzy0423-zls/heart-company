@@ -628,6 +628,15 @@ func TestBuildUserPromptUsesEnneagramOverviewInstruction(t *testing.T) {
 
 	for _, want := range []string{
 		"核心结构",
+		"1号完美型",
+		"2号助人型",
+		"3号成就型",
+		"4号自我型",
+		"5号理智型",
+		"6号忠诚型",
+		"7号活跃型",
+		"8号领袖型",
+		"9号和平型",
 		"动力机制",
 		"动态变化",
 		"识别误区",
