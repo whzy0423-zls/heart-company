@@ -9,15 +9,16 @@ description = "Internal LangChain knowledge retrieval service for Nine-Xing"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115,<1",
+  "httpx>=0.28,<1",
   "langchain-core>=0.3,<2",
   "pydantic>=2.10,<3",
   "pydantic-settings>=2.7,<3",
+  "pypdf>=5,<7",
   "uvicorn[standard]>=0.34,<1",
 ]
 
 [project.optional-dependencies]
 test = [
-  "httpx>=0.28,<1",
   "pytest>=8,<10",
   "pytest-asyncio>=0.25,<2",
 ]
@@ -27,4 +28,3 @@ testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
-

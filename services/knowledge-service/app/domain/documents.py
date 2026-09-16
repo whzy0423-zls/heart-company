@@ -13,6 +13,7 @@ class RetrievedDocument(BaseModel):
     score: float
     source: str
     locator: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class RetrievalTrace(BaseModel):
@@ -29,4 +30,3 @@ class RetrievalResponse(BaseModel):
     request_id: str = Field(alias="requestId")
     documents: list[RetrievedDocument]
     trace: RetrievalTrace
-
