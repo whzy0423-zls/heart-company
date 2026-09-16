@@ -10,6 +10,46 @@ import (
 	"testing"
 )
 
+func TestLoadKnowledgeDefaults(t *testing.T) {
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+	for _, key := range []string{
+		"KNOWLEDGE_BACKEND", "LANGCHAIN_SERVICE_URL", "LANGCHAIN_SERVICE_TOKEN",
+		"LANGCHAIN_CONNECT_TIMEOUT_MS", "LANGCHAIN_RETRIEVE_TIMEOUT_MS",
+		"LANGCHAIN_GENERATE_TIMEOUT_SECONDS", "LANGCHAIN_STREAM_IDLE_TIMEOUT_SECONDS",
+	} {
+		t.Setenv(key, "")
+	}
+
+	env := Load()
+
+	if env.Knowledge.Backend != "local" || env.Knowledge.ServiceURL != "http://knowledge-service:8081" {
+		t.Fatalf("unexpected knowledge defaults: %+v", env.Knowledge)
+	}
+	if env.Knowledge.ConnectTimeoutMS != 500 || env.Knowledge.RetrieveTimeoutMS != 1200 ||
+		env.Knowledge.GenerateTimeoutSeconds != 90 || env.Knowledge.StreamIdleTimeoutSeconds != 30 {
+		t.Fatalf("unexpected knowledge timeout defaults: %+v", env.Knowledge)
+	}
+}
+
+func TestKnowledgeConfigRejectsInvalidBackendAndURL(t *testing.T) {
+	valid := KnowledgeConfig{Backend: "shadow", ServiceURL: "http://knowledge-service:8081"}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid config rejected: %v", err)
+	}
+
+	invalidBackend := valid
+	invalidBackend.Backend = "sometimes"
+	if err := invalidBackend.Validate(); err == nil || !strings.Contains(err.Error(), "KNOWLEDGE_BACKEND") {
+		t.Fatalf("expected backend validation error, got %v", err)
+	}
+
+	invalidURL := valid
+	invalidURL.ServiceURL = "knowledge-service:8081"
+	if err := invalidURL.Validate(); err == nil || !strings.Contains(err.Error(), "LANGCHAIN_SERVICE_URL") {
+		t.Fatalf("expected URL validation error, got %v", err)
+	}
+}
+
 func TestLoadDefaultsVideoGatewayContract(t *testing.T) {
 	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
 	t.Setenv("VIDEO_MODEL_PROFILE", "")

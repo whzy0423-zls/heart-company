@@ -35,6 +35,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      knowledge-service:
+        condition: service_healthy
     environment:
       PORT: "5320"
       APP_ENV: ${APP_ENV:-production}
@@ -114,6 +116,13 @@ services:
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1536}
+      KNOWLEDGE_BACKEND: ${KNOWLEDGE_BACKEND:-local}
+      LANGCHAIN_SERVICE_URL: ${LANGCHAIN_SERVICE_URL:-http://knowledge-service:8081}
+      LANGCHAIN_SERVICE_TOKEN: ${LANGCHAIN_SERVICE_TOKEN:-}
+      LANGCHAIN_CONNECT_TIMEOUT_MS: ${LANGCHAIN_CONNECT_TIMEOUT_MS:-500}
+      LANGCHAIN_RETRIEVE_TIMEOUT_MS: ${LANGCHAIN_RETRIEVE_TIMEOUT_MS:-1200}
+      LANGCHAIN_GENERATE_TIMEOUT_SECONDS: ${LANGCHAIN_GENERATE_TIMEOUT_SECONDS:-90}
+      LANGCHAIN_STREAM_IDLE_TIMEOUT_SECONDS: ${LANGCHAIN_STREAM_IDLE_TIMEOUT_SECONDS:-30}
       # 容器化下官网走运行时 fetch，不在容器内自动构建官网，故留空
       BUILD_SCRIPT: ""
     volumes:
@@ -123,6 +132,30 @@ services:
       - uploads:/data/uploads
       # 微信支付证书建议放在宿主机 ./certs/wxpay 下，并在 .env 中引用 /run/secrets/wxpay/*.pem
       - ./certs/wxpay:/run/secrets/wxpay:ro
+    networks:
+      - nx
+
+  knowledge-service:
+    build:
+      context: ./services/knowledge-service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      LANGCHAIN_SERVICE_TOKEN: ${LANGCHAIN_SERVICE_TOKEN:-}
+      DATABASE_URL: postgres://${POSTGRES_USER:-nx}:${POSTGRES_PASSWORD:-nx}@db:5432/${POSTGRES_DB:-nx_admin}?sslmode=disable
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-}
+      EMBEDDING_API_BASE: ${EMBEDDING_API_BASE:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1536}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health/ready', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     networks:
       - nx
 
