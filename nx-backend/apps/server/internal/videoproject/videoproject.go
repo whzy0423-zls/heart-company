@@ -282,10 +282,11 @@ func jsonbArrayLiteral(raw []byte) string {
 // ---------- 项目 CRUD ----------
 
 type ProjectInput struct {
-	Description string `json:"description"`
-	Name        string `json:"name"`
-	StyleGuide  string `json:"styleGuide"`
-	Theme       string `json:"theme"`
+	Description   string `json:"description"`
+	ScriptContent string `json:"scriptContent"`
+	Name          string `json:"name"`
+	StyleGuide    string `json:"styleGuide"`
+	Theme         string `json:"theme"`
 }
 
 func (s *Store) CreateProject(ctx context.Context, input ProjectInput) (Project, error) {
@@ -295,9 +296,9 @@ func (s *Store) CreateProject(ctx context.Context, input ProjectInput) (Project,
 	}
 	var id string
 	if err := s.db.QueryRowContext(ctx,
-		`INSERT INTO video_projects (name, description, theme, style_guide)
-		 VALUES ($1,$2,$3,$4) RETURNING id::text`,
-		name, strings.TrimSpace(input.Description), strings.TrimSpace(input.Theme), strings.TrimSpace(input.StyleGuide),
+		`INSERT INTO video_projects (name, description, script_content, script_revision, theme, style_guide)
+		 VALUES ($1,$2,$3,CASE WHEN btrim($3)<>'' THEN 1 ELSE 0 END,$4,$5) RETURNING id::text`,
+		name, strings.TrimSpace(input.Description), strings.TrimSpace(input.ScriptContent), strings.TrimSpace(input.Theme), strings.TrimSpace(input.StyleGuide),
 	).Scan(&id); err != nil {
 		return Project{}, err
 	}
@@ -315,9 +316,9 @@ func (s *Store) UpdateProject(ctx context.Context, id string, input ProjectInput
 	}
 	if _, err := s.db.ExecContext(ctx,
 		`UPDATE video_projects
-		    SET name=$1, description=$2, theme=$3, style_guide=$4, update_time=now()
-		  WHERE id=$5`,
-		name, strings.TrimSpace(input.Description), strings.TrimSpace(input.Theme), strings.TrimSpace(input.StyleGuide), pid,
+		    SET name=$1, description=$2, script_content=$3, script_revision=CASE WHEN btrim($3)<>'' THEN GREATEST(script_revision,1) ELSE script_revision END, theme=$4, style_guide=$5, update_time=now()
+		  WHERE id=$6`,
+		name, strings.TrimSpace(input.Description), strings.TrimSpace(input.ScriptContent), strings.TrimSpace(input.Theme), strings.TrimSpace(input.StyleGuide), pid,
 	); err != nil {
 		return Project{}, err
 	}
@@ -1548,6 +1549,7 @@ func (s *Store) SetShotVideoVersion(ctx context.Context, shotID, generationID st
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE video_shots
 		    SET generation_id=$1,
+		        selected_generation_id=$1,
 		        generated_prompt=$2,
 		        status=$3,
 		        error_message=CASE WHEN $3='failed' THEN $4 ELSE '' END,
@@ -1666,6 +1668,7 @@ func (s *Store) CopyShotVideoVersion(ctx context.Context, sourceShotID, generati
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE video_shots
 		    SET generation_id=$1,
+		        selected_generation_id=$1,
 		        generated_prompt=$2,
 		        status=$3,
 		        error_message=CASE WHEN $3='failed' THEN $4 ELSE '' END,

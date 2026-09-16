@@ -137,6 +137,7 @@ func (s *Server) appVerifySMS(w http.ResponseWriter, r *http.Request) {
 		Phone      string `json:"phone"`
 		Code       string `json:"code"`
 		DeviceInfo string `json:"deviceInfo"`
+		AgentCode  string `json:"agentCode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		httpx.Fail(w, http.StatusBadRequest, "invalid request body")
@@ -172,6 +173,9 @@ func (s *Server) appVerifySMS(w http.ResponseWriter, r *http.Request) {
 	if user.Status != "active" {
 		httpx.Fail(w, http.StatusForbidden, "账号已被禁用")
 		return
+	}
+	if strings.TrimSpace(body.AgentCode) != "" {
+		_, _ = s.db.ExecContext(r.Context(), `INSERT INTO distribution_user_relations(app_user_id,direct_agent_id) SELECT $1,id FROM distribution_agents WHERE lower(agent_code)=lower($2) AND status='active' ON CONFLICT(app_user_id) DO NOTHING`, user.ID, strings.TrimSpace(body.AgentCode))
 	}
 	if err := s.writeAppSession(w, r, user, body.DeviceInfo); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "token error")

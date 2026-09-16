@@ -29,6 +29,7 @@ func (s *Server) appRegisterWithPassword(w http.ResponseWriter, r *http.Request)
 		Phone      string `json:"phone"`
 		Code       string `json:"code"`
 		DeviceInfo string `json:"deviceInfo"`
+		AgentCode  string `json:"agentCode"`
 	}
 	if err := decodeAppPasswordJSON(w, r, &body); err != nil {
 		httpx.Fail(w, http.StatusBadRequest, "invalid request body")
@@ -88,6 +89,8 @@ func (s *Server) appRegisterWithPassword(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	bindDistributionAgent(r.Context(), s.db, user.ID, body.AgentCode)
+
 	if err := s.writeAppSession(w, r, user, deviceInfo); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "注册已成功，请使用账号密码登录")
 		return
@@ -99,6 +102,7 @@ func (s *Server) appLoginWithPassword(w http.ResponseWriter, r *http.Request) {
 		Account    string `json:"account"`
 		Password   string `json:"password"`
 		DeviceInfo string `json:"deviceInfo"`
+		AgentCode  string `json:"agentCode"`
 	}
 	if err := decodeAppPasswordJSON(w, r, &body); err != nil {
 		httpx.Fail(w, http.StatusBadRequest, "invalid request body")
@@ -126,6 +130,8 @@ func (s *Server) appLoginWithPassword(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, status, message)
 		return
 	}
+
+	bindDistributionAgent(r.Context(), s.db, user.ID, body.AgentCode)
 
 	if err := s.writeAppSession(w, r, user, deviceInfo); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "token error")

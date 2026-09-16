@@ -59,6 +59,7 @@ type Env struct {
 	AMap                   AMapConfig
 	WxPay                  WxPayConfig
 	Embedding              EmbeddingConfig
+	Knowledge              KnowledgeConfig
 	SMS                    SMSConfig
 	Video                  VideoConfig
 	Image                  ImageConfig
@@ -171,6 +172,51 @@ type EmbeddingConfig struct {
 	APIKey    string
 	Model     string
 	Dimension int
+}
+
+// KnowledgeConfig controls the internal LangChain knowledge service. The Go
+// gateway remains the authority for user access and passes only release IDs.
+type KnowledgeConfig struct {
+	Backend                        string // local | shadow | langchain | fallback
+	ServiceURL                     string
+	ServiceToken                   string `json:"-"`
+	ConnectTimeoutMS               int
+	RetrieveTimeoutMS              int
+	GenerateTimeoutSeconds         int
+	StreamIdleTimeoutSeconds       int
+	RolloutPercent                 int
+	SkillRolloutPercent            int
+	XinzhiliRolloutPercent         int
+	XinzhiliRealtimeRolloutPercent int
+}
+
+func (c KnowledgeConfig) Validate() error {
+	backend := strings.ToLower(strings.TrimSpace(c.Backend))
+	switch backend {
+	case "local", "shadow", "langchain", "fallback":
+	default:
+		return fmt.Errorf("KNOWLEDGE_BACKEND must be one of local, shadow, langchain, fallback")
+	}
+	parsed, err := url.Parse(strings.TrimSpace(c.ServiceURL))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return fmt.Errorf("LANGCHAIN_SERVICE_URL must be an absolute http(s) URL")
+	}
+	if backend != "local" && strings.TrimSpace(c.ServiceToken) == "" {
+		return fmt.Errorf("LANGCHAIN_SERVICE_TOKEN must be set for remote knowledge modes")
+	}
+	if c.RolloutPercent < 0 || c.RolloutPercent > 100 {
+		return fmt.Errorf("LANGCHAIN_ROLLOUT_PERCENT must be between 0 and 100")
+	}
+	if c.SkillRolloutPercent < 0 || c.SkillRolloutPercent > 100 {
+		return fmt.Errorf("LANGCHAIN_SKILL_ROLLOUT_PERCENT must be between 0 and 100")
+	}
+	if c.XinzhiliRolloutPercent < 0 || c.XinzhiliRolloutPercent > 100 {
+		return fmt.Errorf("LANGCHAIN_XINZHILI_ROLLOUT_PERCENT must be between 0 and 100")
+	}
+	if c.XinzhiliRealtimeRolloutPercent < 0 || c.XinzhiliRealtimeRolloutPercent > 100 {
+		return fmt.Errorf("LANGCHAIN_XINZHILI_REALTIME_ROLLOUT_PERCENT must be between 0 and 100")
+	}
+	return nil
 }
 
 type MiniMaxConfig struct {
@@ -286,6 +332,14 @@ func positiveIntEnv(key string, fallback int) int {
 	}
 	return v
 }
+
+func boundedIntEnv(key string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(getenv(key, "")))
+	if err != nil {
+		return fallback
+	}
+	return value
+}
 func positiveInt64Env(key string, fallback int64) int64 {
 	v, err := strconv.ParseInt(getenv(key, ""), 10, 64)
 	if err != nil || v <= 0 {
@@ -398,6 +452,19 @@ func Load() Env {
 		Model:     getenv("EMBEDDING_MODEL", ""),
 		Dimension: embDim,
 	}
+	knowledge := KnowledgeConfig{
+		Backend:                        strings.ToLower(strings.TrimSpace(getenv("KNOWLEDGE_BACKEND", "local"))),
+		ServiceURL:                     strings.TrimRight(strings.TrimSpace(getenv("LANGCHAIN_SERVICE_URL", "http://knowledge-service:8081")), "/"),
+		ServiceToken:                   strings.TrimSpace(getenv("LANGCHAIN_SERVICE_TOKEN", "")),
+		ConnectTimeoutMS:               positiveIntEnv("LANGCHAIN_CONNECT_TIMEOUT_MS", 500),
+		RetrieveTimeoutMS:              positiveIntEnv("LANGCHAIN_RETRIEVE_TIMEOUT_MS", 1200),
+		GenerateTimeoutSeconds:         positiveIntEnv("LANGCHAIN_GENERATE_TIMEOUT_SECONDS", 90),
+		StreamIdleTimeoutSeconds:       positiveIntEnv("LANGCHAIN_STREAM_IDLE_TIMEOUT_SECONDS", 30),
+		RolloutPercent:                 boundedIntEnv("LANGCHAIN_ROLLOUT_PERCENT", 100),
+		SkillRolloutPercent:            boundedIntEnv("LANGCHAIN_SKILL_ROLLOUT_PERCENT", 0),
+		XinzhiliRolloutPercent:         boundedIntEnv("LANGCHAIN_XINZHILI_ROLLOUT_PERCENT", 0),
+		XinzhiliRealtimeRolloutPercent: boundedIntEnv("LANGCHAIN_XINZHILI_REALTIME_ROLLOUT_PERCENT", 0),
+	}
 
 	videoTimeout, err := strconv.Atoi(getenv("VIDEO_TIMEOUT_SECONDS", "120"))
 	if err != nil || videoTimeout <= 0 {
@@ -497,6 +564,7 @@ func Load() Env {
 		AMap:      amap,
 		WxPay:     wxpay,
 		Embedding: embedding,
+		Knowledge: knowledge,
 		SMS: SMSConfig{
 			Provider:                 getenv("SMS_PROVIDER", ""),
 			APIKey:                   getenv("SMS_API_KEY", ""),

@@ -628,6 +628,15 @@ func TestBuildUserPromptUsesEnneagramOverviewInstruction(t *testing.T) {
 
 	for _, want := range []string{
 		"核心结构",
+		"1号完美型",
+		"2号助人型",
+		"3号成就型",
+		"4号自我型",
+		"5号理智型",
+		"6号忠诚型",
+		"7号活跃型",
+		"8号领袖型",
+		"9号和平型",
 		"动力机制",
 		"动态变化",
 		"识别误区",
@@ -757,6 +766,33 @@ func TestBuildUserPromptIncludesSecondaryConversationCardBoundary(t *testing.T) 
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("secondary card prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestBuildUserPromptUsesCurrentConversationTypeAsReplyPersona(t *testing.T) {
+	prompt := buildUserPrompt(rag.GenerateInput{
+		Question: "我切到妈妈这张卡后，按她的方式聊聊沟通。",
+		UserProfile: rag.UserProfile{
+			Nickname: "小林",
+			MainType: 9,
+		},
+		ConversationCard: rag.ConversationCard{
+			CardType: "secondary",
+			Name:     "妈妈",
+			Relation: "家人",
+			MainType: 2,
+			WingType: 1,
+		},
+	})
+
+	for _, want := range []string{
+		"本轮回答主型=2号",
+		"回答口吻、共情重点、建议切入角度都按本轮回答主型展开",
+		"不要沿用用户档案里的最近主型=9号作为本轮口吻",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing current-type priority %q: %s", want, prompt)
 		}
 	}
 }

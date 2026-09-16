@@ -31,6 +31,8 @@ export interface SkillLibraryAdminSkill {
   colorToken: string;
   description: string;
   hasPublishedVersion: boolean;
+  hasPublishedHistory: boolean;
+  hasDraft: boolean;
   iconKey: string;
   id: number;
   key: string;
@@ -85,4 +87,33 @@ export function updateSkillLibrarySkillApi(id: number, data: SkillLibrarySkillIn
     data,
     method: 'PATCH',
   });
+}
+
+export interface SkillLibrarySkillLifecycleResult {
+  id: number;
+  published: boolean;
+  status: string;
+}
+
+function skillLifecycleApi(id: number, action: 'publish' | 'unpublish' | 'enable' | 'disable') {
+  return requestClient.request<SkillLibrarySkillLifecycleResult>(
+    `/skill-library-management/skills/${id}/${action}`,
+    { data: {}, method: 'POST' },
+  );
+}
+
+export function publishSkillLibrarySkillApi(id: number) {
+  return skillLifecycleApi(id, 'publish');
+}
+
+export function unpublishSkillLibrarySkillApi(id: number) {
+  return skillLifecycleApi(id, 'unpublish');
+}
+
+export function enableSkillLibrarySkillApi(id: number) {
+  return skillLifecycleApi(id, 'enable');
+}
+
+export function disableSkillLibrarySkillApi(id: number) {
+  return skillLifecycleApi(id, 'disable');
 }

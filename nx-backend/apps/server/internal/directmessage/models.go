@@ -31,6 +31,8 @@ type Conversation struct {
 	UserHighID    int64     `json:"userHighId"`
 	EventSequence int64     `json:"eventSequence"`
 	UpdatedAt     time.Time `json:"updatedAt"`
+	LastMessage   *Message  `json:"lastMessage,omitempty"`
+	UnreadCount   int64     `json:"unreadCount"`
 }
 
 type Message struct {

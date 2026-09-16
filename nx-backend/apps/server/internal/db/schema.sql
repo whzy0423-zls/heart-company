@@ -942,6 +942,35 @@ CREATE TABLE IF NOT EXISTS rag_documents (
   update_time TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ============ LangChain 知识服务文档 ============
+-- release_id 由 Go 网关解析并作为不可变检索范围传入；public 文档必须为 NULL。
+CREATE TABLE IF NOT EXISTS knowledge_documents (
+  id              TEXT PRIMARY KEY,
+  library_kind    TEXT NOT NULL CHECK (library_kind IN ('public','theory','enneagram','skill')),
+  release_id      BIGINT,
+  enneagram_type  INT CHECK (enneagram_type IS NULL OR enneagram_type BETWEEN 1 AND 9),
+  safety_level    INT NOT NULL DEFAULT 0 CHECK (safety_level >= 0),
+  title           TEXT NOT NULL DEFAULT '',
+  content         TEXT NOT NULL,
+  source          TEXT NOT NULL,
+  locator         JSONB NOT NULL DEFAULT '{}'::jsonb,
+  metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  content_hash    TEXT NOT NULL,
+  embedding_model TEXT NOT NULL DEFAULT '',
+  index_version   TEXT NOT NULL DEFAULT 'v1',
+  create_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((library_kind = 'public' AND release_id IS NULL) OR
+         (library_kind <> 'public' AND release_id IS NOT NULL))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_documents_embedding_identity
+  ON knowledge_documents(content_hash, embedding_model, index_version, library_kind, COALESCE(release_id, 0));
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_scope
+  ON knowledge_documents(library_kind, release_id, enneagram_type, safety_level);
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_lexical
+  ON knowledge_documents USING gin (to_tsvector('simple', title || ' ' || content));
+
 -- ============ 阅读管理（H5 文章）============
 -- 后台维护、H5 读书页展示的文章。正文为 Markdown 文本。
 CREATE TABLE IF NOT EXISTS articles (
@@ -2429,6 +2458,9 @@ CREATE OR REPLACE FUNCTION protect_published_skill_release_mapping()
 RETURNS trigger AS $$
 DECLARE release_ids BIGINT[];
 BEGIN
+  IF TG_OP = 'DELETE' AND current_setting('nine_xing.allow_fixture_cleanup', true) = 'on' THEN
+    RETURN OLD;
+  END IF;
   IF TG_OP = 'INSERT' THEN
     release_ids := ARRAY[NEW.release_id];
   ELSIF TG_OP = 'UPDATE' THEN
@@ -2458,6 +2490,9 @@ CREATE TRIGGER trg_protect_published_skill_release_mapping
 CREATE OR REPLACE FUNCTION protect_published_skill_release_chunk()
 RETURNS trigger AS $$
 BEGIN
+  IF TG_OP = 'DELETE' AND current_setting('nine_xing.allow_fixture_cleanup', true) = 'on' THEN
+    RETURN OLD;
+  END IF;
   IF EXISTS (
     SELECT 1
     FROM theory_release_cards mapping
@@ -2491,6 +2526,20 @@ BEGIN
     release_ids := ARRAY[OLD.release_id, NEW.release_id];
   ELSE
     release_ids := ARRAY[OLD.release_id];
+  END IF;
+  IF TG_OP IN ('INSERT','UPDATE') AND EXISTS (
+    SELECT 1
+    FROM theory_library_releases release
+    JOIN theory_cards card ON card.id = NEW.card_id
+    JOIN theory_chunks chunk ON chunk.id = NEW.chunk_id
+    WHERE release.id = NEW.release_id
+      AND (release.library_id IS DISTINCT FROM card.library_id
+        OR release.library_id IS DISTINCT FROM chunk.library_id
+        OR chunk.card_id IS DISTINCT FROM NEW.card_id)
+  ) THEN
+    -- Let the deferred ownership constraint report malformed cross-library
+    -- mappings at COMMIT; do not mask it with snapshot immutability.
+    RETURN NEW;
   END IF;
   IF EXISTS (
     SELECT 1 FROM theory_library_releases release
@@ -2538,6 +2587,9 @@ CREATE TRIGGER trg_protect_released_theory_chunk
 CREATE OR REPLACE FUNCTION protect_released_theory_release()
 RETURNS trigger AS $$
 BEGIN
+  IF TG_OP = 'DELETE' AND current_setting('nine_xing.allow_fixture_cleanup', true) = 'on' THEN
+    RETURN OLD;
+  END IF;
   IF TG_OP = 'DELETE' THEN
     IF OLD.status IN ('active','retired') THEN
       RAISE EXCEPTION 'released theory snapshot is immutable';
@@ -2742,6 +2794,13 @@ BEGIN
       EXECUTE 'CREATE INDEX IF NOT EXISTS idx_rag_documents_embedding ON rag_documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)';
     EXCEPTION WHEN OTHERS THEN
       RAISE NOTICE '知识库 ivfflat 索引不可用，跳过向量索引：%', SQLERRM;
+    END;
+
+    BEGIN
+      EXECUTE 'ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS embedding vector(1024)';
+      EXECUTE 'CREATE INDEX IF NOT EXISTS idx_knowledge_documents_embedding_hnsw ON knowledge_documents USING hnsw (embedding vector_cosine_ops)';
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'LangChain 知识库 vector 列或索引不可用，保留词法检索：%', SQLERRM;
     END;
   END IF;
 END $$;
@@ -4868,3 +4927,132 @@ CREATE TABLE IF NOT EXISTS enterprise_promotion_audit_logs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_enterprise_promotion_audit_entity ON enterprise_promotion_audit_logs(entity_type, entity_id, created_at DESC);
+
+-- ===== 分销代理体系 =====
+CREATE TABLE IF NOT EXISTS distribution_agents (
+  id              BIGSERIAL PRIMARY KEY,
+  app_user_id     BIGINT NOT NULL UNIQUE REFERENCES app_users(id) ON DELETE RESTRICT,
+  agent_code      TEXT NOT NULL UNIQUE,
+  level           SMALLINT NOT NULL CHECK (level BETWEEN 1 AND 3),
+  parent_agent_id BIGINT REFERENCES distribution_agents(id) ON DELETE RESTRICT,
+  root_agent_id   BIGINT NOT NULL REFERENCES distribution_agents(id) ON DELETE RESTRICT,
+  agent_path      TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','paused')),
+  created_by      BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK ((level = 1 AND parent_agent_id IS NULL) OR (level > 1 AND parent_agent_id IS NOT NULL)),
+  CHECK (agent_path LIKE '/%/')
+);
+CREATE INDEX IF NOT EXISTS idx_distribution_agents_parent ON distribution_agents(parent_agent_id, status, id);
+CREATE INDEX IF NOT EXISTS idx_distribution_agents_root_path ON distribution_agents(root_agent_id, agent_path);
+
+CREATE TABLE IF NOT EXISTS distribution_user_relations (
+  id               BIGSERIAL PRIMARY KEY,
+  app_user_id      BIGINT NOT NULL UNIQUE REFERENCES app_users(id) ON DELETE CASCADE,
+  direct_agent_id  BIGINT NOT NULL REFERENCES distribution_agents(id) ON DELETE RESTRICT,
+  source           TEXT NOT NULL DEFAULT 'agent_link',
+  bound_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_distribution_user_relations_direct_agent
+  ON distribution_user_relations(direct_agent_id, bound_at DESC, app_user_id);
+
+CREATE TABLE IF NOT EXISTS distribution_invite_events (
+  id              BIGSERIAL PRIMARY KEY,
+  agent_id        BIGINT NOT NULL REFERENCES distribution_agents(id) ON DELETE RESTRICT,
+  app_user_id     BIGINT REFERENCES app_users(id) ON DELETE SET NULL,
+  agent_code      TEXT NOT NULL,
+  event_type      TEXT NOT NULL CHECK (event_type IN ('click','register','bind')),
+  request_id      TEXT NOT NULL DEFAULT '',
+  ip_hash         TEXT NOT NULL DEFAULT '',
+  user_agent_hash TEXT NOT NULL DEFAULT '',
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_distribution_invite_events_agent_time ON distribution_invite_events(agent_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS distribution_commission_rules (
+  id          BIGSERIAL PRIMARY KEY,
+  version     BIGINT NOT NULL UNIQUE,
+  status      TEXT NOT NULL CHECK (status IN ('draft','active','archived')),
+  created_by  BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  activated_at TIMESTAMPTZ
+);
+CREATE TABLE IF NOT EXISTS distribution_commission_rule_items (
+  id          BIGSERIAL PRIMARY KEY,
+  rule_id     BIGINT NOT NULL REFERENCES distribution_commission_rules(id) ON DELETE CASCADE,
+  agent_level SMALLINT NOT NULL CHECK (agent_level BETWEEN 1 AND 3),
+  rate_bps    INT NOT NULL CHECK (rate_bps BETWEEN 0 AND 10000),
+  UNIQUE (rule_id, agent_level)
+);
+
+CREATE TABLE IF NOT EXISTS distribution_commission_records (
+  id              BIGSERIAL PRIMARY KEY,
+  order_id        BIGINT NOT NULL REFERENCES app_orders(id) ON DELETE RESTRICT,
+  agent_id        BIGINT NOT NULL REFERENCES distribution_agents(id) ON DELETE RESTRICT,
+  app_user_id     BIGINT NOT NULL REFERENCES app_users(id) ON DELETE RESTRICT,
+  agent_level     SMALLINT NOT NULL CHECK (agent_level BETWEEN 1 AND 3),
+  order_amount    BIGINT NOT NULL CHECK (order_amount > 0),
+  rate_bps        INT NOT NULL CHECK (rate_bps BETWEEN 0 AND 10000),
+  commission_amount BIGINT NOT NULL CHECK (commission_amount >= 0),
+  rule_version    BIGINT NOT NULL,
+  chain_snapshot TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','settled','reversed')),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (order_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_distribution_commissions_agent_status ON distribution_commission_records(agent_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_distribution_commissions_user_order ON distribution_commission_records(app_user_id, order_id);
+
+CREATE TABLE IF NOT EXISTS distribution_settlements (
+  id              BIGSERIAL PRIMARY KEY,
+  agent_id        BIGINT NOT NULL REFERENCES distribution_agents(id) ON DELETE RESTRICT,
+  period_start    DATE NOT NULL,
+  period_end      DATE NOT NULL,
+  amount          BIGINT NOT NULL CHECK (amount >= 0),
+  status          TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','approved','pending','paid','rejected','cancelled')),
+  paid_at         TIMESTAMPTZ,
+  created_by      BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (agent_id, period_start, period_end)
+);
+CREATE TABLE IF NOT EXISTS distribution_settlement_items (
+  id              BIGSERIAL PRIMARY KEY,
+  settlement_id   BIGINT NOT NULL REFERENCES distribution_settlements(id) ON DELETE CASCADE,
+  commission_id   BIGINT NOT NULL UNIQUE REFERENCES distribution_commission_records(id) ON DELETE RESTRICT,
+  amount          BIGINT NOT NULL CHECK (amount >= 0)
+);
+
+-- Keep existing installations aligned with the settlement state machine.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'distribution_settlements_status_check') THEN
+    ALTER TABLE distribution_settlements DROP CONSTRAINT distribution_settlements_status_check;
+  END IF;
+  ALTER TABLE distribution_settlements ADD CONSTRAINT distribution_settlements_status_check
+    CHECK (status IN ('draft','approved','pending','paid','rejected','cancelled'));
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+-- Seed a disabled-by-default business baseline only when no rule exists.
+-- Rates are zero until the operator publishes a commercial policy.
+DO $$
+DECLARE rule_id BIGINT;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM distribution_commission_rules) THEN
+    INSERT INTO distribution_commission_rules(version,status) VALUES (1,'active') RETURNING id INTO rule_id;
+    INSERT INTO distribution_commission_rule_items(rule_id,agent_level,rate_bps)
+      VALUES (rule_id,1,0),(rule_id,2,0),(rule_id,3,0);
+  END IF;
+END $$;
+
+-- Reservation history survives cancellation; a canceled period can be rebuilt.
+ALTER TABLE distribution_settlement_items DROP CONSTRAINT IF EXISTS distribution_settlement_items_commission_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_distribution_settlement_item_pair ON distribution_settlement_items(settlement_id,commission_id);
+ALTER TABLE distribution_settlements DROP CONSTRAINT IF EXISTS distribution_settlements_agent_id_period_start_period_end_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_distribution_settlement_active_period ON distribution_settlements(agent_id,period_start,period_end) WHERE status IN ('draft','approved','pending','paid');
+ALTER TABLE distribution_settlements ADD COLUMN IF NOT EXISTS payment_reference TEXT NOT NULL DEFAULT '';
+ALTER TABLE distribution_settlements ADD COLUMN IF NOT EXISTS action_reason TEXT NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_distribution_payment_reference ON distribution_settlements(payment_reference) WHERE payment_reference<>'';
+ALTER TABLE distribution_commission_records ADD COLUMN IF NOT EXISTS reversal_reason TEXT NOT NULL DEFAULT '';

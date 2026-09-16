@@ -88,6 +88,8 @@ type LayeredKnowledgeRetriever interface {
 	Retrieve(ctx context.Context, userID, conversationID, cardID int64, query string) (LayeredKnowledgeResult, error)
 }
 
+var errLayeredKnowledgeRetrieval = errors.New("xinzhili layered knowledge retrieval failed")
+
 type ChatGenerator interface {
 	GenerateStream(ctx context.Context, input rag.GenerateInput, emit rag.StreamEmitter) (string, error)
 }
@@ -896,6 +898,7 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 			knowledgeDocs  []rag.Document
 			theoryDocs     []rag.Document
 			knowledgeTrace *KnowledgeTrace
+			knowledgeErr   error
 			contextLoads   sync.WaitGroup
 		)
 		contextLoads.Add(4)
@@ -918,7 +921,8 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 		go func() {
 			defer contextLoads.Done()
 			if s.deps.LayeredKnowledge != nil {
-				result, _ := s.deps.LayeredKnowledge.Retrieve(turn.ctx, turn.input.UserID, turn.conversation.ID, turn.input.CardID, question)
+				result, err := s.deps.LayeredKnowledge.Retrieve(turn.ctx, turn.input.UserID, turn.conversation.ID, turn.input.CardID, question)
+				knowledgeErr = err
 				knowledgeDocs = result.Documents
 				knowledgeTrace = result.Trace
 				return
@@ -931,6 +935,10 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 			}
 		}()
 		contextLoads.Wait()
+		if knowledgeErr != nil {
+			s.postEvent(sessionEvent{kind: eventGenerationDone, turnID: turn.input.TurnID, err: fmt.Errorf("%w: %v", errLayeredKnowledgeRetrieval, knowledgeErr)})
+			return
+		}
 
 		documents := make([]rag.Document, 0, turn.input.KnowledgeTopK+turn.input.TheoryTopK)
 		documents = appendUniqueDocuments(documents, knowledgeDocs)
@@ -1129,8 +1137,13 @@ func (s *session) handleGenerationDone(turn *activeTurn, event sessionEvent) {
 	}
 	close(turn.ttsJobs)
 	if event.err != nil {
-		log.Printf("xinzhili generation failed user_id=%d turn_id=%q err=%v", turn.input.UserID, turn.input.TurnID, event.err)
-		s.sendError(turn, "provider_generation_failed", "会话模型连接异常，请稍后重试", true)
+		if errors.Is(event.err, errLayeredKnowledgeRetrieval) {
+			log.Printf("xinzhili knowledge retrieval failed user_id=%d turn_id=%q", turn.input.UserID, turn.input.TurnID)
+			s.sendError(turn, "knowledge_retrieval_failed", "知识检索连接异常，请稍后重试", true)
+		} else {
+			log.Printf("xinzhili generation failed user_id=%d turn_id=%q err=%v", turn.input.UserID, turn.input.TurnID, event.err)
+			s.sendError(turn, "provider_generation_failed", "会话模型连接异常，请稍后重试", true)
+		}
 	} else if turn.answer == "" {
 		log.Printf("xinzhili generation returned empty answer user_id=%d turn_id=%q", turn.input.UserID, turn.input.TurnID)
 		s.sendError(turn, "empty_generation", "会话模型没有返回有效回答，请重试", true)

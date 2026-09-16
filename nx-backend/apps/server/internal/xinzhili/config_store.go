@@ -63,6 +63,9 @@ func UpdateConfig(ctx context.Context, db *sql.DB, incoming Config, expectedVers
 	if (!found && expectedVersion != 0) || (found && current.Version != expectedVersion) {
 		return Config{}, ErrConfigConflict
 	}
+	if incoming.Enabled && incoming.ClearASRKey {
+		return Config{}, errors.New("启用芯之力时不能清除实时 ASR API Key")
+	}
 
 	merged := MergeIncoming(current, incoming)
 	normalized, err := merged.WithDefaults()

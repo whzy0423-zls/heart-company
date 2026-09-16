@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"mime"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -44,6 +45,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/friends"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/image"
+	"nine-xing/nx-backend/apps/server/internal/knowledgeclient"
 	"nine-xing/nx-backend/apps/server/internal/lifestory"
 	"nine-xing/nx-backend/apps/server/internal/llm"
 	"nine-xing/nx-backend/apps/server/internal/location"
@@ -176,6 +178,8 @@ type Server struct {
 	appChatQuota                   appChatQuotaManager
 	appChatPlanLoader              func(context.Context, int64) (appPlanConfig, error)
 	appKnowledge                   *appknowledge.Coordinator
+	xinzhiliKnowledge              *appknowledge.Coordinator
+	xinzhiliRealtimeKnowledge      *appknowledge.Coordinator
 	skillCatalog                   *skillcatalog.Store
 	skillChat                      *skillchat.Store
 	skillChatRuntime               *skillchat.Runtime
@@ -459,14 +463,62 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	}
 	s.appChat = chat.NewStore(database)
 	s.appChatQuota = newDatabaseAppChatQuotaManager(database)
+	var remoteKnowledge appknowledge.RemoteRetriever
+	if env.Knowledge.Backend != "" && env.Knowledge.Backend != "local" {
+		if err := env.Knowledge.Validate(); err != nil {
+			panic("knowledge config: " + err.Error())
+		}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.DialContext = (&net.Dialer{Timeout: time.Duration(env.Knowledge.ConnectTimeoutMS) * time.Millisecond}).DialContext
+		client, clientErr := knowledgeclient.New(knowledgeclient.Config{
+			BaseURL:           env.Knowledge.ServiceURL,
+			Token:             env.Knowledge.ServiceToken,
+			HTTPClient:        &http.Client{Transport: transport},
+			StreamIdleTimeout: time.Duration(env.Knowledge.StreamIdleTimeoutSeconds) * time.Second,
+		})
+		if clientErr != nil {
+			panic("knowledge client: " + clientErr.Error())
+		}
+		adapter := appKnowledgeRemoteAdapter{client: client, retrieveTimeout: time.Duration(env.Knowledge.RetrieveTimeoutMS) * time.Millisecond, metrics: s.metrics}
+		remoteKnowledge = adapter
+	}
+	knowledgeOptionsFor := func(rolloutPercent int) []appknowledge.Option {
+		options := []appknowledge.Option{appknowledge.WithRolloutPercent(rolloutPercent)}
+		if remoteKnowledge != nil {
+			options = append(options, appknowledge.WithRemote(env.Knowledge.Backend, remoteKnowledge, func(comparison appknowledge.ShadowComparison) {
+				observeKnowledgeShadow(s.metrics, comparison, log.Printf)
+			}))
+			options = append(options, appknowledge.WithFallbackObserver(func(error) {
+				s.metrics.KnowledgeFallback()
+			}))
+		}
+		return options
+	}
 	s.appKnowledge = appknowledge.NewCoordinator(
 		appknowledge.NewResolver(database),
 		appKnowledgePublicSearcher{server: s},
 		theorystore.NewStore(database),
+		knowledgeOptionsFor(env.Knowledge.RolloutPercent)...,
+	)
+	s.xinzhiliKnowledge = appknowledge.NewCoordinator(
+		appknowledge.NewResolver(database),
+		appKnowledgePublicSearcher{server: s},
+		theorystore.NewStore(database),
+		knowledgeOptionsFor(env.Knowledge.XinzhiliRolloutPercent)...,
+	)
+	s.xinzhiliRealtimeKnowledge = appknowledge.NewCoordinator(
+		appknowledge.NewResolver(database),
+		appKnowledgePublicSearcher{server: s},
+		theorystore.NewStore(database),
+		knowledgeOptionsFor(env.Knowledge.XinzhiliRealtimeRolloutPercent)...,
 	)
 	s.skillCatalog = skillcatalog.NewStore(database)
 	s.skillChat = skillchat.NewStore(database)
-	s.skillChatRuntime = skillchat.NewRuntime(s.skillChat, theorystore.NewStore(database), skillChatRuntimeGenerator{server: s})
+	skillRuntimeOptions := []skillchat.RuntimeOption{}
+	if remoteKnowledge != nil {
+		skillRuntimeOptions = append(skillRuntimeOptions, skillchat.WithRemoteKnowledge(env.Knowledge.Backend, remoteKnowledge, env.Knowledge.SkillRolloutPercent))
+	}
+	s.skillChatRuntime = skillchat.NewRuntime(s.skillChat, theorystore.NewStore(database), skillChatRuntimeGenerator{server: s}, skillRuntimeOptions...)
 	s.userPreferences = userpreference.NewStore(database)
 	s.preferenceAsyncSlots = make(chan struct{}, 2)
 	s.preferenceAsyncTimeout = 2 * time.Second
@@ -904,8 +956,17 @@ func (s *Server) routes() {
 	// 对话模型连通性测试：对 MiniMax 网关做一次轻量探活，需登录。
 	s.mux.HandleFunc("/api/model-config/test-chat", s.requirePermission("System:Model:Config", s.method(http.MethodPost, s.testChatModel)))
 	// ===== App API =====
+	s.mux.HandleFunc("/api/public/distribution/invite", s.method(http.MethodGet, s.publicDistributionInvite))
 	s.mux.HandleFunc("/api/app/health", s.method(http.MethodGet, s.appHealth))
 	s.mux.HandleFunc("/api/app/features", s.method(http.MethodGet, s.requireAppAuth(s.appFeatures)))
+	s.mux.HandleFunc("/api/app/distribution/overview", s.method(http.MethodGet, s.requireAppAuth(s.appDistributionOverview)))
+	s.mux.HandleFunc("/api/app/distribution/profile", s.method(http.MethodGet, s.requireAppAuth(s.appDistributionProfile)))
+	s.mux.HandleFunc("/api/app/distribution/bind", s.method(http.MethodPost, s.requireAppAuth(s.appDistributionBind)))
+	s.mux.HandleFunc("/api/app/distribution/children", s.method(http.MethodPost, s.requireAppAuth(s.appDistributionCreateChild)))
+	s.mux.HandleFunc("/api/app/distribution/commissions", s.method(http.MethodGet, s.requireAppAuth(s.appDistributionCommissions)))
+	s.mux.HandleFunc("/api/app/distribution/users", s.method(http.MethodGet, s.requireAppAuth(s.appDistributionUsers)))
+	s.mux.HandleFunc("/api/app/distribution/agents", s.method(http.MethodGet, s.requireAppAuth(s.appDistributionAgents)))
+	s.mux.HandleFunc("/api/app/distribution/orders", s.method(http.MethodGet, s.requireAppAuth(s.appDistributionOrders)))
 	s.mux.HandleFunc("/api/app/auth/send-sms", s.method(http.MethodPost, s.appSendSMS))
 	s.mux.HandleFunc("/api/app/auth/sms", s.method(http.MethodPost, s.appSendSMS))
 	s.mux.HandleFunc("/api/app/auth/sms/send", s.method(http.MethodPost, s.appSendSMS))
@@ -935,6 +996,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/social/reports", s.requireAppAuth(s.appSocialRouter))
 	s.mux.HandleFunc("/api/app/direct/conversations", s.requireAppAuth(s.appDirectMessageRouter))
 	s.mux.HandleFunc("/api/app/direct/conversations/", s.requireAppAuth(s.appDirectMessageRouter))
+	s.mux.HandleFunc("/api/app/direct/peers/", s.requireAppAuth(s.appDirectMessageRouter))
 	s.mux.HandleFunc("/api/app/direct/messages/", s.requireAppAuth(s.appDirectMessageRouter))
 	s.mux.HandleFunc("/api/app/direct/media/", s.requireAppAuth(s.appDirectMedia))
 	s.mux.HandleFunc("/api/app/relationship-insights/", s.method(http.MethodGet, s.requireAppAuth(s.appRelationshipInsightByID)))
@@ -1073,10 +1135,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/video/generations/overview", s.method(http.MethodGet, s.requirePermission("Video:Generation:Overview", s.videoGenerationsOverview)))
 	s.mux.HandleFunc("/api/video/generations/", s.requirePermission("Video:Generate:Manage", s.videoGenerationByID))
 	s.mux.HandleFunc("/api/video/analysis", s.method(http.MethodPost, s.requirePermission("Video:Analysis:Manage", s.createVideoAnalysis)))
-	s.mux.HandleFunc("/api/video/analysis/list", s.method(http.MethodGet, s.requireAnyPermission([]string{"Video:Analysis:Manage", "Video:Storyboard:Manage"}, s.videoAnalysisList)))
+	s.mux.HandleFunc("/api/video/analysis/list", s.method(http.MethodGet, s.requireAnyPermission([]string{"Video:Analysis:Manage", "Video:Storyboard:Manage", "Video:Generate:Manage"}, s.videoAnalysisList)))
 	s.mux.HandleFunc("/api/video/analysis/", s.requirePermission("Video:Analysis:Manage", s.videoAnalysisByID))
 	s.mux.HandleFunc("/api/video/storyboards", s.requirePermission("Video:Storyboard:Manage", s.videoStoryboards))
-	s.mux.HandleFunc("/api/video/storyboards/list", s.method(http.MethodGet, s.requirePermission("Video:Storyboard:Manage", s.videoStoryboardList)))
+	s.mux.HandleFunc("/api/video/storyboards/list", s.method(http.MethodGet, s.requireAnyPermission([]string{"Video:Storyboard:Manage", "Video:Generate:Manage"}, s.videoStoryboardList)))
 	s.mux.HandleFunc("/api/video/storyboards/", s.requirePermission("Video:Storyboard:Manage", s.videoStoryboardByID))
 	s.mux.HandleFunc("/api/video/assets/list", s.method(http.MethodGet, s.requirePermission("Video:Asset:Manage", s.videoAssetList)))
 	s.mux.HandleFunc("/api/video/assets/generate-image", s.method(http.MethodPost, s.requirePermission("Video:Asset:Manage", s.generateImageAsset)))
@@ -1144,6 +1206,17 @@ func (s *Server) routes() {
 		http.MethodDelete: "System:User:Delete",
 		http.MethodPut:    "System:User:Update",
 	}, s.system.HandleUserByID))
+	s.mux.HandleFunc("/api/admin/distribution/agents", s.requireMethodPermission(map[string]string{http.MethodGet: "Customer:App:List", http.MethodPost: "Customer:App:Write"}, s.adminDistributionAgentsRouter))
+	s.mux.HandleFunc("/api/admin/distribution/agents/", s.requireMethodPermission(map[string]string{http.MethodPut: "Customer:App:Write"}, s.adminDistributionAgentStatus))
+	s.mux.HandleFunc("/api/admin/distribution/commissions/", s.requireMethodPermission(map[string]string{http.MethodPost: "Customer:App:Write"}, s.adminDistributionCommissionReverse))
+	s.mux.HandleFunc("/api/admin/distribution/commissions", s.method(http.MethodGet, s.requirePermission("Customer:App:List", s.adminDistributionCommissions)))
+	s.mux.HandleFunc("/api/admin/distribution/users", s.method(http.MethodGet, s.requirePermission("Customer:App:List", s.adminDistributionUsers)))
+	s.mux.HandleFunc("/api/admin/distribution/orders", s.method(http.MethodGet, s.requirePermission("Customer:AppOrders:List", s.adminDistributionOrders)))
+	s.mux.HandleFunc("/api/admin/distribution/rules", s.requireMethodPermission(map[string]string{http.MethodGet: "Customer:App:List", http.MethodPost: "Customer:App:Write"}, s.adminDistributionRulesRouter))
+	s.mux.HandleFunc("/api/admin/distribution/rules/", s.method(http.MethodPost, s.requirePermission("Customer:App:Write", s.adminDistributionRuleActivate)))
+	s.mux.HandleFunc("/api/admin/distribution/settlements/preview", s.method(http.MethodPost, s.requirePermission("Customer:App:Write", s.adminDistributionSettlementPreview)))
+	s.mux.HandleFunc("/api/admin/distribution/settlements/", s.requireMethodPermission(map[string]string{http.MethodPost: "Customer:App:Write"}, s.adminDistributionSettlementAction))
+	s.mux.HandleFunc("/api/admin/distribution/settlements", s.requireMethodPermission(map[string]string{http.MethodGet: "Customer:App:List", http.MethodPost: "Customer:App:Write"}, s.adminDistributionSettlementsRouter))
 	s.mux.HandleFunc("/api/app-users/list", s.method(http.MethodGet, s.requirePermission("Customer:App:List", s.appUsers.HandleAppUsers)))
 	s.mux.HandleFunc("/api/app-orders/list", s.method(http.MethodGet, s.requirePermission("Customer:AppOrders:List", s.adminAppOrders)))
 	s.mux.HandleFunc("/api/app-orders/", s.method(http.MethodPost, s.requirePermission("Customer:AppOrders:Write", s.adminAppOrderAction)))

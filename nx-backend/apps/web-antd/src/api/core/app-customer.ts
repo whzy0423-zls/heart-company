@@ -1,6 +1,7 @@
 import { requestClient } from '#/api/request';
 
 export interface AppCustomer {
+  account?: string;
   avatar: string;
   createTime: string;
   id: number;

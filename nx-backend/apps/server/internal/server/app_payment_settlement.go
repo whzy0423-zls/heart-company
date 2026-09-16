@@ -60,11 +60,12 @@ func settleAppOrderTx(ctx context.Context, tx *sql.Tx, input appOrderSettlementI
 	var orderID, appUserID int64
 	var durationDays int
 	var productID, status string
+	var orderAmount int64
 	var currentActivation, currentMembershipExpiry sql.NullTime
 	err := tx.QueryRowContext(ctx, `
-		SELECT id, app_user_id, product_id, status, duration_days, activation_at, membership_expires_at
+		SELECT id, app_user_id, product_id, status, duration_days, activation_at, membership_expires_at, amount
 		FROM app_orders WHERE id=$1 FOR UPDATE`, input.OrderID).Scan(
-		&orderID, &appUserID, &productID, &status, &durationDays, &currentActivation, &currentMembershipExpiry)
+		&orderID, &appUserID, &productID, &status, &durationDays, &currentActivation, &currentMembershipExpiry, &orderAmount)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return appOrderSettlementResult{}, errXZNCallbackNotFound
@@ -120,6 +121,9 @@ func settleAppOrderTx(ctx context.Context, tx *sql.Tx, input appOrderSettlementI
 		WHERE id=$1`, orderID, activationAt, period.Expires, input.ProviderTrade, input.ProviderStatus, input.TransactionID,
 		memberLevel, nullableTimeArgument(currentStartedAt), nullableTimeArgument(currentExpiresAt)); err != nil {
 		return appOrderSettlementResult{}, fmt.Errorf("settlement order update: %w", err)
+	}
+	if err := generateDistributionCommissionsTx(ctx, tx, orderID, appUserID, orderAmount); err != nil {
+		return appOrderSettlementResult{}, fmt.Errorf("distribution commission: %w", err)
 	}
 	return appOrderSettlementResult{OrderID: orderID, PlanCode: productID, StartedAt: startedAt, ExpiresAt: period.Expires}, nil
 }
@@ -218,6 +222,14 @@ func refundAppOrderTx(ctx context.Context, tx *sql.Tx, input appOrderRefundInput
 		    payment_error='',update_time=now()
 		WHERE id=$1`, orderID, refundedAt, reason, input.ProviderStatus); err != nil {
 		return appOrderRefundResult{}, fmt.Errorf("refund order update: %w", err)
+	}
+	if err := lockDistributionLedger(ctx, tx); err != nil {
+		return appOrderRefundResult{}, fmt.Errorf("distribution ledger lock: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE distribution_commission_records
+		SET status='reversed',reversal_reason=$2,updated_at=now()
+		WHERE order_id=$1 AND status<>'reversed'`, orderID, reason); err != nil {
+		return appOrderRefundResult{}, fmt.Errorf("distribution commission reversal: %w", err)
 	}
 	return appOrderRefundResult{OrderID: orderID, EntitlementReverted: true}, nil
 }
@@ -350,4 +362,43 @@ func truncatePaymentError(value string) string {
 		return value[:500]
 	}
 	return value
+}
+
+// generateDistributionCommissionsTx snapshots the active rule and current
+// agent chain while the paid order transaction is still locked.
+func generateDistributionCommissionsTx(ctx context.Context, tx *sql.Tx, orderID, paidUserID int64, amount int64) error {
+	if amount <= 0 {
+		return nil
+	}
+	if err := lockDistributionLedger(ctx, tx); err != nil {
+		return fmt.Errorf("distribution ledger lock: %w", err)
+	}
+	// One INSERT SELECT avoids issuing a second command while PostgreSQL rows
+	// are still streaming on the transaction connection. Every beneficiary keeps
+	// the same complete referral snapshot, not a progressively truncated path.
+	_, err := tx.ExecContext(ctx, `
+ WITH RECURSIVE chain AS (
+   SELECT a.id,a.level,a.parent_agent_id,a.status,a.agent_path AS path,
+          ARRAY[a.id] AS visited,1 AS depth
+   FROM distribution_user_relations r
+   JOIN distribution_agents a ON a.id=r.direct_agent_id
+   WHERE r.app_user_id=$2
+   UNION ALL
+   SELECT p.id,p.level,p.parent_agent_id,p.status,c.path,
+          c.visited||p.id,c.depth+1
+   FROM chain c JOIN distribution_agents p ON p.id=c.parent_agent_id
+   WHERE c.depth<3 AND NOT p.id=ANY(c.visited)
+ ), active_rule AS (
+   SELECT id,version FROM distribution_commission_rules
+   WHERE status='active' ORDER BY version DESC LIMIT 1
+ )
+ INSERT INTO distribution_commission_records
+ (order_id,agent_id,app_user_id,agent_level,order_amount,rate_bps,commission_amount,rule_version,chain_snapshot)
+ SELECT $1,c.id,$2,c.level,$3,i.rate_bps,
+        floor(($3::bigint)::numeric*i.rate_bps/10000)::bigint,ar.version,c.path
+ FROM chain c CROSS JOIN active_rule ar
+ JOIN distribution_commission_rule_items i ON i.rule_id=ar.id AND i.agent_level=c.level
+ WHERE c.status='active'
+ ON CONFLICT(order_id,agent_id) DO NOTHING`, orderID, paidUserID, amount)
+	return err
 }

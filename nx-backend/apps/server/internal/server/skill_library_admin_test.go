@@ -24,6 +24,10 @@ func TestRegisterSkillLibraryAdminRoutesUsesViewAndEditPermissions(t *testing.T)
 		{http.MethodPatch, "/api/skill-library-management/library/3", "App:SkillLibrary:Edit"},
 		{http.MethodPatch, "/api/skill-library-management/categories/7", "App:SkillLibrary:Edit"},
 		{http.MethodPatch, "/api/skill-library-management/skills/9", "App:SkillLibrary:Edit"},
+		{http.MethodPost, "/api/skill-library-management/skills/9/publish", "App:SkillLibrary:Edit"},
+		{http.MethodPost, "/api/skill-library-management/skills/9/unpublish", "App:SkillLibrary:Edit"},
+		{http.MethodPost, "/api/skill-library-management/skills/9/enable", "App:SkillLibrary:Edit"},
+		{http.MethodPost, "/api/skill-library-management/skills/9/disable", "App:SkillLibrary:Edit"},
 	}
 	for _, test := range tests {
 		permissions = nil
@@ -54,6 +58,18 @@ func TestParseSkillLibraryAdminPath(t *testing.T) {
 		if resource != test.resource || id != test.id || ok != test.ok {
 			t.Errorf("parse %q = %q/%d/%v want %q/%d/%v", test.path, resource, id, ok, test.resource, test.id, test.ok)
 		}
+	}
+}
+
+func TestParseSkillLibraryAdminActionPath(t *testing.T) {
+	for _, action := range []string{"publish", "unpublish", "enable", "disable"} {
+		id, parsed, ok := parseSkillLibraryAdminActionPath("/api/skill-library-management/skills/9/" + action)
+		if id != 9 || parsed != action || !ok {
+			t.Errorf("parse action %q = %d/%q/%v", action, id, parsed, ok)
+		}
+	}
+	if _, _, ok := parseSkillLibraryAdminActionPath("/api/skill-library-management/skills/9/remove"); ok {
+		t.Fatal("unknown action accepted")
 	}
 }
 

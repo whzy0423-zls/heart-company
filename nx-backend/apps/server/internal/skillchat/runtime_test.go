@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"nine-xing/nx-backend/apps/server/internal/appknowledge"
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 )
@@ -70,6 +71,66 @@ func TestRuntimeUsesOnlyFixedSkillVersionAndCurrentSessionContext(t *testing.T) 
 		if strings.Contains(string(traceJSON), forbidden) {
 			t.Fatalf("trace leaked user/model content %q: %s", forbidden, traceJSON)
 		}
+	}
+}
+
+func TestRuntimeRemoteKnowledgeUsesOnlyPinnedSkillRelease(t *testing.T) {
+	store := &runtimeStoreStub{session: runnableRuntimeSession()}
+	search := &runtimeSearchStub{}
+	remote := &runtimeRemoteStub{result: appknowledge.RemoteResult{
+		Documents:       []rag.Document{{ID: "theory:711", Title: "远程", Content: "固定版本知识"}},
+		Citations:       []rag.Citation{{DocumentID: "theory:711", Source: "学习之道", Locator: map[string]any{"chapter": "划小圈"}}},
+		TraceID:         "trace-skill",
+		RetrievalMethod: "hybrid",
+	}}
+	gen := &runtimeGeneratorStub{answer: "回答"}
+	runtime := NewRuntime(store, search, gen, WithRemoteKnowledge("langchain", remote, 100))
+
+	result, err := runtime.Ask(context.Background(), 7, 41, "怎么练习？")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if search.called {
+		t.Fatal("langchain skill retrieval called legacy search")
+	}
+	if remote.calls != 1 || remote.request.Scene != "skill_chat" || remote.request.Public {
+		t.Fatalf("remote request=%+v calls=%d", remote.request, remote.calls)
+	}
+	if got := remote.request.TheoryReleaseIDs; len(got) != 1 || got[0] != store.session.TheoryReleaseID || len(remote.request.EnneagramReleaseIDs) != 0 {
+		t.Fatalf("remote scope=%+v", remote.request)
+	}
+	if remote.request.RequestID == "" || len(result.Trace.ChunkIDs) != 1 || result.Trace.ChunkIDs[0] != 711 {
+		t.Fatalf("request=%+v trace=%+v", remote.request, result.Trace)
+	}
+	if len(result.Citations) != 1 || result.TraceID != "trace-skill" || result.RetrievalMethod != "hybrid" {
+		t.Fatalf("retrieval metadata=%+v", result)
+	}
+}
+
+func TestRuntimeRemoteKnowledgeFallbackPolicy(t *testing.T) {
+	tests := []struct {
+		name      string
+		remoteErr error
+		wantErr   bool
+		wantLocal bool
+	}{
+		{name: "server error falls back", remoteErr: &appknowledge.RemoteError{StatusCode: 503}, wantLocal: true},
+		{name: "timeout falls back", remoteErr: context.DeadlineExceeded, wantLocal: true},
+		{name: "contract error fails closed", remoteErr: &appknowledge.RemoteError{StatusCode: 422}, wantErr: true},
+		{name: "cancellation fails closed", remoteErr: context.Canceled, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &runtimeStoreStub{session: runnableRuntimeSession()}
+			search := &runtimeSearchStub{documents: []rag.Document{{ID: "theory:711", Title: "本地", Content: "旧知识"}}}
+			remote := &runtimeRemoteStub{err: tt.remoteErr}
+			runtime := NewRuntime(store, search, &runtimeGeneratorStub{answer: "回答"}, WithRemoteKnowledge("fallback", remote, 100))
+
+			_, err := runtime.Ask(context.Background(), 7, 41, "怎么练习？")
+			if (err != nil) != tt.wantErr || search.called != tt.wantLocal {
+				t.Fatalf("err=%v local=%v", err, search.called)
+			}
+		})
 	}
 }
 
@@ -183,6 +244,19 @@ type runtimeSearchStub struct {
 	documents []rag.Document
 	releaseID int64
 	called    bool
+}
+
+type runtimeRemoteStub struct {
+	request appknowledge.RemoteRequest
+	result  appknowledge.RemoteResult
+	err     error
+	calls   int
+}
+
+func (s *runtimeRemoteStub) Retrieve(_ context.Context, request appknowledge.RemoteRequest) (appknowledge.RemoteResult, error) {
+	s.calls++
+	s.request = request
+	return s.result, s.err
 }
 
 func (s *runtimeSearchStub) SearchReleaseChunks(_ context.Context, releaseID int64, _ string, _ int, _ float64) ([]rag.Document, error) {

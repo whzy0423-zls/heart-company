@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/quiz"
@@ -91,7 +92,8 @@ func (s *Server) appCards(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusNotFound, "user not found")
 			return
 		}
-		created, err := s.quiz.CreateCard(r.Context(), userInfo.ID, user.MemberLevel, input)
+		planCode := appEffectivePlanCode(user.MemberLevel, parseAppMembershipExpiry(user.MemberExpiresAt), time.Now())
+		created, err := s.quiz.CreateCardWithLimit(r.Context(), userInfo.ID, s.appPlan(r.Context(), planCode).CardLimit, input)
 		if err != nil {
 			if errors.Is(err, quiz.ErrCardLimit) {
 				httpx.Fail(w, http.StatusBadRequest, err.Error())

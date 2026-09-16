@@ -49,6 +49,12 @@ type Source struct {
 	Title   string `json:"title"`
 }
 
+type Citation struct {
+	DocumentID string         `json:"documentId"`
+	Source     string         `json:"source"`
+	Locator    map[string]any `json:"locator,omitempty"`
+}
+
 type UserProfile struct {
 	Nickname string   `json:"nickname"`
 	MainType int      `json:"mainType"`
@@ -82,14 +88,18 @@ type AskInput struct {
 }
 
 type Answer struct {
-	Answer      string   `json:"answer"`
-	Sources     []Source `json:"sources"`
-	Suggestions []string `json:"suggestions"`
+	Answer          string     `json:"answer"`
+	Sources         []Source   `json:"sources"`
+	Suggestions     []string   `json:"suggestions"`
+	Citations       []Citation `json:"citations,omitempty"`
+	TraceID         string     `json:"traceId,omitempty"`
+	RetrievalMethod string     `json:"retrievalMethod,omitempty"`
 }
 
 type Service struct {
-	docs      []Document
-	generator Generator
+	docs                  []Document
+	generator             Generator
+	strictGeneratorErrors bool
 }
 
 type Generator interface {
@@ -124,6 +134,12 @@ type Option func(*Service)
 func WithGenerator(generator Generator) Option {
 	return func(s *Service) {
 		s.generator = generator
+	}
+}
+
+func WithStrictGeneratorErrors() Option {
+	return func(s *Service) {
+		s.strictGeneratorErrors = true
 	}
 }
 
@@ -179,6 +195,9 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 				Tier:                input.Tier,
 				RuntimeInstructions: input.RuntimeInstructions,
 			})
+			if err != nil && s.strictGeneratorErrors {
+				return Answer{}, err
+			}
 			if err == nil && strings.TrimSpace(generated) != "" {
 				return Answer{
 					Answer:      strings.TrimSpace(generated),
@@ -233,6 +252,9 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 			Tier:                input.Tier,
 			RuntimeInstructions: input.RuntimeInstructions,
 		})
+		if err != nil && s.strictGeneratorErrors {
+			return Answer{}, err
+		}
 		if err == nil && strings.TrimSpace(generated) != "" {
 			return Answer{Answer: strings.TrimSpace(generated), Sources: sources, Suggestions: suggestions}, nil
 		}

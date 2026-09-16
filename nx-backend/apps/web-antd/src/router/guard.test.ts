@@ -104,7 +104,11 @@ describe('access guard backend failure fallback', () => {
       { query: {} },
     );
 
-    expect(result).toEqual({ path: '/offline', replace: true });
+    expect(result).toEqual({
+      path: '/offline',
+      query: { redirect: encodeURIComponent('/dashboard/app') },
+      replace: true,
+    });
     expect(mocks.accessStore.setIsAccessChecked).not.toHaveBeenCalledWith(true);
     expect(mocks.stopProgress).toHaveBeenCalled();
   });
@@ -119,7 +123,11 @@ describe('access guard backend failure fallback', () => {
       { query: {} },
     );
 
-    expect(result).toEqual({ path: '/offline', replace: true });
+    expect(result).toEqual({
+      path: '/offline',
+      query: { redirect: encodeURIComponent('/dashboard/app') },
+      replace: true,
+    });
     expect(mocks.accessStore.setAccessMenus).not.toHaveBeenCalled();
     expect(mocks.accessStore.setAccessRoutes).not.toHaveBeenCalled();
     expect(mocks.accessStore.setIsAccessChecked).not.toHaveBeenCalledWith(true);

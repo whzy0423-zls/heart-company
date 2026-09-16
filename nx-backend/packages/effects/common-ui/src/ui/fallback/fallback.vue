@@ -2,12 +2,14 @@
 import type { FallbackProps } from './fallback';
 
 import { computed, defineAsyncComponent } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 
 import { ArrowLeft, RotateCw } from '@vben/icons';
 import { $t } from '@vben/locales';
 
 import { VbenButton } from '@vben-core/shadcn-ui';
+
+import { resolveFallbackRetryPath } from './fallback';
 
 interface Props extends FallbackProps {}
 
@@ -115,6 +117,7 @@ const showRefresh = computed(() => {
   return props.status === '500' || props.status === 'offline';
 });
 
+const route = useRoute();
 const { push } = useRouter();
 
 // 返回首页
@@ -122,7 +125,11 @@ function back() {
   push(props.homePath);
 }
 
-function refresh() {
+async function refresh() {
+  if (props.status === 'offline') {
+    await push(resolveFallbackRetryPath(route.query.redirect, props.homePath));
+    return;
+  }
   location.reload();
 }
 </script>

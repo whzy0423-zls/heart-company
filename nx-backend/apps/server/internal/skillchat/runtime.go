@@ -2,6 +2,8 @@ package skillchat
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"nine-xing/nx-backend/apps/server/internal/answerhygiene"
+	"nine-xing/nx-backend/apps/server/internal/appknowledge"
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 )
@@ -42,22 +45,48 @@ type ReleaseSearcher interface {
 }
 
 type Runtime struct {
-	store     RuntimeStore
-	searcher  ReleaseSearcher
-	generator rag.Generator
+	store          RuntimeStore
+	searcher       ReleaseSearcher
+	generator      rag.Generator
+	remote         appknowledge.RemoteRetriever
+	remoteBackend  string
+	rolloutPercent int
 }
 
 type Result struct {
 	Answer             string          `json:"answer"`
 	Sources            []rag.Source    `json:"sources"`
 	Suggestions        []string        `json:"suggestions"`
+	Citations          []rag.Citation  `json:"citations,omitempty"`
+	TraceID            string          `json:"traceId,omitempty"`
+	RetrievalMethod    string          `json:"retrievalMethod,omitempty"`
 	MessageID          int64           `json:"messageId"`
 	GenerationRevision int64           `json:"-"`
 	Trace              GenerationTrace `json:"-"`
 }
 
-func NewRuntime(store RuntimeStore, searcher ReleaseSearcher, generator rag.Generator) *Runtime {
-	return &Runtime{store: store, searcher: searcher, generator: generator}
+type RuntimeOption func(*Runtime)
+
+func WithRemoteKnowledge(backend string, remote appknowledge.RemoteRetriever, rolloutPercent int) RuntimeOption {
+	return func(runtime *Runtime) {
+		runtime.remoteBackend = strings.ToLower(strings.TrimSpace(backend))
+		runtime.remote = remote
+		if rolloutPercent < 0 {
+			rolloutPercent = 0
+		}
+		if rolloutPercent > 100 {
+			rolloutPercent = 100
+		}
+		runtime.rolloutPercent = rolloutPercent
+	}
+}
+
+func NewRuntime(store RuntimeStore, searcher ReleaseSearcher, generator rag.Generator, options ...RuntimeOption) *Runtime {
+	runtime := &Runtime{store: store, searcher: searcher, generator: generator, remoteBackend: "local", rolloutPercent: 100}
+	for _, option := range options {
+		option(runtime)
+	}
+	return runtime
 }
 
 func (r *Runtime) Ask(ctx context.Context, appUserID, sessionID int64, question string) (Result, error) {
@@ -111,10 +140,11 @@ func (r *Runtime) Generate(ctx context.Context, appUserID, sessionID int64, ques
 	if err != nil {
 		return Result{}, err
 	}
-	documents, err := r.searcher.SearchReleaseChunks(ctx, session.TheoryReleaseID, question, skillSearchLimit, skillSearchMinScore)
+	retrieval, err := r.retrieveKnowledge(ctx, appUserID, session, question)
 	if err != nil {
 		return Result{}, fmt.Errorf("search skill knowledge: %w", err)
 	}
+	documents := retrieval.Documents
 	generationSources, publicSources := skillSources(documents)
 	input := rag.GenerateInput{
 		History:             history,
@@ -149,7 +179,56 @@ func (r *Runtime) Generate(ctx context.Context, appUserID, sessionID int64, ques
 		TheoryReleaseID:    session.TheoryReleaseID,
 		ChunkIDs:           skillChunkIDs(documents),
 	}
-	return Result{Answer: answer, Sources: publicSources, Suggestions: []string{}, GenerationRevision: session.GenerationRevision, Trace: trace}, nil
+	return Result{
+		Answer: answer, Sources: publicSources, Suggestions: []string{},
+		Citations: retrieval.Citations, TraceID: retrieval.TraceID, RetrievalMethod: retrieval.RetrievalMethod,
+		GenerationRevision: session.GenerationRevision, Trace: trace,
+	}, nil
+}
+
+func (r *Runtime) retrieveKnowledge(ctx context.Context, appUserID int64, session Session, question string) (appknowledge.RemoteResult, error) {
+	local := func() (appknowledge.RemoteResult, error) {
+		documents, err := r.searcher.SearchReleaseChunks(ctx, session.TheoryReleaseID, question, skillSearchLimit, skillSearchMinScore)
+		return appknowledge.RemoteResult{Documents: documents, RetrievalMethod: "local"}, err
+	}
+	request := appknowledge.RemoteRequest{
+		RequestID:        newSkillRequestID(session.ID),
+		Query:            question,
+		Scene:            "skill_chat",
+		Public:           false,
+		TheoryReleaseIDs: []int64{session.TheoryReleaseID},
+	}
+	selected := r.rolloutPercent >= 100 || (r.rolloutPercent > 0 && int(appUserID%100) < r.rolloutPercent)
+	switch r.remoteBackend {
+	case "langchain":
+		if selected && r.remote != nil {
+			result, err := r.remote.Retrieve(ctx, request)
+			return result, err
+		}
+	case "fallback":
+		if selected && r.remote != nil {
+			result, err := r.remote.Retrieve(ctx, request)
+			if err == nil {
+				return result, nil
+			}
+			if !appknowledge.RemoteErrorAllowsFallback(err) {
+				return appknowledge.RemoteResult{}, err
+			}
+		}
+	case "shadow":
+		if r.remote != nil {
+			go func() { _, _ = r.remote.Retrieve(context.WithoutCancel(ctx), request) }()
+		}
+	}
+	return local()
+}
+
+func newSkillRequestID(sessionID int64) string {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err == nil {
+		return hex.EncodeToString(value)
+	}
+	return fmt.Sprintf("skill-chat-%d-%d", sessionID, time.Now().UnixNano())
 }
 
 func skillChunkIDs(documents []rag.Document) []int64 {

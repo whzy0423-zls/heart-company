@@ -141,6 +141,45 @@ func (s *Service) List(ctx context.Context, initiatorID, conversationID int64) (
 	return items, nil
 }
 
+// ListByPeer returns all reports created by the current user for this friend,
+// regardless of which conversation incarnation produced them. Chat history
+// can be cleared (or a conversation can be recreated), but relationship
+// reports are durable user-owned records.
+func (s *Service) ListByPeer(ctx context.Context, initiatorID, peerID int64) ([]Report, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,conversation_id,peer_id,from_sequence,to_sequence,message_count,status,observation_level,personality_type_snapshot,metrics,summary,personality_reference,suggestions,created_at FROM relationship_insights WHERE initiator_id=$1 AND peer_id=$2 ORDER BY created_at DESC,id DESC`, initiatorID, peerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Report{}
+	for rows.Next() {
+		item, err := scanReport(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return items, nil
+	}
+	visible, _, err := s.visiblePersonality(ctx, initiatorID, peerID)
+	if err != nil {
+		return nil, err
+	}
+	if visible == nil {
+		for index := range items {
+			redactPersonality(&items[index])
+		}
+	}
+	return items, nil
+}
+
 func (s *Service) Get(ctx context.Context, initiatorID, id int64) (Report, error) {
 	item, err := scanReport(s.db.QueryRowContext(ctx, `SELECT id,conversation_id,peer_id,from_sequence,to_sequence,message_count,status,observation_level,personality_type_snapshot,metrics,summary,personality_reference,suggestions,created_at FROM relationship_insights WHERE id=$1 AND initiator_id=$2`, id, initiatorID))
 	if errors.Is(err, sql.ErrNoRows) {

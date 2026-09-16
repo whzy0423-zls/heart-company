@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
 var ErrNotFound = errors.New("chat: not found")
@@ -50,10 +52,13 @@ type ConversationState struct {
 }
 
 type KnowledgeTrace struct {
-	CardID        int64
-	EnneagramType *int
-	CardRevision  int64
-	LayerHits     json.RawMessage
+	CardID          int64
+	EnneagramType   *int
+	CardRevision    int64
+	LayerHits       json.RawMessage
+	Citations       []rag.Citation
+	TraceID         string
+	RetrievalMethod string
 }
 
 type Store struct{ db *sql.DB }
@@ -403,84 +408,71 @@ func (s *Store) ListRecentMessages(ctx context.Context, sessionID int64, limit i
 	if limit > 50 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, session_id, role, content, sources, favorite, feedback,
-		        message_type, audio_asset_id, audio_duration_ms, transcript, create_time
-		 FROM app_chat_messages
-		 WHERE session_id = $1
-		   AND role IN ('user', 'assistant')
-		   AND ((message_type = 'voice' AND btrim(transcript) <> '')
-		        OR (message_type <> 'voice' AND btrim(content) <> ''))
-		 ORDER BY create_time DESC, id DESC
-		 LIMIT $2`,
-		sessionID, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, session_id, role,
+ CASE WHEN role='assistant' AND delivered_text IS NOT NULL THEN delivered_text ELSE content END AS content,
+ sources, favorite, feedback, message_type, audio_asset_id, audio_duration_ms, transcript, create_time
+ FROM app_chat_messages WHERE session_id = $1 AND role IN ('user', 'assistant')
+ AND ((message_type='voice' AND btrim(transcript) <> '') OR (message_type<>'voice' AND (role='user' OR btrim(COALESCE(delivered_text,content)) <> '')))
+ ORDER BY create_time DESC, id DESC LIMIT $2`, sessionID, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
 	out := make([]Message, 0, limit)
 	for rows.Next() {
-		m, err := scanMessage(rows)
-		if err != nil {
-			return nil, err
+		m, e := scanMessage(rows)
+		if e != nil {
+			return nil, e
 		}
 		out = append(out, m)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	if e := rows.Err(); e != nil {
+		return nil, e
 	}
-	for left, right := 0, len(out)-1; left < right; left, right = left+1, right-1 {
-		out[left], out[right] = out[right], out[left]
+	for l, r := 0, len(out)-1; l < r; l, r = l+1, r-1 {
+		out[l], out[r] = out[r], out[l]
 	}
 	return out, nil
 }
 
 func (s *Store) GetConversationState(ctx context.Context, sessionID int64) (ConversationState, error) {
 	var state ConversationState
-	err := s.db.QueryRowContext(ctx,
-		`SELECT context_summary, context_summary_through_message_id
-		 FROM app_chat_sessions WHERE id = $1`,
-		sessionID,
-	).Scan(&state.Summary, &state.SummaryThroughMessageID)
+	err := s.db.QueryRowContext(ctx, `SELECT context_summary, context_summary_through_message_id FROM app_chat_sessions WHERE id = $1`, sessionID).Scan(&state.Summary, &state.SummaryThroughMessageID)
 	return state, err
 }
 
 func (s *Store) ListMessagesAfter(ctx context.Context, sessionID, afterMessageID int64) ([]Message, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, session_id, role, content, sources, favorite, feedback,
-		        message_type, audio_asset_id, audio_duration_ms, transcript, create_time
-		 FROM app_chat_messages
-		 WHERE session_id = $1 AND id > $2
-		 ORDER BY id`,
-		sessionID, afterMessageID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, session_id, role,
+ CASE WHEN role='assistant' AND delivered_text IS NOT NULL THEN delivered_text ELSE content END AS content,
+ sources, favorite, feedback, message_type, audio_asset_id, audio_duration_ms, transcript, create_time
+ FROM app_chat_messages WHERE session_id = $1 AND id > $2 ORDER BY id`, sessionID, afterMessageID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
-	var out []Message
+	out := []Message{}
 	for rows.Next() {
-		message, err := scanMessage(rows)
-		if err != nil {
-			return nil, err
+		m, e := scanMessage(rows)
+		if e != nil {
+			return nil, e
 		}
-		out = append(out, message)
+		out = append(out, m)
 	}
 	return out, rows.Err()
 }
 
 func (s *Store) UpdateConversationSummary(ctx context.Context, sessionID, expectedThroughMessageID int64, summary string, throughMessageID int64) (bool, error) {
-	result, err := s.db.ExecContext(ctx,
-		`UPDATE app_chat_sessions
-		 SET context_summary = $2, context_summary_through_message_id = $3
-		 WHERE id = $1 AND context_summary_through_message_id = $4`,
-		sessionID, summary, throughMessageID, expectedThroughMessageID)
+	result, err := s.db.ExecContext(ctx, `UPDATE app_chat_sessions
+ SET context_summary = $2, context_summary_through_message_id = $3
+ WHERE id = $1 AND context_summary_through_message_id = $4 AND $3 >= $4
+ AND NOT EXISTS (SELECT 1 FROM app_chat_messages m JOIN app_chat_sessions s ON s.id=m.session_id
+  WHERE m.session_id=$1 AND m.id>$4 AND m.id<=$3 AND s.scene='xinzhili_voice' AND m.role='assistant'
+   AND (COALESCE(m.delivery_status,'')<>'played' OR btrim(COALESCE(m.delivered_text,''))<>btrim(m.content)))`, sessionID, summary, throughMessageID, expectedThroughMessageID)
 	if err != nil {
 		return false, err
 	}
-	rows, err := result.RowsAffected()
-	return rows > 0, err
+	n, e := result.RowsAffected()
+	return n > 0, e
 }
 
 // SavePair 在事务中保存用户消息 + AI回答，并刷新 session.updated_at。

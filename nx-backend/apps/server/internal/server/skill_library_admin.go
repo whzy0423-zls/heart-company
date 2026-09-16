@@ -57,6 +57,8 @@ type skillLibraryAdminSkill struct {
 	Status              string     `json:"status"`
 	SortOrder           int        `json:"sortOrder"`
 	HasPublishedVersion bool       `json:"hasPublishedVersion"`
+	HasPublishedHistory bool       `json:"hasPublishedHistory"`
+	HasDraft            bool       `json:"hasDraft"`
 	PublishedVersion    string     `json:"publishedVersion,omitempty"`
 	UpdatedAt           *time.Time `json:"updatedAt,omitempty"`
 }
@@ -84,16 +86,31 @@ type skillLibraryMetadataUpdate struct {
 func registerSkillLibraryAdminRoutes(mux *http.ServeMux, requirePermission func(string, http.HandlerFunc) http.HandlerFunc, s *Server) {
 	mux.HandleFunc("/api/skill-library-management", requirePermission("App:SkillLibrary:View", s.skillLibraryAdminRouter))
 	mux.HandleFunc("/api/skill-library-management/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPatch {
+		if r.Method != http.MethodPatch && r.Method != http.MethodPost {
 			httpx.Fail(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
 		if _, _, ok := parseSkillLibraryAdminPath(r.URL.Path); !ok {
-			httpx.Fail(w, http.StatusNotFound, "管理对象不存在")
-			return
+			if _, _, ok := parseSkillLibraryAdminActionPath(r.URL.Path); !ok {
+				httpx.Fail(w, http.StatusNotFound, "管理对象不存在")
+				return
+			}
 		}
 		requirePermission("App:SkillLibrary:Edit", s.skillLibraryAdminRouter)(w, r)
 	})
+}
+
+func parseSkillLibraryAdminActionPath(path string) (int64, string, bool) {
+	rest := strings.Trim(strings.TrimPrefix(path, "/api/skill-library-management/skills/"), "/")
+	parts := strings.Split(rest, "/")
+	if len(parts) != 2 || (parts[1] != "publish" && parts[1] != "unpublish" && parts[1] != "enable" && parts[1] != "disable") {
+		return 0, "", false
+	}
+	id, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || id <= 0 {
+		return 0, "", false
+	}
+	return id, parts[1], true
 }
 
 func parseSkillLibraryAdminPath(path string) (string, int64, bool) {
@@ -119,6 +136,14 @@ func (s *Server) skillLibraryAdminRouter(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	resource, id, ok := parseSkillLibraryAdminPath(r.URL.Path)
+	if r.Method == http.MethodPost {
+		var action string
+		if actionID, parsedAction, actionOK := parseSkillLibraryAdminActionPath(r.URL.Path); actionOK {
+			id, action, ok = actionID, parsedAction, true
+			s.updateManagedSkillLifecycle(w, r, id, action)
+			return
+		}
+	}
 	if !ok || r.Method != http.MethodPatch {
 		httpx.Fail(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -190,9 +215,12 @@ func (s *Server) listSkillLibraryAdminCatalog(w http.ResponseWriter, r *http.Req
 	}
 
 	rows, err = s.db.QueryContext(r.Context(), `
-		SELECT skill.id,category.id,category.key,category.name,skill.key,skill.name,skill.summary,skill.description,
-		       skill.icon_key,skill.color_token,skill.status,skill.sort_order,
-		       skill.latest_published_version_id IS NOT NULL,COALESCE(version.version,''),skill.update_time
+			SELECT skill.id,category.id,category.key,category.name,skill.key,skill.name,skill.summary,skill.description,
+			       skill.icon_key,skill.color_token,skill.status,skill.sort_order,
+		       skill.latest_published_version_id IS NOT NULL,
+		       EXISTS (SELECT 1 FROM app_skill_versions published_skill WHERE published_skill.skill_id=skill.id AND published_skill.status='published'),
+			       EXISTS (SELECT 1 FROM app_skill_versions draft WHERE draft.skill_id=skill.id AND draft.status IN ('draft','ready')),
+			       COALESCE(version.version,''),skill.update_time
 		FROM app_skills skill
 		JOIN app_skill_categories category ON category.id=skill.category_id
 		JOIN app_skill_libraries library ON library.id=category.library_id AND library.key=$1
@@ -210,7 +238,7 @@ func (s *Server) listSkillLibraryAdminCatalog(w http.ResponseWriter, r *http.Req
 			&item.ID, &item.CategoryID, &item.CategoryKey, &item.CategoryName,
 			&item.Key, &item.Name, &item.Summary, &item.Description,
 			&item.IconKey, &item.ColorToken, &item.Status, &item.SortOrder,
-			&item.HasPublishedVersion, &item.PublishedVersion, &item.UpdatedAt,
+			&item.HasPublishedVersion, &item.HasPublishedHistory, &item.HasDraft, &item.PublishedVersion, &item.UpdatedAt,
 		); err != nil {
 			httpx.Fail(w, http.StatusInternalServerError, "技能数据读取失败")
 			return
@@ -300,6 +328,102 @@ func (s *Server) updateManagedSkill(w http.ResponseWriter, r *http.Request, id i
 		"AND ($9='disabled' OR latest_published_version_id IS NOT NULL)"
 	result, err := s.db.ExecContext(r.Context(), query, id, input.CategoryID, input.Name, input.Summary, input.Description, input.IconKey, input.ColorToken, input.SortOrder, input.Status, managedSkillLibraryKey)
 	respondSkillLibraryAdminUpdate(w, result, err, id, "技能")
+}
+
+func (s *Server) updateManagedSkillLifecycle(w http.ResponseWriter, r *http.Request, id int64, action string) {
+	if s == nil || s.db == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "成长技能库服务未配置")
+		return
+	}
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "技能状态保存失败")
+		return
+	}
+	defer tx.Rollback()
+
+	if action == "publish" {
+		var versionID, releaseID, theoryID int64
+		err = tx.QueryRowContext(r.Context(), `
+			SELECT version.id,version.theory_release_id,release.library_id
+			FROM app_skill_versions version
+			JOIN app_skills skill ON skill.id=version.skill_id AND skill.status<>'archived'
+			JOIN app_skill_categories category ON category.id=skill.category_id
+			JOIN app_skill_libraries library ON library.id=category.library_id AND library.key=$1
+			JOIN theory_library_releases release ON release.id=version.theory_release_id
+			WHERE skill.id=$2 AND version.status IN ('draft','ready')
+			ORDER BY version.id DESC LIMIT 1 FOR UPDATE OF version`, managedSkillLibraryKey, id).Scan(&versionID, &releaseID, &theoryID)
+		if errors.Is(err, sql.ErrNoRows) {
+			httpx.Fail(w, http.StatusConflict, "没有可发布的技能版本，请先准备草稿")
+			return
+		}
+		if err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "技能版本读取失败")
+			return
+		}
+		queries := []struct {
+			query string
+			args  []any
+		}{
+			{`UPDATE theory_library_releases SET status='retired',update_time=now() WHERE library_id=$1 AND status='active' AND id<>$2`, []any{theoryID, releaseID}},
+			{`UPDATE app_skill_versions SET status='retired',update_time=now() WHERE skill_id=$1 AND status='published' AND id<>$2`, []any{id, versionID}},
+			{`UPDATE theory_cards SET status='superseded',update_time=now() WHERE library_id=$1 AND status='published' AND id NOT IN (SELECT card_id FROM theory_release_cards WHERE release_id=$2)`, []any{theoryID, releaseID}},
+			{`UPDATE theory_cards SET status='published',published_at=COALESCE(published_at,now()),update_time=now() WHERE id IN (SELECT card_id FROM theory_release_cards WHERE release_id=$1)`, []any{releaseID}},
+			{`UPDATE theory_library_releases SET status='active',activated_at=COALESCE(activated_at,now()),update_time=now() WHERE id=$1`, []any{releaseID}},
+			{`UPDATE theory_libraries SET current_version=release.version,status='enabled',update_time=now() FROM theory_library_releases release WHERE release.id=$1 AND theory_libraries.id=release.library_id`, []any{releaseID}},
+			{`UPDATE app_skill_versions SET status='published',published_at=COALESCE(published_at,now()),update_time=now() WHERE id=$1`, []any{versionID}},
+			{`UPDATE app_skills SET status='enabled',latest_published_version_id=$2,update_time=now() WHERE id=$1 AND category_id IN (SELECT category.id FROM app_skill_categories category JOIN app_skill_libraries library ON library.id=category.library_id WHERE library.key=$3)`, []any{id, versionID, managedSkillLibraryKey}},
+		}
+		for _, item := range queries {
+			if _, err := tx.ExecContext(r.Context(), item.query, item.args...); err != nil {
+				httpx.Fail(w, http.StatusInternalServerError, "技能发布失败")
+				return
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "技能发布失败")
+			return
+		}
+		httpx.OK(w, map[string]any{"id": id, "status": "enabled", "published": true})
+		return
+	}
+	if action == "unpublish" || action == "disable" {
+		result, err := tx.ExecContext(r.Context(), `UPDATE app_skills SET status='disabled',latest_published_version_id=NULL,update_time=now() WHERE id=$1 AND category_id IN (SELECT category.id FROM app_skill_categories category JOIN app_skill_libraries library ON library.id=category.library_id WHERE library.key=$2)`, id, managedSkillLibraryKey)
+		if err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "技能下架失败")
+			return
+		}
+		rows, _ := result.RowsAffected()
+		if rows == 0 {
+			httpx.Fail(w, http.StatusNotFound, "技能不存在")
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "技能下架失败")
+			return
+		}
+		httpx.OK(w, map[string]any{"id": id, "status": "disabled", "published": false})
+		return
+	}
+	if action == "enable" {
+		result, err := tx.ExecContext(r.Context(), `UPDATE app_skills SET status='enabled',latest_published_version_id=(SELECT version.id FROM app_skill_versions version WHERE version.skill_id=app_skills.id AND version.status='published' ORDER BY version.published_at DESC NULLS LAST,version.id DESC LIMIT 1),update_time=now() WHERE id=$1 AND category_id IN (SELECT category.id FROM app_skill_categories category JOIN app_skill_libraries library ON library.id=category.library_id WHERE library.key=$2) AND EXISTS (SELECT 1 FROM app_skill_versions version WHERE version.skill_id=app_skills.id AND version.status='published')`, id, managedSkillLibraryKey)
+		if err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "技能启用失败")
+			return
+		}
+		rows, _ := result.RowsAffected()
+		if rows == 0 {
+			httpx.Fail(w, http.StatusConflict, "技能没有已发布版本，不能启用")
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "技能启用失败")
+			return
+		}
+		httpx.OK(w, map[string]any{"id": id, "status": "enabled", "published": true})
+		return
+	}
+	httpx.Fail(w, http.StatusBadRequest, "技能操作无效")
 }
 
 func respondSkillLibraryAdminUpdate(w http.ResponseWriter, result sql.Result, err error, id int64, label string) {

@@ -13,7 +13,14 @@
   <link rel="icon" href="/assets/logo.svg" />
 </head>
 <body>
-  <div id="root"></div>
+  <div id="root">
+    <!-- 静态备案兜底：供不执行 JavaScript 的审核爬虫查询，React 启动后会替换为完整页面。 -->
+    <footer style="padding:24px;text-align:center;color:#5f6570;font:14px/1.6 system-ui,sans-serif">
+      <a href="https://beian.miit.gov.cn/#/Integrated/recordQuery" target="_blank" rel="noopener noreferrer" style="color:inherit">
+        鲁ICP备2026051312号-1
+      </a>
+    </footer>
+  </div>
   <script type="module" src="/src/main.jsx"></script>
 </body>
 </html>

@@ -1365,7 +1365,7 @@ const companionReplyInstruction = "专业陪伴模式：先回应用户的情绪
 
 const allTypesReplyInstruction = "请完整回答当前问题，按1号到9号的顺序逐一回答，不能遗漏或只围绕用户自己的主型。每个型号都要紧扣用户当前主题给出特点和具体应用；如果问题涉及孩子，每个型号必须包含：孩子的典型特点、家长如何理解和沟通、一个具体应用方法。检索资料只作参考，不能因为检索资料不完整而遗漏任何型号；缺少的部分可基于稳妥的九型人格通用常识补充。使用清晰、适合手机阅读的编号列表，不使用“亲爱的”等亲昵称呼。"
 
-const enneagramOverviewReplyInstruction = "九型人格基础总览：这是知识型总览问题，即使处于基础问答模式，也不要压缩成 1～3 句话。请先建立整体框架，再用清晰分段完整讲解：一、定义与关注点；二、核心结构（三大智慧中心与九种类型）；三、动力机制（核心欲望、核心恐惧与防御模式）；四、动态变化（翼型、本能副型、健康层级及压力与成长方向）；五、识别误区；六、应用边界。不要只罗列九种性格形容词，也不要根据用户档案缩成某一个型号；说明它适合用于自我观察和沟通参考，不是临床诊断工具，并如实说明其科学证据边界。内容要有解释和简短例子，清晰、具体、适合手机阅读，不使用“亲爱的”等亲昵称呼。"
+const enneagramOverviewReplyInstruction = "九型人格基础总览：这是知识型总览问题，即使处于基础问答模式，也不要压缩成 1～3 句话。请先建立整体框架，再用清晰分段完整讲解：一、定义与关注点；二、核心结构（三大智慧中心与九种类型）；三、动力机制（核心欲望、核心恐惧与防御模式）；四、动态变化（翼型、本能副型、健康层级及压力与成长方向）；五、识别误区；六、应用边界。在核心结构部分必须按顺序逐项写出并各用一句话介绍：1号完美型、2号助人型、3号成就型、4号自我型、5号理智型、6号忠诚型、7号活跃型、8号领袖型、9号和平型，不能省略、合并或只介绍用户自己的主型。不要只罗列九种性格形容词，也不要根据用户档案缩成某一个型号；说明它适合用于自我观察和沟通参考，不是临床诊断工具，并如实说明其科学证据边界。内容要有解释和简短例子，清晰、具体、适合手机阅读，不使用“亲爱的”等亲昵称呼。"
 
 func chatTokenBudget(question string) int {
 	question = strings.TrimSpace(question)
@@ -1505,6 +1505,13 @@ func buildUserPrompt(input rag.GenerateInput) string {
 			b.WriteString("画像=" + trimRunes(profile, 800) + "；")
 		}
 		b.WriteString("\n")
+		if card.MainType > 0 {
+			b.WriteString(fmt.Sprintf("本轮回答主型=%d号；回答口吻、共情重点、建议切入角度都按本轮回答主型展开，优先于其他历史或档案主型；", card.MainType))
+			if input.UserProfile.MainType > 0 && input.UserProfile.MainType != card.MainType {
+				b.WriteString(fmt.Sprintf("不要沿用用户档案里的最近主型=%d号作为本轮口吻；", input.UserProfile.MainType))
+			}
+			b.WriteString("\n")
+		}
 		if strings.EqualFold(strings.TrimSpace(card.CardType), "secondary") {
 			b.WriteString("当前关注对象是用户正在咨询的 TA，不要把当前关注对象当成正在输入的用户本人，也不要冒充当前关注对象；请围绕用户与 TA 的关系提供分析和建议。\n")
 		}

@@ -142,6 +142,46 @@ func (s *Store) Apply(ctx context.Context, userID int64, mutations []Mutation) e
 		return fmt.Errorf("userpreference: lock user: %w", err)
 	}
 
+	// Check the final batch shape before writing any row. This keeps the
+	// domain error stable even when a database constraint is stricter on an
+	// older installation during an online migration.
+	rows, err := tx.QueryContext(ctx, `SELECT slot, char_length(instruction) FROM app_user_preferences WHERE app_user_id=$1`, userID)
+	if err != nil {
+		return fmt.Errorf("userpreference: read limits: %w", err)
+	}
+	slotLengths := map[string]int{}
+	for rows.Next() {
+		var slot string
+		var length int
+		if err := rows.Scan(&slot, &length); err != nil {
+			rows.Close()
+			return fmt.Errorf("userpreference: read limits: %w", err)
+		}
+		slotLengths[slot] = length
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("userpreference: read limits: %w", err)
+	}
+	rows.Close()
+	for _, mutation := range normalized {
+		if mutation.Upsert != nil {
+			slotLengths[mutation.Upsert.Slot] = utf8.RuneCountInString(mutation.Upsert.Instruction)
+			continue
+		}
+		delete(slotLengths, mutation.DeleteSlot)
+	}
+	if len(slotLengths) > MaxPreferencesPerUser {
+		return ErrPreferenceLimit
+	}
+	batchTotalRunes := 0
+	for _, length := range slotLengths {
+		batchTotalRunes += length
+	}
+	if batchTotalRunes > MaxTotalInstructionRunes {
+		return ErrPreferenceLimit
+	}
+
 	for _, mutation := range normalized {
 		if mutation.Upsert != nil {
 			preference := *mutation.Upsert
