@@ -2,7 +2,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { MAIN_LINKS, isActive } from './navData'
 import siteConfig from '../data/siteConfig'
 
-export default function Nav({ onOpenDrawer }) {
+export default function Nav({ drawerOpen, onOpenDrawer }) {
   const { pathname, hash } = useLocation()
   return (
     <header className="nav">
@@ -18,7 +18,14 @@ export default function Nav({ onOpenDrawer }) {
             </Link>
           ))}
         </nav>
-        <button className="nav__toggle" onClick={onOpenDrawer} aria-label="打开栏目菜单">
+        <button
+          className="nav__toggle"
+          type="button"
+          onClick={onOpenDrawer}
+          aria-label="打开栏目菜单"
+          aria-expanded={drawerOpen}
+          aria-controls="site-drawer"
+        >
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
                strokeWidth="2" strokeLinecap="round">
             <path d="M4 7h16M4 12h16M4 17h16" />

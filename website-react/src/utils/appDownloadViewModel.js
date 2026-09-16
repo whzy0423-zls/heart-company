@@ -21,10 +21,17 @@ function getStatusMessage(state, config) {
 function buildQRPayload(pageURL) {
   try {
     const { origin } = new URL(pageURL)
-    return origin === 'null' ? '/#download-app' : `${origin}/#download-app`
+    return origin === 'null' ? '/app' : `${origin}/app`
   } catch {
-    return '/#download-app'
+    return '/app'
   }
+}
+
+function getReleaseDownloadURL(release, fallback) {
+  const candidate = release?.downloadUrl
+  return typeof candidate === 'string' && /^\/api\/public\/app-releases\/\d+\/download$/.test(candidate)
+    ? candidate
+    : fallback
 }
 
 export function createAppDownloadViewModel({
@@ -41,6 +48,7 @@ export function createAppDownloadViewModel({
   const published = state === 'published'
   const isIOS = normalizedDevice === 'ios'
   const showQRCode = published && normalizedDevice === 'desktop'
+  const resolvedDownloadURL = published ? getReleaseDownloadURL(release, downloadURL) : ''
 
   return {
     device: normalizedDevice,
@@ -66,8 +74,8 @@ export function createAppDownloadViewModel({
     actionLabel: isIOS
       ? (config.iosComingSoonText || 'iOS 敬请期待')
       : (config.androidButtonText || '下载 Android 版'),
-    actionHref: published && !isIOS ? downloadURL : '',
-    actionDisabled: !published || isIOS || !downloadURL,
+    actionHref: published && !isIOS ? resolvedDownloadURL : '',
+    actionDisabled: !published || isIOS || !resolvedDownloadURL,
     showQRCode,
     qrPayload: showQRCode ? buildQRPayload(pageURL) : '',
   }

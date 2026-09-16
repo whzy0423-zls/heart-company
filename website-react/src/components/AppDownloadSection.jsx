@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import QRCode from 'qrcode'
+import { Link } from 'react-router-dom'
 import {
   buildLatestAppReleaseDownloadURL,
   getLatestAppRelease,
@@ -8,7 +9,10 @@ import siteConfig from '../data/siteConfig'
 import { detectAppDownloadDevice } from '../utils/appDownloadDevice'
 import { createAppDownloadViewModel } from '../utils/appDownloadViewModel'
 
-export default function AppDownloadSection() {
+export default function AppDownloadSection({
+  showDetailsLink = false,
+  showInstallSummary = true,
+}) {
   const [device] = useState(() => detectAppDownloadDevice())
   const [release, setRelease] = useState(null)
   const [requestError, setRequestError] = useState(null)
@@ -82,12 +86,16 @@ export default function AppDownloadSection() {
   }, [viewModel.qrPayload, viewModel.showQRCode])
 
   const retry = () => setRequestRevision((revision) => revision + 1)
+  const qrSpaceClassName = viewModel.showQRCode
+    ? 'app-download__qr-space app-download__qr-space--reserved'
+    : 'app-download__qr-space'
 
   return (
     <section
       className={`app-download app-download--${viewModel.state}`}
       id="download-app"
       aria-labelledby="app-download-title"
+      tabIndex="-1"
     >
       <div className="wrap app-download__inner">
         <header className="app-download__heading">
@@ -116,6 +124,13 @@ export default function AppDownloadSection() {
             <ul className="app-download__features">
               {viewModel.features.map((feature) => <li key={feature}>{feature}</li>)}
             </ul>
+
+            {showDetailsLink && (
+              <Link className="app-download__details-link" to="/app">
+                查看功能、安装视频与更新记录
+                <span aria-hidden="true">→</span>
+              </Link>
+            )}
 
             <div
               className={`app-download__status app-download__status--${viewModel.state}`}
@@ -183,9 +198,19 @@ export default function AppDownloadSection() {
                   {viewModel.retryText}
                 </button>
               )}
+
+              <p className="app-download__ios-status">
+                <strong>iOS</strong>
+                <span>当前 iOS 版本暂不支持，敬请期待</span>
+              </p>
             </div>
 
-            <div className="app-download__qr-space">
+            <div
+              className={qrSpaceClassName}
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
               {viewModel.showQRCode ? (
                 <>
                   <div className="app-download__qr-frame">
@@ -217,12 +242,43 @@ export default function AppDownloadSection() {
               )}
             </div>
 
-            <div className="app-download__install">
-              <h3>安装步骤</h3>
-              <ol>
-                {viewModel.installSteps.map((step) => <li key={step}>{step}</li>)}
+            <div className="app-download__journey" aria-label="Android 安装流程">
+              <div className="app-download__journey-heading">
+                <h3>3 步开始体验</h3>
+                <span>约 1 分钟</span>
+              </div>
+              <ol className="app-download__journey-track">
+                {[
+                  ['01', '扫码或点击'],
+                  ['02', '下载安装包'],
+                  ['03', '完成安装'],
+                ].map(([number, label], index) => (
+                  <li key={number} style={{ '--step-index': index }}>
+                    <span className="app-download__journey-step-marker" aria-hidden="true">
+                      {number}
+                    </span>
+                    <strong>{label}</strong>
+                  </li>
+                ))}
               </ol>
             </div>
+
+            <div className="app-download__verification" aria-label="安装包安全信息">
+              <p><span aria-hidden="true" />官方安装包</p>
+              <ul>
+                <li>HTTPS 安全下载</li>
+                <li>SHA-256 可校验</li>
+              </ul>
+            </div>
+
+            {showInstallSummary && (
+              <div className="app-download__install">
+                <h3>安装步骤</h3>
+                <ol>
+                  {viewModel.installSteps.map((step) => <li key={step}>{step}</li>)}
+                </ol>
+              </div>
+            )}
           </aside>
         </div>
       </div>

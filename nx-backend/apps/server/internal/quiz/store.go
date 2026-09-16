@@ -420,17 +420,30 @@ func (s *Store) PrimaryCard(ctx context.Context, appUserID int64) (Card, error) 
 	return c, err
 }
 
-// secondaryLimit 根据会员等级返回副卡上限：免费 1 张，会员 5 张。
-func secondaryLimit(memberLevel string) int {
-	if memberLevel == "free" || memberLevel == "" {
+// SecondaryLimit returns the secondary-card allowance for a commercial plan.
+func SecondaryLimit(memberLevel string) int {
+	switch strings.ToLower(strings.TrimSpace(memberLevel)) {
+	case "", "free":
 		return 1
+	case "vip_quarter":
+		return 8
+	case "svip", "vip_year":
+		return 20
+	default:
+		return 5
 	}
-	return 5
 }
 
 // CreateCard 创建副卡，超出会员配额返回 ErrCardLimit。
 func (s *Store) CreateCard(ctx context.Context, appUserID int64, memberLevel string, in CardInput) (Card, error) {
+	return s.CreateCardWithLimit(ctx, appUserID, SecondaryLimit(memberLevel), in)
+}
+
+func (s *Store) CreateCardWithLimit(ctx context.Context, appUserID int64, limit int, in CardInput) (Card, error) {
 	var c Card
+	if limit < 0 {
+		limit = 0
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return c, err
@@ -444,7 +457,7 @@ func (s *Store) CreateCard(ctx context.Context, appUserID int64, memberLevel str
 		appUserID).Scan(&count); err != nil {
 		return c, err
 	}
-	if count >= secondaryLimit(memberLevel) {
+	if count >= limit {
 		return c, ErrCardLimit
 	}
 

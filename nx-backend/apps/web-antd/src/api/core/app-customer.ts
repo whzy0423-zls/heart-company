@@ -55,6 +55,37 @@ export interface UpdateAppCustomerInput {
   status: string;
 }
 
+export interface AppTrialCreditGrant {
+  amount: number;
+  appUserId: number;
+  createTime: string;
+  expiresAt: string;
+  id: number;
+  operatorId?: number;
+  operatorName?: string;
+  reason: string;
+  remaining: number;
+  reserved: number;
+  revokedAt?: string;
+  revokedBy?: number;
+  revokedByName?: string;
+  status: 'active' | 'exhausted' | 'expired' | 'revoked';
+  updateTime: string;
+}
+
+export interface AppTrialCreditList {
+  items: AppTrialCreditGrant[];
+  trialChatNearestExpiresAt?: string;
+  trialChatRemaining: number;
+}
+
+export interface GrantAppTrialCreditsInput {
+  amount: number;
+  expiresAt?: string;
+  idempotencyKey: string;
+  reason: string;
+}
+
 export function getAppCustomerListApi(params?: Record<string, any>) {
   return requestClient.get<AppCustomerPageResult<AppCustomer>>(
     '/app-users/list',
@@ -78,4 +109,29 @@ export function updateAppCustomerApi(
   data: UpdateAppCustomerInput,
 ) {
   return requestClient.put<AppCustomer>(`/app-users/${id}`, data);
+}
+
+export function getAppTrialCreditsApi(id: number | string) {
+  return requestClient.get<AppTrialCreditList>(
+    `/app-users/${id}/trial-chat-credits`,
+  );
+}
+
+export function grantAppTrialCreditsApi(
+  id: number | string,
+  data: GrantAppTrialCreditsInput,
+) {
+  return requestClient.post<AppTrialCreditGrant>(
+    `/app-users/${id}/trial-chat-credits`,
+    data,
+  );
+}
+
+export function revokeAppTrialCreditsApi(
+  id: number | string,
+  grantId: number | string,
+) {
+  return requestClient.post<AppTrialCreditGrant>(
+    `/app-users/${id}/trial-chat-credits/${grantId}/revoke`,
+  );
 }

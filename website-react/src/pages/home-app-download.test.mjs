@@ -12,10 +12,10 @@ test('places the App download section immediately after Hero and before the teac
   assert.match(homeSource, /import AppDownloadSection from '\.\.\/components\/AppDownloadSection'/)
   assert.match(
     homeSource,
-    /<\/section>\s*<AppDownloadSection \/>\s*\{\/\* 老师简介 teaser \*\/}/,
+    /<\/section>\s*<AppDownloadSection\s+showDetailsLink\s*\/>\s*\{\/\* 老师简介 teaser \*\/}/,
   )
   assert.ok(
-    homeSource.indexOf('<AppDownloadSection />') < homeSource.indexOf('home.teacherTeaser'),
+    homeSource.indexOf('<AppDownloadSection showDetailsLink />') < homeSource.indexOf('home.teacherTeaser'),
     'App 下载区需要位于老师简介之前',
   )
 })
@@ -24,16 +24,18 @@ test('adds App download entry points to both navigation menus and Hero', () => {
   for (const collection of [siteConfig.navigation.main, siteConfig.navigation.drawer]) {
     assert.ok(collection.some((item) => (
       item.label === '下载 App'
-      && item.to === '/#download-app'
-      && item.type === 'hash'
+      && item.to === '/app'
+      && item.type === 'route'
     )))
   }
 
   assert.ok(siteConfig.home.hero.actions.some((action) => (
     action.label === '下载 App'
-    && action.to === '#download-app'
-    && action.type === 'anchor'
+    && action.to === '/app'
+    && action.type === 'route'
   )))
+
+  assert.match(homeSource, /<AppDownloadSection\s+showDetailsLink\s*\/>/)
 })
 
 test('defines complete editable App download copy without release metadata', () => {

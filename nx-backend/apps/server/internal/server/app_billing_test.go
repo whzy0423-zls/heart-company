@@ -50,9 +50,9 @@ func TestAppPlanNameUsesNormalizedPlanCodes(t *testing.T) {
 		want     string
 	}{
 		{planCode: "free", want: "免费版"},
-		{planCode: "vip_month", want: "VIP 会员"},
-		{planCode: "vip_quarter", want: "VIP 会员"},
-		{planCode: "vip_year", want: "VIP 会员"},
+		{planCode: "vip_month", want: "月卡会员"},
+		{planCode: "vip_quarter", want: "季卡会员"},
+		{planCode: "vip_year", want: "年卡会员"},
 		{planCode: "legacy_partner", want: "会员版"},
 	}
 
@@ -80,14 +80,14 @@ func TestAppBillingEntitlementsUsesNormalizedPlan(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Data.PlanCode != "vip_month" || body.Data.PlanName != "VIP 会员" {
+	if body.Data.PlanCode != "vip_month" || body.Data.PlanName != "月卡会员" {
 		t.Fatalf("expected normalized monthly plan, got %+v", body.Data)
 	}
 	if !body.Data.IsMember {
 		t.Fatalf("expected legacy vip to remain a member, got %+v", body.Data)
 	}
-	if body.Data.ChatRemaining != 0 || body.Data.DeepReportRemaining != 0 {
-		t.Fatalf("expected numeric quota placeholders to remain zero, got %+v", body.Data)
+	if body.Data.ChatLimit != -1 || body.Data.ChatRemaining != -1 || body.Data.DeepReportRemaining != 0 {
+		t.Fatalf("expected unlimited member chat quota, got %+v", body.Data)
 	}
 }
 
@@ -150,6 +150,27 @@ func TestAppBillingEntitlementsTreatsExpiredMembershipAsFree(t *testing.T) {
 	}
 	if body.Data.IsMember || body.Data.PlanCode != "free" || body.Data.ExpiresAt != "" {
 		t.Fatalf("expected expired membership to be free, got %+v", body.Data)
+	}
+}
+
+func TestAppBillingEntitlementsIncludesTrialChatBalance(t *testing.T) {
+	s := newAppBillingEntitlementTestServer(t, "free")
+	s.appChatQuota = &recordingAppChatQuotaManager{
+		trial:       12,
+		trialExpiry: "2026-09-17T10:00:00+08:00",
+	}
+	response := performAppBillingRequest(t, s.appBillingEntitlements, http.MethodGet, "/api/app/billing/entitlements", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Data appEntitlementResp `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Data.TrialChatRemaining != 12 || body.Data.TrialChatNearestExpiresAt != "2026-09-17T10:00:00+08:00" {
+		t.Fatalf("unexpected trial entitlement: %+v", body.Data)
 	}
 }
 
@@ -218,6 +239,12 @@ func TestAppBillingProductsExposeThreeCustomerServicePlans(t *testing.T) {
 		}
 		if product.DurationDays != map[string]int{"vip_month": 30, "vip_quarter": 90, "vip_year": 365}[product.ID] {
 			t.Fatalf("unexpected duration for product %+v", product)
+		}
+		storyBenefit := map[string]string{
+			"vip_month": "每月 3 篇人生故事", "vip_quarter": "每月 5 篇人生故事", "vip_year": "每月 12 篇人生故事",
+		}[product.ID]
+		if !strings.Contains(strings.Join(product.Features, "|"), storyBenefit) {
+			t.Fatalf("product %s is missing story benefit %q: %+v", product.ID, storyBenefit, product.Features)
 		}
 	}
 }

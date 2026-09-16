@@ -52,6 +52,16 @@ func TestBailianCredentialRouteEnforcesEitherPermissionWithRealMux(t *testing.T)
 	}
 }
 
+func TestTrialChatCreditRouteUsesCommercialHandler(t *testing.T) {
+	handler, _ := newTestServer(t)
+	adminToken := loginToken(t, handler)
+
+	response := perform(handler, http.MethodGet, "/api/app-users/999999999/trial-chat-credits", adminToken, nil)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("expected missing App user response, got status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func testVbenCompatibleAPI(t *testing.T) {
 	handler, configPath := newTestServer(t)
 	var adminToken string

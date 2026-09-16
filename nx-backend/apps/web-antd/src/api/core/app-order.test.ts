@@ -22,4 +22,14 @@ describe('app order api', () => {
 
     expect(mocks.post).toHaveBeenCalledWith('/app-orders/42/reconcile');
   });
+
+  it('refunds a manual order with an auditable reason', async () => {
+    const { refundAppOrderApi } = await import('./app-order');
+
+    await refundAppOrderApi(42, { reason: '用户取消续费' });
+
+    expect(mocks.post).toHaveBeenCalledWith('/app-orders/42/refund', {
+      reason: '用户取消续费',
+    });
+  });
 });

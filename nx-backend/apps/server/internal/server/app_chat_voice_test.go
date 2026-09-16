@@ -103,6 +103,117 @@ func TestVoiceChatPersistsAudioAndHidesTranscriptFromResponse(t *testing.T) {
 	}
 }
 
+func TestVoiceChatCommitsQuotaOnlyAfterGeneratedPairIsSaved(t *testing.T) {
+	store := &fakeVoiceChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	quota := &recordingAppChatQuotaManager{}
+	s, cleanup := newVoiceChatQuotaTestServer(t, store, &voiceChatGenerator{answer: "可以先从倾听开始"}, "孩子最近不愿意沟通")
+	defer cleanup()
+	s.appChatQuota = quota
+	s.appChatPlanLoader = func(context.Context, int64) (appPlanConfig, error) {
+		return defaultAppPlan("free"), nil
+	}
+
+	response := performVoiceChatTestRequest(t, s)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("voice chat failed: %d %s", response.Code, response.Body.String())
+	}
+	reserve, commit, _, consumed, released := quota.counts()
+	if reserve != 1 || commit != 1 || consumed != 1 || released != 0 {
+		t.Fatalf("quota counts = reserve:%d commit:%d consumed:%d released:%d", reserve, commit, consumed, released)
+	}
+}
+
+func TestVoiceChatCommitsQuotaWhenProviderFailureProducesFallback(t *testing.T) {
+	store := &fakeVoiceChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	quota := &recordingAppChatQuotaManager{}
+	s, cleanup := newVoiceChatQuotaTestServer(t, store, &voiceChatGenerator{err: errors.New("provider failed")}, "孩子最近不愿意沟通")
+	defer cleanup()
+	s.appChatQuota = quota
+	s.appChatPlanLoader = func(context.Context, int64) (appPlanConfig, error) {
+		return defaultAppPlan("free"), nil
+	}
+
+	response := performVoiceChatTestRequest(t, s)
+
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "暂时没有检索到特别匹配的资料") {
+		t.Fatalf("status = %d body=%s, want saved fallback answer", response.Code, response.Body.String())
+	}
+	reserve, commit, _, consumed, released := quota.counts()
+	if reserve != 1 || commit != 1 || consumed != 1 || released != 0 {
+		t.Fatalf("quota counts = reserve:%d commit:%d consumed:%d released:%d", reserve, commit, consumed, released)
+	}
+}
+
+func TestVoiceChatReleasesQuotaWhenPairSaveFails(t *testing.T) {
+	store := &fakeVoiceChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore(), voiceSaveErr: errors.New("save failed")}
+	quota := &recordingAppChatQuotaManager{}
+	s, cleanup := newVoiceChatQuotaTestServer(t, store, &voiceChatGenerator{answer: "可以先从倾听开始"}, "孩子最近不愿意沟通")
+	defer cleanup()
+	s.appChatQuota = quota
+	s.appChatPlanLoader = func(context.Context, int64) (appPlanConfig, error) {
+		return defaultAppPlan("free"), nil
+	}
+
+	response := performVoiceChatTestRequest(t, s)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d body=%s, want 500", response.Code, response.Body.String())
+	}
+	reserve, commit, _, consumed, released := quota.counts()
+	if reserve != 1 || commit != 0 || consumed != 0 || released != 1 {
+		t.Fatalf("quota counts = reserve:%d commit:%d consumed:%d released:%d", reserve, commit, consumed, released)
+	}
+}
+
+func TestVoiceChatQuotaExhaustionStopsBeforeGenerationAndAssetSave(t *testing.T) {
+	store := &fakeVoiceChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	generator := &voiceChatGenerator{answer: "不应生成"}
+	quota := &recordingAppChatQuotaManager{reserveErr: errAppChatQuotaExhausted}
+	s, cleanup := newVoiceChatQuotaTestServer(t, store, generator, "孩子最近不愿意沟通")
+	defer cleanup()
+	assetCalls := 0
+	s.voiceAssetCreate = func(context.Context, uploadasset.CreateInput) (uploadasset.Asset, error) {
+		assetCalls++
+		return uploadasset.Asset{ID: 88}, nil
+	}
+	s.appChatQuota = quota
+	s.appChatPlanLoader = func(context.Context, int64) (appPlanConfig, error) {
+		return defaultAppPlan("free"), nil
+	}
+
+	response := performVoiceChatTestRequest(t, s)
+
+	if response.Code != http.StatusTooManyRequests || !strings.Contains(response.Body.String(), "会员方案") {
+		t.Fatalf("status = %d body=%s, want quota error", response.Code, response.Body.String())
+	}
+	if generator.calls != 0 || assetCalls != 0 || store.saveCallCount() != 0 {
+		t.Fatalf("exhausted voice reached downstream: generator=%d assets=%d saves=%d", generator.calls, assetCalls, store.saveCallCount())
+	}
+}
+
+func TestVoiceChatRejectsLongTranscriptBeforeQuotaReservation(t *testing.T) {
+	store := &fakeVoiceChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	generator := &voiceChatGenerator{answer: "不应生成"}
+	quota := &recordingAppChatQuotaManager{}
+	s, cleanup := newVoiceChatQuotaTestServer(t, store, generator, strings.Repeat("问", 301))
+	defer cleanup()
+	s.appChatQuota = quota
+	s.appChatPlanLoader = func(context.Context, int64) (appPlanConfig, error) {
+		return defaultAppPlan("free"), nil
+	}
+
+	response := performVoiceChatTestRequest(t, s)
+
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "300") {
+		t.Fatalf("status = %d body=%s, want 400 length error", response.Code, response.Body.String())
+	}
+	reserve, _, _, _, _ := quota.counts()
+	if reserve != 0 || generator.calls != 0 {
+		t.Fatalf("long transcript reached downstream: reserve=%d generator=%d", reserve, generator.calls)
+	}
+}
+
 func TestVoiceChatCleansProductImplementationMetaBeforePersistingAndReturning(t *testing.T) {
 	const transcript = "推荐三道菜"
 	store, response := runVoiceChatAnswerTest(t, transcript, "针对当前 App 端，页面实现方案要先统一。推荐：番茄炒蛋、青椒肉丝、可乐鸡翅。")
@@ -513,6 +624,7 @@ type fakeVoiceChatStore struct {
 	assistantAnswer           string
 	assistantSources          json.RawMessage
 	knowledgeTrace            *chat.KnowledgeTrace
+	voiceSaveErr              error
 }
 
 func (s *fakeVoiceChatStore) SaveVoicePair(_ context.Context, _ int64, audioAssetID int64, _ int, transcript, answer string, sources json.RawMessage) (int64, int64, error) {
@@ -520,7 +632,7 @@ func (s *fakeVoiceChatStore) SaveVoicePair(_ context.Context, _ int64, audioAsse
 	s.transcript = transcript
 	s.assistantAnswer = answer
 	s.assistantSources = append(json.RawMessage(nil), sources...)
-	return 11, 12, nil
+	return 11, 12, s.voiceSaveErr
 }
 
 func (s *fakeVoiceChatStore) SaveVoicePairWithKnowledgeTrace(ctx context.Context, sessionID, audioAssetID int64, durationMs int, transcript, answer string, sources json.RawMessage, trace chat.KnowledgeTrace) (int64, int64, error) {
@@ -554,6 +666,7 @@ func (s *fakeVoiceChatStore) GetVoiceTranscript(_ context.Context, appUserID, me
 
 type voiceChatGenerator struct {
 	answer   string
+	err      error
 	question string
 	calls    int
 	input    rag.GenerateInput
@@ -563,7 +676,41 @@ func (g *voiceChatGenerator) Generate(_ context.Context, input rag.GenerateInput
 	g.calls++
 	g.question = input.Question
 	g.input = input
-	return g.answer, nil
+	return g.answer, g.err
+}
+
+func newVoiceChatQuotaTestServer(t *testing.T, store *fakeVoiceChatStore, generator *voiceChatGenerator, transcript string) (*Server, func()) {
+	t.Helper()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"text": transcript})
+	}))
+	previousClientFactory := newASRHTTPClient
+	newASRHTTPClient = func(timeout time.Duration) *http.Client {
+		client := upstream.Client()
+		client.Timeout = timeout
+		return client
+	}
+	s := newVoiceChatTestServer(store, generator)
+	s.env.ASR = config.ASRConfig{APIBase: upstream.URL, APIKey: "test-key", Model: "whisper-1", TimeoutSeconds: 3}
+	s.voiceAssetCreate = func(context.Context, uploadasset.CreateInput) (uploadasset.Asset, error) {
+		return uploadasset.Asset{ID: 88}, nil
+	}
+	cleanup := func() {
+		newASRHTTPClient = previousClientFactory
+		upstream.Close()
+	}
+	return s, cleanup
+}
+
+func performVoiceChatTestRequest(t *testing.T, s *Server) *httptest.ResponseRecorder {
+	t.Helper()
+	body, contentType := voiceChatMultipartBody(t, "voice.aac", "audio/aac", "audio", "2200")
+	req := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/voice", body)
+	req.Header.Set("Content-Type", contentType)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	response := httptest.NewRecorder()
+	s.appChatRouter(response, req)
+	return response
 }
 
 func newVoiceChatTestServer(store appChatStore, generator rag.Generator) *Server {

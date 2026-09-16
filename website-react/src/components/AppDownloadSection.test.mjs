@@ -20,6 +20,7 @@ test('loads metadata with abort-safe lifecycle handling and builder-only downloa
   assert.match(componentSource, /getLatestAppRelease/)
   assert.match(componentSource, /buildLatestAppReleaseDownloadURL/)
   assert.match(componentSource, /createAppDownloadViewModel/)
+  assert.match(viewModelSource, /release\?\.downloadUrl/)
   assert.match(componentSource, /new AbortController\(\)/)
   assert.match(componentSource, /signal:\s*controller\.signal/)
   assert.match(componentSource, /controller\.abort\(\)/)
@@ -66,9 +67,13 @@ test('renders accessible device actions, 503 feedback, and retry controls', () =
   assert.match(componentSource, /aria-live="polite"/)
   assert.match(componentSource, /viewModel\.actionDisabled[\s\S]*<button[\s\S]*disabled/)
   assert.match(componentSource, /viewModel\.showQRCode/)
+  assert.match(componentSource, /className=\{qrSpaceClassName\}[\s\S]*role="status"[\s\S]*aria-live="polite"/)
   assert.match(componentSource, /viewModel\.canRetry/)
   assert.match(componentSource, /viewModel\.retryText/)
   assert.match(viewModelSource, /安装包暂时不可用/)
+  assert.match(componentSource, /当前 iOS 版本暂不支持，敬请期待/)
+  assert.match(componentSource, /showInstallSummary = true/)
+  assert.match(componentSource, /showInstallSummary && \([\s\S]*className="app-download__install"/)
 })
 
 test('reserves a responsive no-overflow footprint with accessible interactions', () => {
@@ -107,15 +112,16 @@ test('disables native smooth scrolling for reduced-motion users', () => {
   )
 })
 
-test('reserves the published QR footprint across mobile loading and error states', () => {
+test('reserves QR space only when desktop QR content is present', () => {
   assert.match(
+    cssSource,
+    /\.app-download__qr-space--reserved\s*\{[^}]*min-height:\s*26\dpx;/s,
+  )
+  assert.doesNotMatch(
     cssSource,
     /\.app-download__qr-space\s*\{[^}]*min-height:\s*26\dpx;/s,
   )
-  assert.match(
-    cssSource,
-    /@media\s*\(max-width:\s*(?:760|768)px\)[\s\S]*\.app-download__qr-space\s*\{[^}]*min-height:\s*26\dpx;/s,
-  )
+  assert.match(componentSource, /viewModel\.showQRCode\s*\?\s*'app-download__qr-space app-download__qr-space--reserved'/)
 })
 
 test('keeps the QR image contained inside its frame', () => {
@@ -126,5 +132,35 @@ test('keeps the QR image contained inside its frame', () => {
   assert.match(
     cssSource,
     /\.app-download__qr-frame\s+img\s*\{[^}]*max-width:\s*100%[^}]*max-height:\s*100%[^}]*object-fit:\s*contain;/s,
+  )
+})
+
+test('fills the download aside with a clear Android installation journey and package trust details', () => {
+  assert.match(componentSource, /className="app-download__journey"/)
+  assert.match(componentSource, /扫码或点击/)
+  assert.match(componentSource, /下载安装包/)
+  assert.match(componentSource, /完成安装/)
+  assert.match(componentSource, /className="app-download__verification"/)
+  assert.match(componentSource, /官方安装包/)
+  assert.match(componentSource, /HTTPS 安全下载/)
+  assert.match(componentSource, /SHA-256 可校验/)
+})
+
+test('animates the download journey without compromising reduced-motion preferences', () => {
+  for (const keyframe of [
+    'app-download-sheen',
+    'app-download-status-pulse',
+    'app-download-step-progress',
+    'app-download-step-pulse',
+    'app-download-qr-breathe',
+  ]) {
+    assert.match(cssSource, new RegExp(`@keyframes\\s+${keyframe}`))
+  }
+
+  assert.match(cssSource, /\.app-download__action::after\s*\{[^}]*animation:\s*app-download-sheen/s)
+  assert.match(cssSource, /\.app-download__journey-track::after\s*\{[^}]*animation:\s*app-download-step-progress/s)
+  assert.match(
+    cssSource,
+    /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.app-download__qr-frame[\s\S]*\.app-download__journey-track::after[\s\S]*\{[^}]*animation:\s*none;/s,
   )
 })

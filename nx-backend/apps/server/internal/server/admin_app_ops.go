@@ -52,6 +52,8 @@ func (s *Server) adminAppOrderAction(w http.ResponseWriter, r *http.Request) {
 		s.adminAppOrderGrant(w, r)
 	case strings.HasSuffix(path, "/reconcile"):
 		s.adminAppOrderReconcile(w, r)
+	case strings.HasSuffix(path, "/refund"):
+		s.adminAppOrderRefund(w, r)
 	default:
 		httpx.Fail(w, http.StatusNotFound, "订单操作不存在")
 	}
@@ -83,11 +85,11 @@ func (s *Server) adminAppOrderGrant(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 	var before adminAppOrder
 	if err := tx.QueryRowContext(r.Context(), `
-		SELECT id, out_trade_no, app_user_id, product_id, title, amount, status, transaction_id,
+		SELECT id, out_trade_no, app_user_id, product_id, title, amount, duration_days, status, transaction_id,
 		       COALESCE(payment_provider,'manual')
 		FROM app_orders WHERE id=$1 FOR UPDATE`, id).Scan(
 		&before.ID, &before.OutTradeNo, &before.AppUserID, &before.ProductID,
-		&before.Title, &before.Amount, &before.Status, &before.TransactionID, &before.PaymentProvider,
+		&before.Title, &before.Amount, &before.DurationDays, &before.Status, &before.TransactionID, &before.PaymentProvider,
 	); err != nil {
 		httpx.Fail(w, http.StatusNotFound, "order not found")
 		return
@@ -112,12 +114,17 @@ func (s *Server) adminAppOrderGrant(w http.ResponseWriter, r *http.Request) {
 		httpx.OK(w, adminMembershipGrantResp{OrderID: id, PlanCode: level, StartedAt: formatNullableTime(startedAt), ExpiresAt: formatNullableTime(expiresAt), AlreadyGranted: true})
 		return
 	}
-	if _, err := membershipDurationDays(before.ProductID); err != nil {
-		httpx.Fail(w, http.StatusBadRequest, "订单商品不是可开通的会员套餐")
+	if before.Status != appOrderPendingConfirmation && before.Status != "pending" {
+		httpx.Fail(w, http.StatusConflict, "当前订单状态不能开通会员")
 		return
 	}
+	if before.DurationDays <= 0 || before.DurationDays > 3660 {
+		httpx.Fail(w, http.StatusBadRequest, "订单会员时长快照无效")
+		return
+	}
+	var currentLevel string
 	var currentStartedAt, currentExpiresAt sql.NullTime
-	if err := tx.QueryRowContext(r.Context(), `SELECT member_started_at, member_expires_at FROM app_users WHERE id=$1 FOR UPDATE`, before.AppUserID).Scan(&currentStartedAt, &currentExpiresAt); err != nil {
+	if err := tx.QueryRowContext(r.Context(), `SELECT member_level,member_started_at,member_expires_at FROM app_users WHERE id=$1 FOR UPDATE`, before.AppUserID).Scan(&currentLevel, &currentStartedAt, &currentExpiresAt); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -125,7 +132,7 @@ func (s *Server) adminAppOrderGrant(w http.ResponseWriter, r *http.Request) {
 	if currentExpiresAt.Valid {
 		currentExpiry = &currentExpiresAt.Time
 	}
-	period, err := calculateMembershipPeriod(before.ProductID, activationAt, currentExpiry)
+	period, err := calculateMembershipPeriodDays(before.DurationDays, activationAt, currentExpiry)
 	if err != nil {
 		httpx.Fail(w, http.StatusBadRequest, err.Error())
 		return
@@ -144,8 +151,10 @@ func (s *Server) adminAppOrderGrant(w http.ResponseWriter, r *http.Request) {
 	if _, err := tx.ExecContext(r.Context(), `
 		UPDATE app_orders
 		SET status='paid', paid_at=COALESCE(paid_at, now()), activation_at=$2,
-		    membership_expires_at=$3, update_time=now()
-		WHERE id=$1`, id, activationAt, period.Expires); err != nil {
+		    membership_expires_at=$3,member_level_before=$4,
+		    member_started_at_before=$5,member_expires_at_before=$6,update_time=now()
+		WHERE id=$1`, id, activationAt, period.Expires, firstNonEmpty(currentLevel, "free"),
+		nullableTimeArgument(currentStartedAt), nullableTimeArgument(currentExpiresAt)); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -156,6 +165,63 @@ func (s *Server) adminAppOrderGrant(w http.ResponseWriter, r *http.Request) {
 	after := adminMembershipGrantResp{OrderID: id, PlanCode: before.ProductID, StartedAt: startedAt.Format(time.RFC3339), ExpiresAt: period.Expires.Format(time.RFC3339)}
 	s.recordAdminAudit(r, auditlog.Entry{Action: "app_order.grant", TargetType: "app_order", TargetID: strconv.FormatInt(id, 10), Before: before, After: after, Summary: "确认收款并开通 App 会员"})
 	httpx.OK(w, after)
+}
+
+func (s *Server) adminAppOrderRefund(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseTrailingIntID(w, r, "/api/app-orders/", "/refund")
+	if !ok {
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&body); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "请填写退款原因")
+		return
+	}
+	body.Reason = strings.TrimSpace(body.Reason)
+	if len([]rune(body.Reason)) < 2 || len([]rune(body.Reason)) > 200 {
+		httpx.Fail(w, http.StatusBadRequest, "退款原因长度应为 2 到 200 个字符")
+		return
+	}
+
+	tx, err := s.db.BeginTx(r.Context(), &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer tx.Rollback()
+	var before adminAppOrder
+	if err := tx.QueryRowContext(r.Context(), `SELECT id,out_trade_no,app_user_id,product_id,title,amount,duration_days,status,
+		COALESCE(payment_provider,'manual'),COALESCE(provider_status,'') FROM app_orders WHERE id=$1`, id).Scan(
+		&before.ID, &before.OutTradeNo, &before.AppUserID, &before.ProductID, &before.Title, &before.Amount,
+		&before.DurationDays, &before.Status, &before.PaymentProvider, &before.ProviderStatus,
+	); err != nil {
+		httpx.Fail(w, http.StatusNotFound, "订单不存在")
+		return
+	}
+	if before.PaymentProvider != "" && before.PaymentProvider != "manual" && before.PaymentProvider != "customer_service" {
+		httpx.Fail(w, http.StatusConflict, "在线支付订单请先在支付平台退款，再主动查单")
+		return
+	}
+	result, err := refundAppOrderTx(r.Context(), tx, appOrderRefundInput{OrderID: id, Reason: body.Reason})
+	if err != nil {
+		if errors.Is(err, errAppOrderNotRefundable) {
+			httpx.Fail(w, http.StatusConflict, "只有已支付订单可以退款")
+			return
+		}
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response := adminAppOrderRefundResp{OrderID: id, Status: "refunded", AlreadyRefunded: result.AlreadyRefunded, EntitlementReverted: result.EntitlementReverted}
+	if !result.AlreadyRefunded {
+		s.recordAdminAudit(r, auditlog.Entry{Action: "app_order.refund", TargetType: "app_order", TargetID: strconv.FormatInt(id, 10), Before: before, After: response, Summary: body.Reason})
+	}
+	httpx.OK(w, response)
 }
 
 // adminAppOrderReconcile refreshes an online order from XZN and uses the same
@@ -194,6 +260,13 @@ type adminMembershipGrantResp struct {
 	StartedAt      string `json:"startedAt"`
 	ExpiresAt      string `json:"expiresAt"`
 	AlreadyGranted bool   `json:"alreadyGranted"`
+}
+
+type adminAppOrderRefundResp struct {
+	OrderID             int64  `json:"orderId"`
+	Status              string `json:"status"`
+	AlreadyRefunded     bool   `json:"alreadyRefunded"`
+	EntitlementReverted bool   `json:"entitlementReverted"`
 }
 
 func formatNullableTime(value sql.NullTime) string {

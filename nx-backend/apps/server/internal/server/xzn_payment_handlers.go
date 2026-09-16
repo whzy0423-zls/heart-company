@@ -439,15 +439,54 @@ func (s *Server) applyXZNCallback(ctx context.Context, cfg xznPaymentConfig, cal
 		(strings.TrimSpace(title) != "" && title != callback.Subject) {
 		return errors.New("xzn callback order details do not match")
 	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE app_orders
-		SET provider_trade_no=$2, provider_status=$3, transaction_id=CASE WHEN $4<>'' THEN $4 ELSE transaction_id END,
-		    payment_error='', update_time=now()
-		WHERE id=$1`, orderID, callback.TradeNo, callback.TradeStatus, callback.TransactionID); err != nil {
-		return fmt.Errorf("%w: metadata: %v", errXZNCallbackDatabase, err)
+	// Refunded is terminal. A delayed or replayed provider observation must not
+	// re-grant entitlement or replace the accepted refund state.
+	if status == "refunded" {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("%w: commit: %v", errXZNCallbackDatabase, err)
+		}
+		return nil
+	}
+	if callback.TradeStatus == "TRADE_REFUND" {
+		if status == "paid" {
+			if _, err := refundAppOrderTx(ctx, tx, appOrderRefundInput{
+				OrderID: orderID, Reason: "支付平台退款通知", ProviderStatus: callback.TradeStatus,
+			}); err != nil {
+				return err
+			}
+		} else if _, err := tx.ExecContext(ctx, `UPDATE app_orders
+			SET status='refunded',provider_trade_no=$2,provider_status=$3,
+			    transaction_id=CASE WHEN $4<>'' THEN $4 ELSE transaction_id END,
+			    refunded_at=now(),refund_reason='支付平台退款通知',payment_error='',update_time=now()
+			WHERE id=$1`, orderID, callback.TradeNo, callback.TradeStatus, callback.TransactionID); err != nil {
+			return fmt.Errorf("%w: refund state: %v", errXZNCallbackDatabase, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("%w: commit: %v", errXZNCallbackDatabase, err)
+		}
+		return nil
 	}
 	if callback.TradeStatus != "TRADE_SUCCESS" {
-		if _, err := tx.ExecContext(ctx, `UPDATE app_orders SET status=$2, update_time=now() WHERE id=$1 AND status <> 'paid'`, orderID, xznLocalStatus(callback.TradeStatus)); err != nil {
+		if status != "paid" {
+			if _, err := tx.ExecContext(ctx, `UPDATE app_orders
+				SET status=$2,provider_trade_no=$3,provider_status=$4,
+				    transaction_id=CASE WHEN $5<>'' THEN $5 ELSE transaction_id END,
+				    payment_error='',update_time=now()
+				WHERE id=$1`, orderID, xznLocalStatus(callback.TradeStatus), callback.TradeNo, callback.TradeStatus, callback.TransactionID); err != nil {
+				return fmt.Errorf("%w: state: %v", errXZNCallbackDatabase, err)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("%w: commit: %v", errXZNCallbackDatabase, err)
+		}
+		return nil
+	}
+	if status == "paid" {
+		if _, err := tx.ExecContext(ctx, `UPDATE app_orders
+			SET provider_trade_no=$2,provider_status=$3,
+			    transaction_id=CASE WHEN $4<>'' THEN $4 ELSE transaction_id END,
+			    payment_error='',update_time=now()
+			WHERE id=$1`, orderID, callback.TradeNo, callback.TradeStatus, callback.TransactionID); err != nil {
 			return fmt.Errorf("%w: state: %v", errXZNCallbackDatabase, err)
 		}
 		if err := tx.Commit(); err != nil {

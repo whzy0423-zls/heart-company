@@ -31,6 +31,21 @@ type appOrderSettlementResult struct {
 	AlreadyGranted bool
 }
 
+var errAppOrderNotRefundable = errors.New("app order is not refundable")
+
+type appOrderRefundInput struct {
+	OrderID        int64
+	Reason         string
+	RefundedAt     time.Time
+	ProviderStatus string
+}
+
+type appOrderRefundResult struct {
+	OrderID             int64
+	AlreadyRefunded     bool
+	EntitlementReverted bool
+}
+
 // settleAppOrderTx locks the order and user, then atomically grants the plan.
 // It is intentionally idempotent: a repeated callback returns the existing
 // membership without extending it a second time.
@@ -43,12 +58,13 @@ func settleAppOrderTx(ctx context.Context, tx *sql.Tx, input appOrderSettlementI
 		activationAt = time.Now()
 	}
 	var orderID, appUserID int64
+	var durationDays int
 	var productID, status string
 	var currentActivation, currentMembershipExpiry sql.NullTime
 	err := tx.QueryRowContext(ctx, `
-		SELECT id, app_user_id, product_id, status, activation_at, membership_expires_at
+		SELECT id, app_user_id, product_id, status, duration_days, activation_at, membership_expires_at
 		FROM app_orders WHERE id=$1 FOR UPDATE`, input.OrderID).Scan(
-		&orderID, &appUserID, &productID, &status, &currentActivation, &currentMembershipExpiry)
+		&orderID, &appUserID, &productID, &status, &durationDays, &currentActivation, &currentMembershipExpiry)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return appOrderSettlementResult{}, errXZNCallbackNotFound
@@ -68,14 +84,17 @@ func settleAppOrderTx(ctx context.Context, tx *sql.Tx, input appOrderSettlementI
 		expires := nullableTimeValue(currentExpiresAt, currentMembershipExpiry)
 		return appOrderSettlementResult{OrderID: orderID, PlanCode: firstNonEmpty(productID, memberLevel), StartedAt: started, ExpiresAt: expires, AlreadyGranted: true}, nil
 	}
-	if _, err := membershipDurationDays(productID); err != nil {
-		return appOrderSettlementResult{}, fmt.Errorf("settlement plan: %w", err)
+	if status == "refunded" {
+		return appOrderSettlementResult{}, fmt.Errorf("settlement order: refunded orders are terminal")
+	}
+	if durationDays <= 0 || durationDays > 3660 {
+		return appOrderSettlementResult{}, fmt.Errorf("settlement duration: invalid snapshot %d", durationDays)
 	}
 	var currentExpiry *time.Time
 	if currentExpiresAt.Valid {
 		currentExpiry = &currentExpiresAt.Time
 	}
-	period, err := calculateMembershipPeriod(productID, activationAt, currentExpiry)
+	period, err := calculateMembershipPeriodDays(durationDays, activationAt, currentExpiry)
 	if err != nil {
 		return appOrderSettlementResult{}, err
 	}
@@ -96,11 +115,111 @@ func settleAppOrderTx(ctx context.Context, tx *sql.Tx, input appOrderSettlementI
 		    provider_trade_no=CASE WHEN $4<>'' THEN $4 ELSE provider_trade_no END,
 		    provider_status=CASE WHEN $5<>'' THEN $5 ELSE provider_status END,
 		    transaction_id=CASE WHEN $6<>'' THEN $6 ELSE transaction_id END,
+		    member_level_before=$7, member_started_at_before=$8, member_expires_at_before=$9,
 		    payment_error='', update_time=now()
-		WHERE id=$1`, orderID, activationAt, period.Expires, input.ProviderTrade, input.ProviderStatus, input.TransactionID); err != nil {
+		WHERE id=$1`, orderID, activationAt, period.Expires, input.ProviderTrade, input.ProviderStatus, input.TransactionID,
+		memberLevel, nullableTimeArgument(currentStartedAt), nullableTimeArgument(currentExpiresAt)); err != nil {
 		return appOrderSettlementResult{}, fmt.Errorf("settlement order update: %w", err)
 	}
 	return appOrderSettlementResult{OrderID: orderID, PlanCode: productID, StartedAt: startedAt, ExpiresAt: period.Expires}, nil
+}
+
+func nullableTimeArgument(value sql.NullTime) any {
+	if value.Valid {
+		return value.Time
+	}
+	return nil
+}
+
+// refundAppOrderTx makes paid -> refunded a terminal, idempotent transition
+// and removes exactly this order's saved duration from the user's entitlement.
+func refundAppOrderTx(ctx context.Context, tx *sql.Tx, input appOrderRefundInput) (appOrderRefundResult, error) {
+	if input.OrderID <= 0 {
+		return appOrderRefundResult{}, errors.New("invalid app order id")
+	}
+	refundedAt := input.RefundedAt
+	if refundedAt.IsZero() {
+		refundedAt = time.Now()
+	}
+	reason := strings.TrimSpace(input.Reason)
+	if reason == "" {
+		return appOrderRefundResult{}, errors.New("refund reason required")
+	}
+
+	var orderID, appUserID int64
+	var durationDays int
+	var status string
+	var grantedExpiry, beforeStartedAt, beforeExpiresAt sql.NullTime
+	var beforeLevel sql.NullString
+	if err := tx.QueryRowContext(ctx, `
+		SELECT id,app_user_id,status,duration_days,membership_expires_at,
+		       member_level_before,member_started_at_before,member_expires_at_before
+		FROM app_orders WHERE id=$1 FOR UPDATE`, input.OrderID).Scan(
+		&orderID, &appUserID, &status, &durationDays, &grantedExpiry,
+		&beforeLevel, &beforeStartedAt, &beforeExpiresAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return appOrderRefundResult{}, errXZNCallbackNotFound
+		}
+		return appOrderRefundResult{}, fmt.Errorf("refund order: %w", err)
+	}
+	if status == "refunded" {
+		return appOrderRefundResult{OrderID: orderID, AlreadyRefunded: true}, nil
+	}
+	if status != "paid" {
+		return appOrderRefundResult{}, fmt.Errorf("%w: status=%s", errAppOrderNotRefundable, status)
+	}
+	if durationDays <= 0 || durationDays > 3660 {
+		return appOrderRefundResult{}, fmt.Errorf("refund duration: invalid snapshot %d", durationDays)
+	}
+
+	var currentLevel string
+	var currentStartedAt, currentExpiresAt sql.NullTime
+	if err := tx.QueryRowContext(ctx, `
+		SELECT member_level,member_started_at,member_expires_at
+		FROM app_users WHERE id=$1 FOR UPDATE`, appUserID).Scan(&currentLevel, &currentStartedAt, &currentExpiresAt); err != nil {
+		return appOrderRefundResult{}, fmt.Errorf("refund user: %w", err)
+	}
+
+	nextLevel := "free"
+	var nextStartedAt any
+	var nextExpiresAt any
+	if grantedExpiry.Valid && currentExpiresAt.Valid && currentExpiresAt.Time.Equal(grantedExpiry.Time) && beforeLevel.Valid {
+		nextLevel = firstNonEmpty(strings.TrimSpace(beforeLevel.String), "free")
+		nextStartedAt = nullableTimeArgument(beforeStartedAt)
+		nextExpiresAt = nullableTimeArgument(beforeExpiresAt)
+	} else if currentExpiresAt.Valid {
+		reducedExpiry := currentExpiresAt.Time.AddDate(0, 0, -durationDays)
+		if reducedExpiry.After(refundedAt) {
+			nextExpiresAt = reducedExpiry
+			nextStartedAt = nullableTimeArgument(currentStartedAt)
+			if err := tx.QueryRowContext(ctx, `
+				SELECT product_id FROM app_orders
+				WHERE app_user_id=$1 AND id<>$2 AND status='paid'
+				ORDER BY paid_at DESC NULLS LAST,id DESC LIMIT 1`, appUserID, orderID).Scan(&nextLevel); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return appOrderRefundResult{}, fmt.Errorf("refund remaining plan: %w", err)
+			}
+			if strings.TrimSpace(nextLevel) == "" {
+				nextLevel = firstNonEmpty(currentLevel, "free")
+			}
+		}
+	}
+	if nextLevel == "free" {
+		nextStartedAt, nextExpiresAt = nil, nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE app_users
+		SET member_level=$2,member_started_at=$3,member_expires_at=$4,update_time=now()
+		WHERE id=$1`, appUserID, nextLevel, nextStartedAt, nextExpiresAt); err != nil {
+		return appOrderRefundResult{}, fmt.Errorf("refund user update: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE app_orders
+		SET status='refunded',refunded_at=$2,refund_reason=$3,
+		    provider_status=CASE WHEN $4<>'' THEN $4 ELSE provider_status END,
+		    payment_error='',update_time=now()
+		WHERE id=$1`, orderID, refundedAt, reason, input.ProviderStatus); err != nil {
+		return appOrderRefundResult{}, fmt.Errorf("refund order update: %w", err)
+	}
+	return appOrderRefundResult{OrderID: orderID, EntitlementReverted: true}, nil
 }
 
 func nullableTimeValue(primary, fallback sql.NullTime) time.Time {
@@ -139,7 +258,7 @@ func (s *Server) reconcileXZNAppOrder(ctx context.Context, outTradeNo string) (a
 	if provider != appPaymentProviderXZN {
 		return appOrderResp{}, errors.New("订单不是在线支付订单")
 	}
-	client, cfg, err := s.newXZNClient(ctx)
+	client, _, err := s.newXZNClient(ctx)
 	if err != nil {
 		return appOrderResp{}, errors.New("在线支付尚未配置")
 	}
@@ -172,48 +291,54 @@ func (s *Server) reconcileXZNAppOrder(ctx context.Context, outTradeNo string) (a
 	if providerTradeNo != "" && query.TradeNo != providerTradeNo {
 		return appOrderResp{}, errors.New("平台交易号与本地订单不一致")
 	}
-	localStatus := xznLocalStatus(query.TradeStatus)
-	// Keep a successful provider result pending until settleAppOrderTx grants
-	// membership in the same transaction. Writing "paid" first would make the
-	// idempotency guard treat a newly paid provider order as already settled.
-	reconciledStatus := xznReconcileLocalStatus(status, query.TradeStatus)
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return appOrderResp{}, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE app_orders SET provider_trade_no=$2, provider_status=$3, last_query_at=now(),
-			status=CASE WHEN status='paid' THEN status ELSE $4 END,
-			payment_error='', update_time=now()
-		WHERE id=$1`, orderID, query.TradeNo, query.TradeStatus, reconciledStatus); err != nil {
-		return appOrderResp{}, err
-	}
-	if query.TradeStatus == "TRADE_SUCCESS" {
+	switch {
+	case status == "refunded":
+		// Refunded is terminal, including against delayed success observations.
+	case query.TradeStatus == "TRADE_REFUND" && status == "paid":
+		if _, err := refundAppOrderTx(ctx, tx, appOrderRefundInput{
+			OrderID: orderID, Reason: "支付平台查单确认退款", ProviderStatus: query.TradeStatus,
+		}); err != nil {
+			return appOrderResp{}, err
+		}
+	case query.TradeStatus == "TRADE_REFUND":
+		if _, err := tx.ExecContext(ctx, `UPDATE app_orders
+			SET status='refunded',provider_trade_no=$2,provider_status=$3,last_query_at=now(),
+			    refunded_at=now(),refund_reason='支付平台查单确认退款',payment_error='',update_time=now()
+			WHERE id=$1`, orderID, query.TradeNo, query.TradeStatus); err != nil {
+			return appOrderResp{}, err
+		}
+	case query.TradeStatus == "TRADE_SUCCESS":
 		if _, err := settleAppOrderTx(ctx, tx, appOrderSettlementInput{
 			OrderID: orderID, ActivationAt: time.Now(), ProviderTrade: query.TradeNo,
 			ProviderStatus: query.TradeStatus,
 		}); err != nil {
 			return appOrderResp{}, err
 		}
+	case status != "paid":
+		if _, err := tx.ExecContext(ctx, `UPDATE app_orders
+			SET provider_trade_no=$2,provider_status=$3,last_query_at=now(),status=$4,
+			    payment_error='',update_time=now()
+			WHERE id=$1`, orderID, query.TradeNo, query.TradeStatus, xznLocalStatus(query.TradeStatus)); err != nil {
+			return appOrderResp{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return appOrderResp{}, err
 	}
-	resp := appOrderResp{OutTradeNo: outTradeNo, ProductID: productID, Title: title, Amount: amount, Status: localStatus,
-		PaymentProvider: provider, PayChannel: displayAppPayChannel(payChannel), GatewayID: gatewayID,
-		ProviderTradeNo: query.TradeNo, ProviderStatus: query.TradeStatus, PayURL: payURL}
-	if query.TradeStatus == "TRADE_SUCCESS" {
-		resp.Status = "paid"
-	}
-	if cfg.ReturnURL != "" {
-		resp.Payment = map[string]any{"type": "web", "mode": "h5", "channel": resp.PayChannel, "url": payURL, "payUrl": payURL, "returnUrl": xznOrderReturnURL(cfg.ReturnURL, outTradeNo)}
+	resp, err := s.loadAppOrderByOutTradeNo(ctx, appUserID, outTradeNo)
+	if err != nil {
+		return appOrderResp{}, err
 	}
 	return s.enrichOnlineOrder(ctx, appUserID, resp)
 }
 
 func xznReconcileLocalStatus(currentStatus, providerStatus string) string {
-	if currentStatus == "paid" || strings.EqualFold(strings.TrimSpace(providerStatus), "TRADE_SUCCESS") {
+	if currentStatus == "refunded" || currentStatus == "paid" || strings.EqualFold(strings.TrimSpace(providerStatus), "TRADE_SUCCESS") {
 		return currentStatus
 	}
 	return xznLocalStatus(providerStatus)
