@@ -38,4 +38,3 @@ async def test_postgres_hybrid_retriever_runs_both_channels_and_rrf() -> None:
     result = await retriever(query)
 
     assert [item.id for item in result] == ["both", "lexical", "vector"]
-
