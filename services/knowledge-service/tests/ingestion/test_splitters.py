@@ -24,4 +24,3 @@ def test_semantic_splitter_has_bounded_size_overlap_and_stable_hash() -> None:
     assert first[0].text[-80:] in first[1].text
     assert [chunk.content_hash for chunk in first] == [chunk.content_hash for chunk in second]
     assert all(chunk.locator == {"chapter": 1} for chunk in first)
-

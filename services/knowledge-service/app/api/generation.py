@@ -81,4 +81,3 @@ async def answer_stream(
             yield _event("error", {"code": "generation_failed", "message": str(exc)})
 
     return StreamingResponse(stream(), media_type="text/event-stream")
-

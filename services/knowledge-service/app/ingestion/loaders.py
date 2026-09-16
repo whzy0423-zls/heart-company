@@ -49,4 +49,3 @@ def load_document(path: Path) -> ExtractedDocument:
     if suffix in {".mobi", ".azw3"}:
         return _load_ebook_via_calibre(path)
     raise UnsupportedDocumentError(f"unsupported document format: {suffix}")
-

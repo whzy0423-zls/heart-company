@@ -52,4 +52,3 @@ def test_reranker_takes_top_k_and_context_builder_enforces_rune_limit() -> None:
     context = build_context(ranked, max_runes=35)
     assert len(context) <= 35
     assert "[book.pdf]" in context
-

@@ -11,4 +11,3 @@ def normalized_title(path: Path) -> str:
     title = _COPY_MARKERS.sub("", title)
     title = _EDITION_MARKERS.sub("", title)
     return re.sub(r"[\s_\-—]+", "", title)
-

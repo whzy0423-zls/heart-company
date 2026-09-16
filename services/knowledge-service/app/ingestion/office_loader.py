@@ -36,4 +36,3 @@ def load_office(path: Path) -> ExtractedDocument:
         )
         converted = Path(directory) / (path.stem + ".docx")
         return _load_docx(converted)
-

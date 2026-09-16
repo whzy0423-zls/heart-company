@@ -63,4 +63,3 @@ def test_indexing_is_idempotent_and_checks_database_dimension() -> None:
             index=index,
             embed=lambda _values: [[0.1, 0.2, 0.3]],
         )
-

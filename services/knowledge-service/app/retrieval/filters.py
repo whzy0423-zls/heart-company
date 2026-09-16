@@ -35,4 +35,3 @@ def filter_documents(documents: list[RetrievedDocument], filters: RetrievalFilte
             continue
         result.append(document)
     return result
-

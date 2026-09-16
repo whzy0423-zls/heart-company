@@ -28,4 +28,3 @@ def load_pdf(
     ]
     extractor = "pdf+ocr-v1" if low_density else "pypdf-v1"
     return ExtractedDocument(source=str(path), extractor=extractor, sections=sections)
-

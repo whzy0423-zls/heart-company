@@ -15,4 +15,3 @@ LANGCHAIN_SERVICE_TOKEN=TOKEN .venv/bin/uvicorn app.main:app --port 8081
 
 The service is internal-only. Do not expose port 8081 publicly or pass App
 login tokens to it.
-

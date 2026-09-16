@@ -67,4 +67,3 @@ def test_retrieve_rejects_invalid_request_schema() -> None:
     response = client.post("/internal/v1/retrieve", json=body, headers=AUTH)
 
     assert response.status_code == 422
-

@@ -74,4 +74,3 @@ def test_document_outside_requested_release_is_rejected() -> None:
 
     assert response.status_code == 500
     assert response.json()["detail"] == "retriever returned document outside requested scope"
-

@@ -52,4 +52,3 @@ def load_epub(path: Path) -> ExtractedDocument:
             if text:
                 sections.append(ExtractedSection(text=text, locator={"chapter": chapter, "href": href}))
     return ExtractedDocument(source=str(path), extractor="epub-opf-v1", sections=sections)
-

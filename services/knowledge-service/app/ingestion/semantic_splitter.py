@@ -37,4 +37,3 @@ def split_sections(
                 break
             start = max(start + 1, end - overlap_chars)
     return chunks
-

@@ -49,4 +49,3 @@ def test_loader_rejects_unsupported_file_without_executing_it(tmp_path: Path) ->
         load_document(path)
 
     assert not (tmp_path / "SHOULD_NOT_EXIST").exists()
-

@@ -79,4 +79,3 @@ def write_prepared_chunks(chunks: list[PreparedChunk], destination: Path) -> Non
     with destination.open("w", encoding="utf-8", newline="\n") as output:
         for chunk in chunks:
             output.write(json.dumps(chunk.__dict__, ensure_ascii=False, sort_keys=True) + "\n")
-

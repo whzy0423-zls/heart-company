@@ -58,4 +58,3 @@ def test_stream_emits_protocol_events_in_order() -> None:
     assert response.headers["content-type"].startswith("text/event-stream")
     event_names = [line.removeprefix("event: ") for line in response.text.splitlines() if line.startswith("event: ")]
     assert event_names == ["retrieval_started", "retrieval_done", "token", "token", "citations", "done"]
-

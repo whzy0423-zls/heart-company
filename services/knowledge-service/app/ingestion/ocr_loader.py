@@ -28,4 +28,3 @@ def ocr_pdf_pages(path: Path, pages: list[int]) -> dict[int, str]:
             )
             output[page] = result.stdout.strip()
     return output
-

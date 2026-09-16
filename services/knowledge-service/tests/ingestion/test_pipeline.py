@@ -23,4 +23,3 @@ def test_pipeline_prepares_only_canonical_supported_documents_with_limit(tmp_pat
     assert {chunk.source for chunk in chunks} == {str(first)}
     assert reports[0].status == "prepared"
     assert len(reports) == 1
-

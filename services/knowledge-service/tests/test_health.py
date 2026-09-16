@@ -18,4 +18,3 @@ def test_readiness_reports_service_ready() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ready"}
-

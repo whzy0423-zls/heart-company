@@ -37,4 +37,3 @@ class OpenAICompatibleEmbeddingClient:
         if len(vectors) != len(texts):
             raise ValueError("embedding response count does not match input count")
         return vectors
-

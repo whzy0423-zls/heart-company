@@ -26,4 +26,3 @@ class DocumentChunk:
     locator: dict[str, Any]
     title: str | None = None
     kind: str = "body"
-

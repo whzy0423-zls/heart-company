@@ -20,4 +20,3 @@ def build_context(documents: list[RetrievedDocument], *, max_runes: int) -> str:
         if used >= max_runes:
             break
     return "\n\n".join(parts)
-

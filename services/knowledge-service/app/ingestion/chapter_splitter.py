@@ -33,4 +33,3 @@ def split_chapters(text: str) -> list[ExtractedSection]:
             body.append(line)
     flush_body()
     return result
-

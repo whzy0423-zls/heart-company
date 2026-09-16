@@ -15,4 +15,3 @@ def rerank(
     scored = [(scorer(query, document), index, document) for index, document in enumerate(documents)]
     scored.sort(key=lambda item: (-item[0], item[1]))
     return [document.model_copy(update={"score": score}) for score, _, document in scored[:top_k]]
-

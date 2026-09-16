@@ -83,4 +83,3 @@ def write_catalog(entries: list[CatalogEntry], destination: Path) -> None:
     with destination.open("w", encoding="utf-8", newline="\n") as output:
         for entry in entries:
             output.write(json.dumps(asdict(entry), ensure_ascii=False, sort_keys=True) + "\n")
-

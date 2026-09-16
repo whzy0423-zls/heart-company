@@ -24,4 +24,3 @@ def embed_in_batches(
                 if attempt == retries:
                     raise
     return result
-

@@ -62,4 +62,3 @@ def index_chunks(
             )
         index.add(EmbeddingRecord(chunk.content_hash, model, index_version, vector, chunk))
     return len(pending)
-
