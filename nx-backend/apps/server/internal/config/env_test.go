@@ -16,6 +16,7 @@ func TestLoadKnowledgeDefaults(t *testing.T) {
 		"KNOWLEDGE_BACKEND", "LANGCHAIN_SERVICE_URL", "LANGCHAIN_SERVICE_TOKEN",
 		"LANGCHAIN_CONNECT_TIMEOUT_MS", "LANGCHAIN_RETRIEVE_TIMEOUT_MS",
 		"LANGCHAIN_GENERATE_TIMEOUT_SECONDS", "LANGCHAIN_STREAM_IDLE_TIMEOUT_SECONDS",
+		"LANGCHAIN_ROLLOUT_PERCENT",
 	} {
 		t.Setenv(key, "")
 	}
@@ -28,6 +29,9 @@ func TestLoadKnowledgeDefaults(t *testing.T) {
 	if env.Knowledge.ConnectTimeoutMS != 500 || env.Knowledge.RetrieveTimeoutMS != 1200 ||
 		env.Knowledge.GenerateTimeoutSeconds != 90 || env.Knowledge.StreamIdleTimeoutSeconds != 30 {
 		t.Fatalf("unexpected knowledge timeout defaults: %+v", env.Knowledge)
+	}
+	if env.Knowledge.RolloutPercent != 100 {
+		t.Fatalf("unexpected rollout default: %+v", env.Knowledge)
 	}
 }
 
@@ -58,6 +62,31 @@ func TestKnowledgeConfigRequiresTokenForRemoteModes(t *testing.T) {
 	config.Backend = "local"
 	if err := config.Validate(); err != nil {
 		t.Fatalf("local backend does not require a service token: %v", err)
+	}
+}
+
+func TestKnowledgeConfigValidatesRolloutPercent(t *testing.T) {
+	valid := KnowledgeConfig{Backend: "fallback", ServiceURL: "http://knowledge-service:8081", ServiceToken: "TOKEN", RolloutPercent: 5}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid rollout rejected: %v", err)
+	}
+	for _, percent := range []int{-1, 101} {
+		invalid := valid
+		invalid.RolloutPercent = percent
+		if err := invalid.Validate(); err == nil || !strings.Contains(err.Error(), "LANGCHAIN_ROLLOUT_PERCENT") {
+			t.Fatalf("expected rollout validation error for %d, got %v", percent, err)
+		}
+	}
+}
+
+func TestLoadKnowledgeRolloutPercent(t *testing.T) {
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("LANGCHAIN_ROLLOUT_PERCENT", "5")
+
+	env := Load()
+
+	if env.Knowledge.RolloutPercent != 5 {
+		t.Fatalf("rollout percent=%d", env.Knowledge.RolloutPercent)
 	}
 }
 

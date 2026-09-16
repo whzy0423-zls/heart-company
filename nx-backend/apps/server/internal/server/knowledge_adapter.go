@@ -9,6 +9,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/appknowledge"
 	"nine-xing/nx-backend/apps/server/internal/knowledgeclient"
+	"nine-xing/nx-backend/apps/server/internal/observability"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
@@ -19,9 +20,14 @@ type knowledgeRetrieveClient interface {
 type appKnowledgeRemoteAdapter struct {
 	client          knowledgeRetrieveClient
 	retrieveTimeout time.Duration
+	metrics         *observability.Metrics
 }
 
-func (a appKnowledgeRemoteAdapter) Retrieve(ctx context.Context, input appknowledge.RemoteRequest) (appknowledge.RemoteResult, error) {
+func (a appKnowledgeRemoteAdapter) Retrieve(ctx context.Context, input appknowledge.RemoteRequest) (result appknowledge.RemoteResult, resultErr error) {
+	started := time.Now()
+	defer func() {
+		a.metrics.KnowledgeRemoteExit(time.Since(started), resultErr)
+	}()
 	if a.retrieveTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, a.retrieveTimeout)

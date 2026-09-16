@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 
 	"nine-xing/nx-backend/apps/server/internal/rag"
@@ -63,9 +64,11 @@ type ShadowComparison struct {
 	LocalDocumentIDs  []string
 	RemoteDocumentIDs []string
 	RemoteError       error
+	Duration          time.Duration
 }
 
 type ShadowObserver func(ShadowComparison)
+type FallbackObserver func(error)
 
 type ConversationResolution struct {
 	Resolution
@@ -131,18 +134,38 @@ func WithRemote(backend string, remote RemoteRetriever, observer ShadowObserver)
 	}
 }
 
+func WithFallbackObserver(observer FallbackObserver) Option {
+	return func(coordinator *Coordinator) {
+		coordinator.fallbackObserver = observer
+	}
+}
+
+func WithRolloutPercent(percent int) Option {
+	return func(coordinator *Coordinator) {
+		if percent < 0 {
+			percent = 0
+		}
+		if percent > 100 {
+			percent = 100
+		}
+		coordinator.rolloutPercent = percent
+	}
+}
+
 type Coordinator struct {
-	resolver       ConversationResolver
-	public         PublicSearcher
-	releases       ReleaseSearcher
-	limits         Limits
-	backend        string
-	remote         RemoteRetriever
-	shadowObserver ShadowObserver
+	resolver         ConversationResolver
+	public           PublicSearcher
+	releases         ReleaseSearcher
+	limits           Limits
+	backend          string
+	remote           RemoteRetriever
+	shadowObserver   ShadowObserver
+	fallbackObserver FallbackObserver
+	rolloutPercent   int
 }
 
 func NewCoordinator(resolver ConversationResolver, public PublicSearcher, releases ReleaseSearcher, options ...Option) *Coordinator {
-	coordinator := &Coordinator{resolver: resolver, public: public, releases: releases, limits: defaultLimits, backend: "local"}
+	coordinator := &Coordinator{resolver: resolver, public: public, releases: releases, limits: defaultLimits, backend: "local", rolloutPercent: 100}
 	for _, option := range options {
 		option(coordinator)
 	}
@@ -164,14 +187,23 @@ func (c *Coordinator) Retrieve(ctx context.Context, input Input) (Result, error)
 	remoteRequest := remoteRequestFromResolution(input, resolved)
 	switch c.backend {
 	case "langchain":
+		if !c.userInRollout(input.UserID) {
+			return c.retrieveLocal(ctx, input.Query, resolved), nil
+		}
 		return c.retrieveRemote(ctx, resolved, remoteRequest)
 	case "fallback":
+		if !c.userInRollout(input.UserID) {
+			return c.retrieveLocal(ctx, input.Query, resolved), nil
+		}
 		result, remoteErr := c.retrieveRemote(ctx, resolved, remoteRequest)
 		if remoteErr == nil {
 			return result, nil
 		}
 		if !remoteErrorAllowsFallback(remoteErr) {
 			return Result{}, remoteErr
+		}
+		if c.fallbackObserver != nil {
+			c.fallbackObserver(remoteErr)
 		}
 	case "shadow":
 		local := c.retrieveLocal(ctx, input.Query, resolved)
@@ -181,6 +213,16 @@ func (c *Coordinator) Retrieve(ctx context.Context, input Input) (Result, error)
 		return local, nil
 	}
 	return c.retrieveLocal(ctx, input.Query, resolved), nil
+}
+
+func (c *Coordinator) userInRollout(userID int64) bool {
+	if c.rolloutPercent >= 100 {
+		return true
+	}
+	if c.rolloutPercent <= 0 {
+		return false
+	}
+	return int(userID%100) < c.rolloutPercent
 }
 
 func (c *Coordinator) retrieveLocal(ctx context.Context, query string, resolved ConversationResolution) Result {
@@ -264,9 +306,10 @@ func (c *Coordinator) retrieveRemote(ctx context.Context, resolved ConversationR
 }
 
 func (c *Coordinator) compareShadow(ctx context.Context, request RemoteRequest, local Result) {
+	started := time.Now()
 	remote, err := c.remote.Retrieve(ctx, request)
 	if c.shadowObserver != nil {
-		c.shadowObserver(ShadowComparison{RequestID: request.RequestID, LocalDocumentIDs: remoteDocumentIDs(local.Documents), RemoteDocumentIDs: remoteDocumentIDs(remote.Documents), RemoteError: err})
+		c.shadowObserver(ShadowComparison{RequestID: request.RequestID, LocalDocumentIDs: remoteDocumentIDs(local.Documents), RemoteDocumentIDs: remoteDocumentIDs(remote.Documents), RemoteError: err, Duration: time.Since(started)})
 	}
 }
 

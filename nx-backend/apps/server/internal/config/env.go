@@ -184,6 +184,7 @@ type KnowledgeConfig struct {
 	RetrieveTimeoutMS        int
 	GenerateTimeoutSeconds   int
 	StreamIdleTimeoutSeconds int
+	RolloutPercent           int
 }
 
 func (c KnowledgeConfig) Validate() error {
@@ -199,6 +200,9 @@ func (c KnowledgeConfig) Validate() error {
 	}
 	if backend != "local" && strings.TrimSpace(c.ServiceToken) == "" {
 		return fmt.Errorf("LANGCHAIN_SERVICE_TOKEN must be set for remote knowledge modes")
+	}
+	if c.RolloutPercent < 0 || c.RolloutPercent > 100 {
+		return fmt.Errorf("LANGCHAIN_ROLLOUT_PERCENT must be between 0 and 100")
 	}
 	return nil
 }
@@ -315,6 +319,14 @@ func positiveIntEnv(key string, fallback int) int {
 		return fallback
 	}
 	return v
+}
+
+func boundedIntEnv(key string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(getenv(key, "")))
+	if err != nil {
+		return fallback
+	}
+	return value
 }
 func positiveInt64Env(key string, fallback int64) int64 {
 	v, err := strconv.ParseInt(getenv(key, ""), 10, 64)
@@ -436,6 +448,7 @@ func Load() Env {
 		RetrieveTimeoutMS:        positiveIntEnv("LANGCHAIN_RETRIEVE_TIMEOUT_MS", 1200),
 		GenerateTimeoutSeconds:   positiveIntEnv("LANGCHAIN_GENERATE_TIMEOUT_SECONDS", 90),
 		StreamIdleTimeoutSeconds: positiveIntEnv("LANGCHAIN_STREAM_IDLE_TIMEOUT_SECONDS", 30),
+		RolloutPercent:           boundedIntEnv("LANGCHAIN_ROLLOUT_PERCENT", 100),
 	}
 
 	videoTimeout, err := strconv.Atoi(getenv("VIDEO_TIMEOUT_SECONDS", "120"))

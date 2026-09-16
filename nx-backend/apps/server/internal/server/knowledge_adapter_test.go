@@ -8,6 +8,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/appknowledge"
 	"nine-xing/nx-backend/apps/server/internal/knowledgeclient"
+	"nine-xing/nx-backend/apps/server/internal/observability"
 )
 
 type knowledgeRetrieveClientStub struct {
@@ -67,5 +68,21 @@ func TestAppKnowledgeRemoteAdapterRejectsDocumentOutsideRequestedScope(t *testin
 	var remoteErr *appknowledge.RemoteError
 	if !errors.As(err, &remoteErr) || remoteErr.StatusCode != 502 {
 		t.Fatalf("expected cross-scope response to fail closed, got %v", err)
+	}
+}
+
+func TestAppKnowledgeRemoteAdapterRecordsLowCardinalityMetrics(t *testing.T) {
+	metrics := observability.New()
+	client := &knowledgeRetrieveClientStub{response: knowledgeclient.RetrievalResponse{}}
+	adapter := appKnowledgeRemoteAdapter{client: client, metrics: metrics}
+
+	if _, err := adapter.Retrieve(context.Background(), appknowledge.RemoteRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	client.err = errors.New("network")
+	_, _ = adapter.Retrieve(context.Background(), appknowledge.RemoteRequest{})
+	snapshot := metrics.Snapshot()
+	if snapshot.KnowledgeRemoteTotal != 2 || snapshot.KnowledgeRemoteErrors != 1 {
+		t.Fatalf("knowledge metrics=%+v", snapshot)
 	}
 }

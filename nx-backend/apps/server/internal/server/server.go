@@ -461,7 +461,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	}
 	s.appChat = chat.NewStore(database)
 	s.appChatQuota = newDatabaseAppChatQuotaManager(database)
-	knowledgeOptions := []appknowledge.Option{}
+	knowledgeOptions := []appknowledge.Option{appknowledge.WithRolloutPercent(env.Knowledge.RolloutPercent)}
 	if env.Knowledge.Backend != "" && env.Knowledge.Backend != "local" {
 		if err := env.Knowledge.Validate(); err != nil {
 			panic("knowledge config: " + err.Error())
@@ -477,9 +477,12 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		if clientErr != nil {
 			panic("knowledge client: " + clientErr.Error())
 		}
-		adapter := appKnowledgeRemoteAdapter{client: client, retrieveTimeout: time.Duration(env.Knowledge.RetrieveTimeoutMS) * time.Millisecond}
+		adapter := appKnowledgeRemoteAdapter{client: client, retrieveTimeout: time.Duration(env.Knowledge.RetrieveTimeoutMS) * time.Millisecond, metrics: s.metrics}
 		knowledgeOptions = append(knowledgeOptions, appknowledge.WithRemote(env.Knowledge.Backend, adapter, func(comparison appknowledge.ShadowComparison) {
-			log.Printf("knowledge shadow request=%s local=%v remote=%v error=%v", comparison.RequestID, comparison.LocalDocumentIDs, comparison.RemoteDocumentIDs, comparison.RemoteError)
+			observeKnowledgeShadow(s.metrics, comparison, log.Printf)
+		}))
+		knowledgeOptions = append(knowledgeOptions, appknowledge.WithFallbackObserver(func(error) {
+			s.metrics.KnowledgeFallback()
 		}))
 	}
 	s.appKnowledge = appknowledge.NewCoordinator(

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/rag"
 )
@@ -42,9 +43,13 @@ type remoteRetrieverStub struct {
 	err    error
 	input  RemoteRequest
 	calls  int
+	delay  time.Duration
 }
 
 func (s *remoteRetrieverStub) Retrieve(_ context.Context, input RemoteRequest) (RemoteResult, error) {
+	if s.delay > 0 {
+		time.Sleep(s.delay)
+	}
 	s.calls++
 	s.input = input
 	return s.result, s.err
@@ -105,10 +110,97 @@ func TestCoordinatorFallbackUsesLocalOnlyForRetryableRemoteErrors(t *testing.T) 
 	}
 }
 
-func TestCoordinatorShadowReturnsLocalAndReportsComparison(t *testing.T) {
+func TestCoordinatorReportsOnlyExecutedFallbacks(t *testing.T) {
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{CardID: 9, CardRevision: 1}}
+	public := &publicSearchStub{docs: []rag.Document{{ID: "local", Title: "本地", Content: "结果"}}}
+	remote := &remoteRetrieverStub{err: &RemoteError{StatusCode: 503}}
+	var observed []error
+	coordinator := NewCoordinator(
+		resolver,
+		public,
+		&releaseSearchStub{},
+		WithRemote("fallback", remote, nil),
+		WithFallbackObserver(func(err error) { observed = append(observed, err) }),
+	)
+
+	_, _ = coordinator.Retrieve(context.Background(), Input{UserID: 7, SessionID: 8, CardID: 9, Query: "问题"})
+	remote.err = &RemoteError{StatusCode: 400}
+	_, _ = coordinator.Retrieve(context.Background(), Input{UserID: 7, SessionID: 8, CardID: 9, Query: "问题"})
+
+	if len(observed) != 1 {
+		t.Fatalf("fallback observations=%d, want 1", len(observed))
+	}
+	var remoteErr *RemoteError
+	if !errors.As(observed[0], &remoteErr) || remoteErr.StatusCode != 503 {
+		t.Fatalf("fallback error=%v", observed[0])
+	}
+}
+
+func TestCoordinatorRolloutSelectsStableFivePercentByUser(t *testing.T) {
 	resolver := &coordinatorResolverStub{resolution: ConversationResolution{CardID: 9, CardRevision: 1}}
 	public := &publicSearchStub{docs: []rag.Document{{ID: "local", Title: "本地", Content: "结果"}}}
 	remote := &remoteRetrieverStub{result: RemoteResult{Documents: []rag.Document{{ID: "remote", Title: "远程", Content: "结果"}}}}
+	coordinator := NewCoordinator(
+		resolver,
+		public,
+		&releaseSearchStub{},
+		WithRemote("fallback", remote, nil),
+		WithRolloutPercent(5),
+	)
+
+	remoteResults := 0
+	for userID := int64(1); userID <= 100; userID++ {
+		result, err := coordinator.Retrieve(context.Background(), Input{UserID: userID, SessionID: 8, CardID: 9, Query: "问题"})
+		if err != nil {
+			t.Fatalf("user %d: %v", userID, err)
+		}
+		if reflect.DeepEqual(documentIDs(result.Documents), []string{"remote"}) {
+			remoteResults++
+		}
+	}
+	if remoteResults != 5 || remote.calls != 5 || public.calls != 95 {
+		t.Fatalf("remote results=%d calls=%d local calls=%d", remoteResults, remote.calls, public.calls)
+	}
+
+	for range 2 {
+		result, err := coordinator.Retrieve(context.Background(), Input{UserID: 1, SessionID: 8, CardID: 9, Query: "问题"})
+		if err != nil || !reflect.DeepEqual(documentIDs(result.Documents), []string{"remote"}) {
+			t.Fatalf("selected user was not stable: result=%+v err=%v", result, err)
+		}
+	}
+	for range 2 {
+		result, err := coordinator.Retrieve(context.Background(), Input{UserID: 50, SessionID: 8, CardID: 9, Query: "问题"})
+		if err != nil || !reflect.DeepEqual(documentIDs(result.Documents), []string{"local"}) {
+			t.Fatalf("local user was not stable: result=%+v err=%v", result, err)
+		}
+	}
+}
+
+func TestCoordinatorRolloutDoesNotLimitShadowComparison(t *testing.T) {
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{CardID: 9, CardRevision: 1}}
+	remote := &remoteRetrieverStub{}
+	reported := make(chan ShadowComparison, 1)
+	coordinator := NewCoordinator(
+		resolver,
+		&publicSearchStub{},
+		&releaseSearchStub{},
+		WithRemote("shadow", remote, func(comparison ShadowComparison) { reported <- comparison }),
+		WithRolloutPercent(0),
+	)
+
+	if _, err := coordinator.Retrieve(context.Background(), Input{UserID: 50, SessionID: 8, CardID: 9, Query: "问题"}); err != nil {
+		t.Fatal(err)
+	}
+	<-reported
+	if remote.calls != 1 {
+		t.Fatalf("shadow remote calls=%d", remote.calls)
+	}
+}
+
+func TestCoordinatorShadowReturnsLocalAndReportsComparison(t *testing.T) {
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{CardID: 9, CardRevision: 1}}
+	public := &publicSearchStub{docs: []rag.Document{{ID: "local", Title: "本地", Content: "结果"}}}
+	remote := &remoteRetrieverStub{result: RemoteResult{Documents: []rag.Document{{ID: "remote", Title: "远程", Content: "结果"}}}, delay: time.Millisecond}
 	reported := make(chan ShadowComparison, 1)
 	coordinator := NewCoordinator(resolver, public, &releaseSearchStub{}, WithRemote("shadow", remote, func(comparison ShadowComparison) { reported <- comparison }))
 
@@ -119,6 +211,9 @@ func TestCoordinatorShadowReturnsLocalAndReportsComparison(t *testing.T) {
 	comparison := <-reported
 	if !reflect.DeepEqual(comparison.LocalDocumentIDs, []string{"local"}) || !reflect.DeepEqual(comparison.RemoteDocumentIDs, []string{"remote"}) {
 		t.Fatalf("comparison=%+v", comparison)
+	}
+	if comparison.Duration < time.Millisecond {
+		t.Fatalf("comparison duration=%v", comparison.Duration)
 	}
 }
 
