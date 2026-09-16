@@ -27,6 +27,24 @@ func TestDirectMessageRoutesAreRegistered(t *testing.T) {
 	}
 }
 
+func TestDirectMessageRouterIncludesConversationManagementRoutes(t *testing.T) {
+	raw, err := os.ReadFile("app_direct_message.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	for _, fragment := range []string{
+		"DeleteConversationForUser",
+		"SetConversationPinned",
+		"http.MethodDelete",
+		"http.MethodPatch",
+	} {
+		if !strings.Contains(source, fragment) {
+			t.Fatalf("missing conversation management route fragment %s", fragment)
+		}
+	}
+}
+
 func TestAppDirectMessageRouterRequiresAuthentication(t *testing.T) {
 	server := &Server{}
 	response := httptest.NewRecorder()

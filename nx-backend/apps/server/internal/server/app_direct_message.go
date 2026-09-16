@@ -86,6 +86,35 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		httpx.JSON(w, http.StatusCreated, map[string]any{"code": 0, "data": item, "error": nil, "message": "ok"})
+	case strings.HasPrefix(path, "conversations/") && !strings.Contains(strings.TrimPrefix(path, "conversations/"), "/") && r.Method == http.MethodDelete:
+		id, ok := parseDirectPathID(path, "conversations/", "")
+		if !ok {
+			httpx.Fail(w, http.StatusBadRequest, "direct_message.invalid_conversation")
+			return
+		}
+		if err := s.directMessages.DeleteConversationForUser(r.Context(), user.ID, id); err != nil {
+			mapDirectMessageError(w, err)
+			return
+		}
+		httpx.OK(w, nil)
+	case strings.HasPrefix(path, "conversations/") && !strings.Contains(strings.TrimPrefix(path, "conversations/"), "/") && r.Method == http.MethodPatch:
+		id, ok := parseDirectPathID(path, "conversations/", "")
+		if !ok {
+			httpx.Fail(w, http.StatusBadRequest, "direct_message.invalid_conversation")
+			return
+		}
+		var body struct {
+			Pinned bool `json:"pinned"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil {
+			httpx.Fail(w, http.StatusBadRequest, "direct_message.invalid_conversation")
+			return
+		}
+		if err := s.directMessages.SetConversationPinned(r.Context(), user.ID, id, body.Pinned); err != nil {
+			mapDirectMessageError(w, err)
+			return
+		}
+		httpx.OK(w, nil)
 	case strings.HasPrefix(path, "conversations/") && strings.HasSuffix(path, "/messages") && r.Method == http.MethodGet:
 		id, ok := parseDirectPathID(path, "conversations/", "/messages")
 		if !ok {

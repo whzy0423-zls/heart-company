@@ -78,26 +78,36 @@ func (s *Store) ListConversations(ctx context.Context, userID int64) ([]Conversa
 		       latest.sequence_no,
 		       latest.recalled_at,
 		       latest.created_at,
+		       state.pinned_at,
 		       COALESCE((
 		         SELECT COUNT(*)
 		         FROM direct_messages unread
 		         WHERE unread.conversation_id=conversation.id
 		           AND unread.sender_id<>$1
 		           AND unread.sequence_no>COALESCE(read_cursor.last_read_sequence,0)
+		           AND unread.sequence_no>COALESCE(state.hidden_through_sequence,0)
 		       ),0) AS unread_count
 		FROM direct_conversations conversation
 		LEFT JOIN direct_message_read_cursors read_cursor
 		  ON read_cursor.conversation_id=conversation.id AND read_cursor.user_id=$1
+		LEFT JOIN direct_conversation_user_states state
+		  ON state.conversation_id=conversation.id AND state.user_id=$1
 		LEFT JOIN LATERAL (
 		  SELECT id,conversation_id,sender_id,client_message_id,message_type,body,media_id,sequence_no,recalled_at,created_at
 		  FROM direct_messages
 		  WHERE conversation_id=conversation.id
+		    AND sequence_no>COALESCE(state.hidden_through_sequence,0)
 		  ORDER BY sequence_no DESC
 		  LIMIT 1
 		) latest ON TRUE
 		WHERE conversation.status='active'
 		  AND (conversation.user_low_id=$1 OR conversation.user_high_id=$1)
-		ORDER BY conversation.updated_at DESC,conversation.id DESC`, userID)
+		  AND (
+		    COALESCE(state.hidden_through_sequence,0) < conversation.event_sequence
+		    OR state.hidden_through_sequence IS NULL
+		    OR state.pinned_at IS NOT NULL
+		  )
+		ORDER BY state.pinned_at DESC NULLS LAST, conversation.updated_at DESC,conversation.id DESC`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +117,7 @@ func (s *Store) ListConversations(ctx context.Context, userID int64) ([]Conversa
 		var item Conversation
 		var messageID, conversationID, senderID, mediaID, sequenceNo sql.NullInt64
 		var clientMessageID, messageType, body sql.NullString
-		var recalledAt, createdAt sql.NullTime
+		var recalledAt, createdAt, pinnedAt sql.NullTime
 		if err := rows.Scan(
 			&item.ID,
 			&item.UserLowID,
@@ -124,6 +134,7 @@ func (s *Store) ListConversations(ctx context.Context, userID int64) ([]Conversa
 			&sequenceNo,
 			&recalledAt,
 			&createdAt,
+			&pinnedAt,
 			&item.UnreadCount,
 		); err != nil {
 			return nil, err
@@ -147,9 +158,49 @@ func (s *Store) ListConversations(ctx context.Context, userID int64) ([]Conversa
 			}
 			item.LastMessage = message
 		}
+		if pinnedAt.Valid {
+			item.PinnedAt = &pinnedAt.Time
+		}
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+func (s *Store) DeleteConversationForUser(ctx context.Context, userID, conversationID int64) error {
+	if err := s.requireDB(); err != nil {
+		return err
+	}
+	if userID <= 0 || conversationID <= 0 {
+		return ErrInvalidConversation
+	}
+	var eventSequence int64
+	err := s.db.QueryRowContext(ctx, `SELECT event_sequence FROM direct_conversations WHERE id=$1 AND status='active' AND (user_low_id=$2 OR user_high_id=$2)`, conversationID, userID).Scan(&eventSequence)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotParticipant
+	}
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO direct_conversation_user_states(conversation_id,user_id,hidden_through_sequence,pinned_at) VALUES($1,$2,$3,NULL) ON CONFLICT(conversation_id,user_id) DO UPDATE SET hidden_through_sequence=GREATEST(direct_conversation_user_states.hidden_through_sequence,EXCLUDED.hidden_through_sequence),pinned_at=NULL,updated_at=now()`, conversationID, userID, eventSequence)
+	return err
+}
+
+func (s *Store) SetConversationPinned(ctx context.Context, userID, conversationID int64, pinned bool) error {
+	if err := s.requireDB(); err != nil {
+		return err
+	}
+	if userID <= 0 || conversationID <= 0 {
+		return ErrInvalidConversation
+	}
+	if !s.participant(ctx, userID, conversationID) {
+		return ErrNotParticipant
+	}
+	if pinned {
+		_, err := s.db.ExecContext(ctx, `INSERT INTO direct_conversation_user_states(conversation_id,user_id,pinned_at) VALUES($1,$2,now()) ON CONFLICT(conversation_id,user_id) DO UPDATE SET pinned_at=now(),updated_at=now()`, conversationID, userID)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO direct_conversation_user_states(conversation_id,user_id,pinned_at) VALUES($1,$2,NULL) ON CONFLICT(conversation_id,user_id) DO UPDATE SET pinned_at=NULL,updated_at=now()`, conversationID, userID)
+	return err
 }
 
 func (s *Store) Send(ctx context.Context, input SendInput) (Message, error) {
@@ -245,6 +296,12 @@ func (s *Store) History(ctx context.Context, userID, conversationID int64, curso
 	}
 	where := "conversation_id=$1"
 	args := []any{conversationID}
+	var hiddenThrough int64
+	_ = s.db.QueryRowContext(ctx, `SELECT COALESCE(hidden_through_sequence,0) FROM direct_conversation_user_states WHERE conversation_id=$1 AND user_id=$2`, conversationID, userID).Scan(&hiddenThrough)
+	if hiddenThrough > 0 {
+		args = append(args, hiddenThrough)
+		where += fmt.Sprintf(" AND sequence_no > $%d", len(args))
+	}
 	order := "sequence_no DESC"
 	if cursor.Before > 0 {
 		args = append(args, cursor.Before)

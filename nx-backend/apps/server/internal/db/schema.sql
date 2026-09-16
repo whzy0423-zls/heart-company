@@ -3018,6 +3018,19 @@ CREATE TABLE IF NOT EXISTS direct_message_read_cursors (
 CREATE INDEX IF NOT EXISTS idx_direct_message_cursors_user
   ON direct_message_read_cursors(user_id, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS direct_conversation_user_states (
+  conversation_id          BIGINT NOT NULL REFERENCES direct_conversations(id) ON DELETE CASCADE,
+  user_id                  BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  hidden_through_sequence  BIGINT NOT NULL DEFAULT 0 CHECK (hidden_through_sequence >= 0),
+  pinned_at                TIMESTAMPTZ,
+  updated_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (conversation_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_direct_conversation_user_states_pinned
+  ON direct_conversation_user_states(user_id, pinned_at DESC)
+  WHERE pinned_at IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS direct_realtime_tickets (
   id           BIGSERIAL PRIMARY KEY,
   user_id      BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,

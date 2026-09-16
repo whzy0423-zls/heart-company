@@ -12,7 +12,7 @@ func TestSchemaIncludesDirectMessageTables(t *testing.T) {
 		t.Fatal(err)
 	}
 	schema := strings.Join(strings.Fields(string(raw)), " ")
-	for _, table := range []string{"direct_conversations", "direct_message_media", "direct_messages", "direct_message_read_cursors", "direct_chat_appearances", "relationship_insights"} {
+	for _, table := range []string{"direct_conversations", "direct_message_media", "direct_messages", "direct_message_read_cursors", "direct_conversation_user_states", "direct_chat_appearances", "relationship_insights"} {
 		if !strings.Contains(schema, "CREATE TABLE IF NOT EXISTS "+table) {
 			t.Fatalf("schema missing %s", table)
 		}
@@ -36,6 +36,9 @@ func TestSchemaIncludesDirectMessageTables(t *testing.T) {
 		"ADD CONSTRAINT fk_direct_messages_media",
 		"idx_direct_message_media_conversation",
 		"idx_direct_message_cursors_user",
+		"hidden_through_sequence BIGINT NOT NULL DEFAULT 0",
+		"pinned_at TIMESTAMPTZ",
+		"idx_direct_conversation_user_states_pinned",
 		"background_type TEXT NOT NULL DEFAULT 'preset' CHECK (background_type IN ('preset', 'color', 'image'))",
 		"PRIMARY KEY (conversation_id, user_id)",
 		"idx_direct_chat_appearances_user",

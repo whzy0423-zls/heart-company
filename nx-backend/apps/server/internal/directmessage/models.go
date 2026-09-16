@@ -26,13 +26,14 @@ type HistoryCursor struct {
 }
 
 type Conversation struct {
-	ID            int64     `json:"id"`
-	UserLowID     int64     `json:"userLowId"`
-	UserHighID    int64     `json:"userHighId"`
-	EventSequence int64     `json:"eventSequence"`
-	UpdatedAt     time.Time `json:"updatedAt"`
-	LastMessage   *Message  `json:"lastMessage,omitempty"`
-	UnreadCount   int64     `json:"unreadCount"`
+	ID            int64      `json:"id"`
+	UserLowID     int64      `json:"userLowId"`
+	UserHighID    int64      `json:"userHighId"`
+	EventSequence int64      `json:"eventSequence"`
+	UpdatedAt     time.Time  `json:"updatedAt"`
+	LastMessage   *Message   `json:"lastMessage,omitempty"`
+	UnreadCount   int64      `json:"unreadCount"`
+	PinnedAt      *time.Time `json:"pinnedAt,omitempty"`
 }
 
 type Message struct {
