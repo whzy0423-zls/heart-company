@@ -52,3 +52,36 @@ func TestDirectGatewayRejectsTypingOutsideActiveSubscription(t *testing.T) {
 		t.Fatalf("expected participant error, got %q", code)
 	}
 }
+
+func TestDirectGatewayOpensInboxSubscriptionForAuthenticatedUser(t *testing.T) {
+	hub := NewDirectHub()
+	gateway := NewDirectGateway(nil, hub, func(context.Context, int64, int64) error { return nil })
+
+	subscription, code := gateway.openSubscription(context.Background(), 7, map[string]any{
+		"type":   "subscribeInbox",
+		"userId": 99,
+	})
+	if code != "" {
+		t.Fatalf("unexpected error code %q", code)
+	}
+	defer subscription.stop()
+	if subscription.conversationID != 0 || subscription.ack["type"] != "inboxSubscribed" {
+		t.Fatalf("unexpected inbox subscription: %#v", subscription)
+	}
+
+	hub.PublishUser(99, "wrong-user")
+	select {
+	case event := <-subscription.events:
+		t.Fatalf("subscription trusted client user id: %#v", event)
+	default:
+	}
+	hub.PublishUser(7, "current-user")
+	select {
+	case event := <-subscription.events:
+		if event != "current-user" {
+			t.Fatalf("unexpected inbox event %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("authenticated user inbox was not subscribed")
+	}
+}

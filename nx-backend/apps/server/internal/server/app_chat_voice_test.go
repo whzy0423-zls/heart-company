@@ -124,7 +124,7 @@ func TestVoiceChatCommitsQuotaOnlyAfterGeneratedPairIsSaved(t *testing.T) {
 	}
 }
 
-func TestVoiceChatCommitsQuotaWhenProviderFailureProducesFallback(t *testing.T) {
+func TestVoiceChatReleasesQuotaWhenGenerationFails(t *testing.T) {
 	store := &fakeVoiceChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
 	quota := &recordingAppChatQuotaManager{}
 	s, cleanup := newVoiceChatQuotaTestServer(t, store, &voiceChatGenerator{err: errors.New("provider failed")}, "孩子最近不愿意沟通")
@@ -136,11 +136,11 @@ func TestVoiceChatCommitsQuotaWhenProviderFailureProducesFallback(t *testing.T) 
 
 	response := performVoiceChatTestRequest(t, s)
 
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "暂时没有检索到特别匹配的资料") {
-		t.Fatalf("status = %d body=%s, want saved fallback answer", response.Code, response.Body.String())
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d body=%s, want 500", response.Code, response.Body.String())
 	}
 	reserve, commit, _, consumed, released := quota.counts()
-	if reserve != 1 || commit != 1 || consumed != 1 || released != 0 {
+	if reserve != 1 || commit != 0 || consumed != 0 || released != 1 {
 		t.Fatalf("quota counts = reserve:%d commit:%d consumed:%d released:%d", reserve, commit, consumed, released)
 	}
 }

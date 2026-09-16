@@ -16,6 +16,13 @@ type DirectGateway struct {
 	Upgrader  websocket.Upgrader
 }
 
+type directSubscription struct {
+	events         <-chan any
+	stop           func()
+	conversationID int64
+	ack            map[string]any
+}
+
 func NewDirectGateway(tickets *TicketStore, hub *DirectHub, authorize func(context.Context, int64, int64) error) *DirectGateway {
 	return &DirectGateway{Tickets: tickets, Hub: hub, Authorize: authorize, Upgrader: websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}}
 }
@@ -80,18 +87,17 @@ func (g *DirectGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err := conn.ReadJSON(&envelope); err != nil {
 			return
 		}
-		if envelope["type"] == "subscribe" {
-			conversationID, _ := strconv.ParseInt(toString(envelope["conversationId"]), 10, 64)
-			if conversationID <= 0 || g.Hub == nil || g.Authorize == nil || g.Authorize(ctx, userID, conversationID) != nil {
-				send(map[string]any{"type": "error", "code": "direct_message.not_participant"})
+		if envelope["type"] == "subscribe" || envelope["type"] == "subscribeInbox" {
+			subscription, code := g.openSubscription(ctx, userID, envelope)
+			if code != "" {
+				send(map[string]any{"type": "error", "code": code})
 				continue
 			}
 			if unsubscribe != nil {
 				unsubscribe()
 			}
-			messages, stop := g.Hub.Subscribe(conversationID)
-			unsubscribe = stop
-			subscribedConversationID = conversationID
+			unsubscribe = subscription.stop
+			subscribedConversationID = subscription.conversationID
 			go func(subscription <-chan any) {
 				for {
 					select {
@@ -103,14 +109,42 @@ func (g *DirectGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				}
-			}(messages)
-			send(map[string]any{"type": "subscribed", "conversationId": conversationID})
+			}(subscription.events)
+			send(subscription.ack)
 			continue
 		}
 		if code := g.handleClientEvent(ctx, userID, subscribedConversationID, envelope); code != "" {
 			send(map[string]any{"type": "error", "code": code})
 		}
 	}
+}
+
+func (g *DirectGateway) openSubscription(ctx context.Context, userID int64, envelope map[string]any) (directSubscription, string) {
+	if g.Hub == nil || userID <= 0 {
+		return directSubscription{}, "direct_message.not_participant"
+	}
+	if envelope["type"] == "subscribeInbox" {
+		events, stop := g.Hub.SubscribeUser(userID)
+		return directSubscription{
+			events: events,
+			stop:   stop,
+			ack:    map[string]any{"type": "inboxSubscribed"},
+		}, ""
+	}
+	conversationID, _ := strconv.ParseInt(toString(envelope["conversationId"]), 10, 64)
+	if conversationID <= 0 || g.Authorize == nil || g.Authorize(ctx, userID, conversationID) != nil {
+		return directSubscription{}, "direct_message.not_participant"
+	}
+	events, stop := g.Hub.Subscribe(conversationID)
+	return directSubscription{
+		events:         events,
+		stop:           stop,
+		conversationID: conversationID,
+		ack: map[string]any{
+			"type":           "subscribed",
+			"conversationId": conversationID,
+		},
+	}, ""
 }
 
 func (g *DirectGateway) handleClientEvent(_ context.Context, userID, subscribedConversationID int64, envelope map[string]any) string {

@@ -88,8 +88,9 @@ type Answer struct {
 }
 
 type Service struct {
-	docs      []Document
-	generator Generator
+	docs                  []Document
+	generator             Generator
+	strictGeneratorErrors bool
 }
 
 type Generator interface {
@@ -124,6 +125,12 @@ type Option func(*Service)
 func WithGenerator(generator Generator) Option {
 	return func(s *Service) {
 		s.generator = generator
+	}
+}
+
+func WithStrictGeneratorErrors() Option {
+	return func(s *Service) {
+		s.strictGeneratorErrors = true
 	}
 }
 
@@ -179,6 +186,9 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 				Tier:                input.Tier,
 				RuntimeInstructions: input.RuntimeInstructions,
 			})
+			if err != nil && s.strictGeneratorErrors {
+				return Answer{}, err
+			}
 			if err == nil && strings.TrimSpace(generated) != "" {
 				return Answer{
 					Answer:      strings.TrimSpace(generated),
@@ -233,6 +243,9 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 			Tier:                input.Tier,
 			RuntimeInstructions: input.RuntimeInstructions,
 		})
+		if err != nil && s.strictGeneratorErrors {
+			return Answer{}, err
+		}
 		if err == nil && strings.TrimSpace(generated) != "" {
 			return Answer{Answer: strings.TrimSpace(generated), Sources: sources, Suggestions: suggestions}, nil
 		}

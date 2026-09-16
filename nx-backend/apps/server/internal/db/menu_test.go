@@ -1,6 +1,7 @@
 package db
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -317,6 +318,7 @@ func TestDefaultAppMenusBelongToAppManagement(t *testing.T) {
 		"CustomerAppChat":       7,
 		"CustomerAppMemory":     8,
 		"CustomerQuizQuestions": 9,
+		"AppPlanManagement":     12,
 	}
 	found := make(map[string]bool, len(wantSort))
 	for _, menu := range defaultMenus {
@@ -336,6 +338,71 @@ func TestDefaultAppMenusBelongToAppManagement(t *testing.T) {
 	}
 }
 
+func TestDefaultMenusIncludeDistributionManagement(t *testing.T) {
+	want := map[string]struct {
+		path  string
+		title string
+		sort  int
+	}{
+		"AppDistributionManagement":  {path: "/app/distribution", title: "代理管理", sort: 13},
+		"AppDistributionCommissions": {path: "/app/distribution-commissions", title: "佣金明细", sort: 14},
+		"AppDistributionRules":       {path: "/app/distribution-rules", title: "佣金规则", sort: 15},
+		"AppDistributionSettlements": {path: "/app/distribution-settlements", title: "分销结算", sort: 16},
+	}
+	found := make(map[string]bool, len(want))
+	for _, menu := range defaultMenus {
+		expected, ok := want[menu.Name]
+		if !ok {
+			continue
+		}
+		found[menu.Name] = true
+		expectedComponent := expected.path
+		if menu.Name == "AppDistributionManagement" {
+			expectedComponent = "/app/distribution-management"
+		}
+		if menu.PID != 1600 || menu.Path != expected.path || menu.Component != expectedComponent || menu.AuthCode != "Customer:App:List" || menu.Type != "menu" || menu.Sort != expected.sort || menu.Title != expected.title {
+			t.Fatalf("unexpected distribution menu %s: %+v", menu.Name, menu)
+		}
+	}
+	for name := range want {
+		if !found[name] {
+			t.Fatalf("expected default distribution menu %s", name)
+		}
+	}
+}
+
+func TestDefaultMenusIncludeAppPlanManagement(t *testing.T) {
+	var foundPlan bool
+	for _, menu := range defaultMenus {
+		if menu.Name != "AppPlanManagement" {
+			continue
+		}
+		foundPlan = true
+		if menu.PID != 1600 || menu.Path != "/app/plan-management" || menu.Component != "/app/plan-management" || menu.AuthCode != "App:PlanManagement:View" || menu.Type != "menu" || menu.Sort != 12 || menu.Title != "套餐管理" {
+			t.Fatalf("unexpected App plan menu: %+v", menu)
+		}
+	}
+	if !foundPlan {
+		t.Fatal("expected default menu AppPlanManagement")
+	}
+}
+
+func TestSeedInvokesAppManagementPermissionBackfill(t *testing.T) {
+	raw, err := os.ReadFile("db.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	for _, call := range []string{
+		"seedDistributionMenuBindings(ctx, database)",
+		"seedAppPlanManagementMenu(ctx, database)",
+	} {
+		if !strings.Contains(source, call) {
+			t.Fatalf("expected seed to call %s", call)
+		}
+	}
+}
+
 func TestDeprecatedMenusRemoveStaleCustomerPrivateRuleRoute(t *testing.T) {
 	for _, token := range []string{
 		"name = 'CustomerAppPrivateRule'",
@@ -344,6 +411,9 @@ func TestDeprecatedMenusRemoveStaleCustomerPrivateRuleRoute(t *testing.T) {
 		"name = 'TheoryLibrary'",
 		"path = '/theory/library'",
 		"component = '/theory/library'",
+		"name = 'AppProducts'",
+		"path = '/app/products'",
+		"component = '/app/products'",
 	} {
 		if !strings.Contains(deprecatedMenusSQL, token) {
 			t.Fatalf("expected deprecated menu cleanup SQL to include %q", token)

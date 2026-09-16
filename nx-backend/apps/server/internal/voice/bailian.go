@@ -112,6 +112,9 @@ func (c *BailianClient) cloneMiniMaxVoice(ctx context.Context, model string, voi
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
+	// Do not leave an in-flight clone request waiting on a pooled connection
+	// after the caller's context is canceled.
+	req.Close = true
 	result, err := c.doJSON(req)
 	if err != nil {
 		return "", err
@@ -149,11 +152,12 @@ func (c *BailianClient) cloneQwenVoice(ctx context.Context, targetModel string, 
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
+	req.Close = true
 	result, err := c.doJSON(req)
 	if err != nil {
 		return "", err
 	}
-	voiceID := findString(result, "output.voice", "output.voice_id", "voice", "voice_id")
+	voiceID := findString(result, "output.voice", "output.voice_id", "data.voice", "data.voice_id", "voice", "voice_id")
 	if voiceID == "" {
 		return "", errors.New("阿里百炼未返回最终音色 ID")
 	}

@@ -16,6 +16,10 @@ describe('skill library management api', () => {
       updateSkillLibraryApi,
       updateSkillLibraryCategoryApi,
       updateSkillLibrarySkillApi,
+      publishSkillLibrarySkillApi,
+      unpublishSkillLibrarySkillApi,
+      enableSkillLibrarySkillApi,
+      disableSkillLibrarySkillApi,
     } = await import('./skill-library-management');
 
     const metadata = {
@@ -34,6 +38,10 @@ describe('skill library management api', () => {
       categoryId: 2,
       summary: '简介',
     });
+    await publishSkillLibrarySkillApi(3);
+    await unpublishSkillLibrarySkillApi(3);
+    await enableSkillLibrarySkillApi(3);
+    await disableSkillLibrarySkillApi(3);
 
     expect(mocks.get).toHaveBeenCalledWith('/skill-library-management');
     expect(mocks.request).toHaveBeenNthCalledWith(1, '/skill-library-management/library/1', {
@@ -48,5 +56,9 @@ describe('skill library management api', () => {
       data: expect.objectContaining({ categoryId: 2, summary: '简介' }),
       method: 'PATCH',
     });
+    expect(mocks.request).toHaveBeenNthCalledWith(4, '/skill-library-management/skills/3/publish', { data: {}, method: 'POST' });
+    expect(mocks.request).toHaveBeenNthCalledWith(5, '/skill-library-management/skills/3/unpublish', { data: {}, method: 'POST' });
+    expect(mocks.request).toHaveBeenNthCalledWith(6, '/skill-library-management/skills/3/enable', { data: {}, method: 'POST' });
+    expect(mocks.request).toHaveBeenNthCalledWith(7, '/skill-library-management/skills/3/disable', { data: {}, method: 'POST' });
   });
 });

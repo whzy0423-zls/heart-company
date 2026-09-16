@@ -185,7 +185,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		}
 		generator := s.generator()
 		promptContext := s.appChatContextForPrompt(ctx, sessionID, generator)
-		answer, err = rag.NewService(docs, rag.WithGenerator(generator)).Ask(ctx, rag.AskInput{
+		answer, err = rag.NewService(docs, rag.WithGenerator(generator), rag.WithStrictGeneratorErrors()).Ask(ctx, rag.AskInput{
 			History:             promptContext.History,
 			ConversationSummary: promptContext.Summary,
 			Question:            transcript,

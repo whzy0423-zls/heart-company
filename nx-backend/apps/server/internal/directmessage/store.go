@@ -62,7 +62,42 @@ func (s *Store) ListConversations(ctx context.Context, userID int64) ([]Conversa
 	if err := s.requireDB(); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,user_low_id,user_high_id,event_sequence,updated_at FROM direct_conversations WHERE status='active' AND (user_low_id=$1 OR user_high_id=$1) ORDER BY updated_at DESC,id DESC`, userID)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT conversation.id,
+		       conversation.user_low_id,
+		       conversation.user_high_id,
+		       conversation.event_sequence,
+		       conversation.updated_at,
+		       latest.id,
+		       latest.conversation_id,
+		       latest.sender_id,
+		       latest.client_message_id,
+		       latest.message_type,
+		       latest.body,
+		       latest.media_id,
+		       latest.sequence_no,
+		       latest.recalled_at,
+		       latest.created_at,
+		       COALESCE((
+		         SELECT COUNT(*)
+		         FROM direct_messages unread
+		         WHERE unread.conversation_id=conversation.id
+		           AND unread.sender_id<>$1
+		           AND unread.sequence_no>COALESCE(read_cursor.last_read_sequence,0)
+		       ),0) AS unread_count
+		FROM direct_conversations conversation
+		LEFT JOIN direct_message_read_cursors read_cursor
+		  ON read_cursor.conversation_id=conversation.id AND read_cursor.user_id=$1
+		LEFT JOIN LATERAL (
+		  SELECT id,conversation_id,sender_id,client_message_id,message_type,body,media_id,sequence_no,recalled_at,created_at
+		  FROM direct_messages
+		  WHERE conversation_id=conversation.id
+		  ORDER BY sequence_no DESC
+		  LIMIT 1
+		) latest ON TRUE
+		WHERE conversation.status='active'
+		  AND (conversation.user_low_id=$1 OR conversation.user_high_id=$1)
+		ORDER BY conversation.updated_at DESC,conversation.id DESC`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -70,8 +105,47 @@ func (s *Store) ListConversations(ctx context.Context, userID int64) ([]Conversa
 	items := []Conversation{}
 	for rows.Next() {
 		var item Conversation
-		if err := rows.Scan(&item.ID, &item.UserLowID, &item.UserHighID, &item.EventSequence, &item.UpdatedAt); err != nil {
+		var messageID, conversationID, senderID, mediaID, sequenceNo sql.NullInt64
+		var clientMessageID, messageType, body sql.NullString
+		var recalledAt, createdAt sql.NullTime
+		if err := rows.Scan(
+			&item.ID,
+			&item.UserLowID,
+			&item.UserHighID,
+			&item.EventSequence,
+			&item.UpdatedAt,
+			&messageID,
+			&conversationID,
+			&senderID,
+			&clientMessageID,
+			&messageType,
+			&body,
+			&mediaID,
+			&sequenceNo,
+			&recalledAt,
+			&createdAt,
+			&item.UnreadCount,
+		); err != nil {
 			return nil, err
+		}
+		if messageID.Valid {
+			message := &Message{
+				ID:              messageID.Int64,
+				ConversationID:  conversationID.Int64,
+				SenderID:        senderID.Int64,
+				ClientMessageID: clientMessageID.String,
+				MessageType:     messageType.String,
+				Body:            body.String,
+				SequenceNo:      sequenceNo.Int64,
+				CreatedAt:       createdAt.Time,
+			}
+			if mediaID.Valid {
+				message.MediaID = &mediaID.Int64
+			}
+			if recalledAt.Valid {
+				message.RecalledAt = &recalledAt.Time
+			}
+			item.LastMessage = message
 		}
 		items = append(items, item)
 	}

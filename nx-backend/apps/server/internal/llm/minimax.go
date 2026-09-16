@@ -1505,6 +1505,13 @@ func buildUserPrompt(input rag.GenerateInput) string {
 			b.WriteString("画像=" + trimRunes(profile, 800) + "；")
 		}
 		b.WriteString("\n")
+		if card.MainType > 0 {
+			b.WriteString(fmt.Sprintf("本轮回答主型=%d号；回答口吻、共情重点、建议切入角度都按本轮回答主型展开，优先于其他历史或档案主型；", card.MainType))
+			if input.UserProfile.MainType > 0 && input.UserProfile.MainType != card.MainType {
+				b.WriteString(fmt.Sprintf("不要沿用用户档案里的最近主型=%d号作为本轮口吻；", input.UserProfile.MainType))
+			}
+			b.WriteString("\n")
+		}
 		if strings.EqualFold(strings.TrimSpace(card.CardType), "secondary") {
 			b.WriteString("当前关注对象是用户正在咨询的 TA，不要把当前关注对象当成正在输入的用户本人，也不要冒充当前关注对象；请围绕用户与 TA 的关系提供分析和建议。\n")
 		}

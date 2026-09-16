@@ -25,6 +25,14 @@ describe('growth skill library management contract', () => {
       '启用状态',
       '编辑技能',
       'updateSkillLibrarySkillApi',
+      'publishSkillLibrarySkillApi',
+      'unpublishSkillLibrarySkillApi',
+      'enableSkillLibrarySkillApi',
+      'disableSkillLibrarySkillApi',
+      '发布',
+      '下架',
+      '启用',
+      '停用',
     ]) {
       expect(source).toContain(expected);
     }

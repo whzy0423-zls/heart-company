@@ -1107,6 +1107,20 @@ func TestAskFallsBackWhenGeneratorFails(t *testing.T) {
 	}
 }
 
+func TestAskStrictGeneratorErrorsReturnsProviderFailure(t *testing.T) {
+	want := errors.New("llm unavailable")
+	service := NewService(nil,
+		WithGenerator(&fakeGenerator{err: want}),
+		WithStrictGeneratorErrors(),
+	)
+
+	_, err := service.Ask(context.Background(), AskInput{Question: "我现在应该怎么办？"})
+
+	if !errors.Is(err, want) {
+		t.Fatalf("Ask() error = %v, want %v", err, want)
+	}
+}
+
 func TestAskModelIdentityReturnsFixedReplyWithoutRetrievalOrGeneration(t *testing.T) {
 	generator := &countingIdentityGenerator{answer: "不应调用模型"}
 	service := NewService([]Document{

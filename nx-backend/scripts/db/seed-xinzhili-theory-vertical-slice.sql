@@ -1,4 +1,5 @@
 BEGIN;
+SELECT pg_advisory_xact_lock(782145901);
 
 INSERT INTO theory_libraries (key, name, description, status, default_language, current_version)
 VALUES ('xinzhili', '芯之力理论库', '芯之力理论卡发布最小纵切', 'enabled', 'zh-CN', 1)
@@ -140,26 +141,16 @@ INSERT INTO theory_library_releases (
   library_id, version, status, embedding_model, embedding_dimensions, retrieval_mode,
   index_version, card_count, chunk_count, build_error, activated_at
 )
-SELECT id, 1, CASE WHEN should_activate_v1 THEN 'active' ELSE 'retired' END,
+SELECT id, 1, 'building',
   '', 1536, 'lexical_only', 'seed-v1', 1, 1, '',
   CASE WHEN should_activate_v1 THEN now() ELSE NULL END
 FROM library
-ON CONFLICT (library_id, version) DO UPDATE SET
-  status = theory_library_releases.status,
-  embedding_model = EXCLUDED.embedding_model,
-  embedding_dimensions = EXCLUDED.embedding_dimensions,
-  retrieval_mode = EXCLUDED.retrieval_mode,
-  index_version = EXCLUDED.index_version,
-  card_count = EXCLUDED.card_count,
-  chunk_count = EXCLUDED.chunk_count,
-  build_error = EXCLUDED.build_error,
-  activated_at = COALESCE(theory_library_releases.activated_at, EXCLUDED.activated_at),
-  update_time = now();
+ON CONFLICT (library_id, version) DO NOTHING;
 
 WITH fixture AS (
   SELECT release.id AS release_id, card.id AS card_id, chunk.id AS chunk_id
   FROM theory_libraries library
-  JOIN theory_library_releases release ON release.library_id = library.id AND release.version = 1
+  JOIN theory_library_releases release ON release.library_id = library.id AND release.version = 1 AND release.status = 'building'
   JOIN theory_cards card ON card.library_id = library.id
     AND card.canonical_key = 'inner_observer' AND card.version = 1
   JOIN theory_chunks chunk ON chunk.library_id = library.id
@@ -169,5 +160,15 @@ WITH fixture AS (
 INSERT INTO theory_release_cards (release_id, card_id, chunk_id)
 SELECT release_id, card_id, chunk_id FROM fixture
 ON CONFLICT (release_id, card_id, chunk_id) DO NOTHING;
+
+-- Build mappings before publishing; never write into a released snapshot.
+UPDATE theory_library_releases release
+SET status = CASE WHEN library.current_version <= 1 AND NOT EXISTS (
+  SELECT 1 FROM theory_library_releases other
+  WHERE other.library_id=library.id AND other.id<>release.id
+) THEN 'active' ELSE 'retired' END
+FROM theory_libraries library
+WHERE release.library_id=library.id AND library.key='xinzhili'
+  AND release.version=1 AND release.status='building';
 
 COMMIT;

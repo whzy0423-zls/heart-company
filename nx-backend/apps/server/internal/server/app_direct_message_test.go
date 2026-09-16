@@ -8,8 +8,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/directmessage"
+	"nine-xing/nx-backend/apps/server/internal/realtime"
 )
 
 func TestDirectMessageRoutesAreRegistered(t *testing.T) {
@@ -103,6 +105,44 @@ func TestShouldNotifyDirectMessageOnlyOnceForRecipient(t *testing.T) {
 	}
 	if shouldNotifyDirectMessage(directmessage.Message{ID: 1, WasCreated: true}) {
 		t.Fatal("message without recipient must not notify")
+	}
+}
+
+func TestPublishDirectMessageEventReachesConversationAndBothUserInboxes(t *testing.T) {
+	hub := realtime.NewDirectHub()
+	server := &Server{directRealtimeHub: hub}
+	conversationEvents, stopConversation := hub.Subscribe(12)
+	defer stopConversation()
+	senderEvents, stopSender := hub.SubscribeUser(7)
+	defer stopSender()
+	recipientEvents, stopRecipient := hub.SubscribeUser(9)
+	defer stopRecipient()
+
+	server.publishDirectMessageEvent(directmessage.Message{
+		ID:             41,
+		ConversationID: 12,
+		SenderID:       7,
+		RecipientID:    9,
+		WasCreated:     true,
+		MessageType:    "text",
+		Body:           "你好",
+		SequenceNo:     8,
+	})
+
+	for name, events := range map[string]<-chan any{
+		"conversation": conversationEvents,
+		"sender":       senderEvents,
+		"recipient":    recipientEvents,
+	} {
+		select {
+		case raw := <-events:
+			event, ok := raw.(map[string]any)
+			if !ok || event["type"] != "message" {
+				t.Fatalf("%s received unexpected event %#v", name, raw)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s did not receive message event", name)
+		}
 	}
 }
 

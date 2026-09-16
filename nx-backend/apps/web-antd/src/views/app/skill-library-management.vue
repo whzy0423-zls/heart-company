@@ -29,6 +29,10 @@ import {
 
 import {
   getSkillLibraryManagementApi,
+  publishSkillLibrarySkillApi,
+  unpublishSkillLibrarySkillApi,
+  enableSkillLibrarySkillApi,
+  disableSkillLibrarySkillApi,
   updateSkillLibraryApi,
   updateSkillLibraryCategoryApi,
   updateSkillLibrarySkillApi,
@@ -50,6 +54,7 @@ const skills = ref<SkillLibraryAdminSkill[]>([]);
 const editorOpen = ref(false);
 const editorKind = ref<EditorKind>('skill');
 const activeId = ref(0);
+const actionLoadingId = ref<number>();
 
 const form = reactive({
   categoryId: 0,
@@ -104,7 +109,7 @@ const skillColumns = [
   { dataIndex: 'summary', title: '技能简介' },
   { dataIndex: 'publishedVersion', title: '版本', width: 90 },
   { dataIndex: 'status', title: '启用状态', width: 90 },
-  { key: 'action', title: '操作', width: 92 },
+  { key: 'action', title: '操作', width: 240 },
 ];
 const categoryColumns = [
   { dataIndex: 'name', title: '分类名称', width: 180 },
@@ -223,6 +228,57 @@ async function save() {
   }
 }
 
+type SkillRecord = SkillLibraryAdminSkill;
+
+async function runSkillAction(item: SkillRecord, action: () => Promise<unknown>, successText: string) {
+  actionLoadingId.value = item.id;
+  try {
+    await action();
+    message.success(successText);
+    await load();
+  } catch {
+    message.error('操作失败，请稍后重试');
+  } finally {
+    actionLoadingId.value = undefined;
+  }
+}
+
+function publishSkill(item: SkillRecord) {
+  if (!item.hasDraft) return;
+  Modal.confirm({
+    title: `发布“${item.name}”？`,
+    content: '发布后会启用该技能，并在 App 技能列表中提供最新版本。',
+    async onOk() {
+      await runSkillAction(item, () => publishSkillLibrarySkillApi(item.id), '技能已发布');
+    },
+  });
+}
+
+function unpublishSkill(item: SkillRecord) {
+  Modal.confirm({
+    title: `下架“${item.name}”？`,
+    content: '下架后会保留版本历史，但技能将暂时从 App 中移除。',
+    async onOk() {
+      await runSkillAction(item, () => unpublishSkillLibrarySkillApi(item.id), '技能已下架');
+    },
+  });
+}
+
+async function enableSkill(item: SkillRecord) {
+  await runSkillAction(item, () => enableSkillLibrarySkillApi(item.id), '技能已启用');
+}
+
+function disableSkill(item: SkillRecord) {
+  Modal.confirm({
+    title: `停用“${item.name}”？`,
+    content: '停用后会清空当前发布指针，技能将暂时从 App 中移除。',
+    okButtonProps: { danger: true },
+    async onOk() {
+      await runSkillAction(item, () => disableSkillLibrarySkillApi(item.id), '技能已停用');
+    },
+  });
+}
+
 onMounted(load);
 </script>
 
@@ -297,7 +353,46 @@ onMounted(load);
                 </Tag>
               </template>
               <template v-else-if="column.key === 'action'">
-                <Button v-if="canEdit" type="link" @click="editSkillRecord(record)">编辑技能</Button>
+                <Space v-if="canEdit" :size="2" wrap>
+                  <Button
+                    :disabled="!record.hasDraft"
+                    :loading="actionLoadingId === record.id"
+                    size="small"
+                    type="link"
+                    @click="publishSkill(record as SkillRecord)"
+                  >
+                    <IconifyIcon icon="lucide:send" />发布
+                  </Button>
+                  <Button
+                    v-if="record.hasPublishedHistory"
+                    :loading="actionLoadingId === record.id"
+                    size="small"
+                    type="link"
+                    @click="unpublishSkill(record as SkillRecord)"
+                  >
+                    <IconifyIcon icon="lucide:package-minus" />下架
+                  </Button>
+                  <Button
+                    v-if="record.hasPublishedHistory && record.status === 'disabled'"
+                    :loading="actionLoadingId === record.id"
+                    size="small"
+                    type="link"
+                    @click="enableSkill(record as SkillRecord)"
+                  >
+                    <IconifyIcon icon="lucide:play" />启用
+                  </Button>
+                  <Button
+                    v-if="record.status === 'enabled'"
+                    :loading="actionLoadingId === record.id"
+                    danger
+                    size="small"
+                    type="link"
+                    @click="disableSkill(record as SkillRecord)"
+                  >
+                    <IconifyIcon icon="lucide:pause" />停用
+                  </Button>
+                  <Button type="link" size="small" @click="editSkillRecord(record)">编辑</Button>
+                </Space>
               </template>
             </template>
           </Table>

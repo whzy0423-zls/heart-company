@@ -66,7 +66,7 @@ func TestVideoSubmissionRoutesRetryStartupRecoveryBeforeProviderUse(t *testing.T
 	).Scan(&shotID); err != nil {
 		t.Fatal(err)
 	}
-	requestKey := "55555555-5555-4555-8555-555555555555"
+	requestKey := fmt.Sprintf("55555555-5555-4%03d-8555-%012d", time.Now().UnixNano()%1000, time.Now().UnixNano()%1_000_000_000_000)
 	if _, err := database.ExecContext(ctx, `
 		INSERT INTO video_generation_submissions
 		    (request_key, shot_id, status, request_snapshot)
@@ -117,7 +117,8 @@ func TestVideoSubmissionRoutesRetryStartupRecoveryBeforeProviderUse(t *testing.T
 		t.Fatalf("workflow did not expose recovered submission: %+v", workflow.Shots)
 	}
 
-	reconcileBody, _ := json.Marshal(map[string]string{"taskId": "manual-task"})
+	taskID := fmt.Sprintf("manual-task-%d", time.Now().UnixNano())
+	reconcileBody, _ := json.Marshal(map[string]string{"taskId": taskID})
 	reconcileRecorder := httptest.NewRecorder()
 	reconcileRequest := httptest.NewRequest(http.MethodPost, "/api/video/generation-submissions/reconcile/"+requestKey, bytes.NewReader(reconcileBody))
 	s.videoWorkflowReconcile(reconcileRecorder, reconcileRequest)

@@ -546,7 +546,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	promptContext := s.appChatContextForPrompt(ctx, sessionID, generator)
 
-	ans, err := rag.NewService(docs, rag.WithGenerator(generator)).Ask(ctx, rag.AskInput{
+	ans, err := rag.NewService(docs, rag.WithGenerator(generator), rag.WithStrictGeneratorErrors()).Ask(ctx, rag.AskInput{
 		History:             promptContext.History,
 		ConversationSummary: promptContext.Summary,
 		Question:            body.Question,
@@ -788,7 +788,7 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			return nil
 		}
 
-		ans, err = rag.NewService(docs, rag.WithGenerator(input.generator)).AskStream(ctx, rag.AskInput{
+		ans, err = rag.NewService(docs, rag.WithGenerator(input.generator), rag.WithStrictGeneratorErrors()).AskStream(ctx, rag.AskInput{
 			History:             promptContext.History,
 			ConversationSummary: promptContext.Summary,
 			Question:            input.question,

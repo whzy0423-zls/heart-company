@@ -323,8 +323,17 @@ func cleanupPostgresVerticalFixture(t *testing.T, database *sql.DB, libraryKey s
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	if _, err := database.ExecContext(ctx, `
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		t.Errorf("begin theory fixture cleanup for %q: %v", libraryKey, err)
+		return
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('nine_xing.allow_fixture_cleanup','on',true)`); err != nil {
+		t.Errorf("enable theory fixture cleanup: %v", err)
+		_ = tx.Rollback()
+		return
+	}
+	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM theory_card_sources source
 		USING theory_cards card, theory_libraries library
 		WHERE source.card_id=card.id
@@ -332,8 +341,13 @@ func cleanupPostgresVerticalFixture(t *testing.T, database *sql.DB, libraryKey s
 		  AND library.key=$1`, libraryKey); err != nil {
 		t.Errorf("delete theory fixture card sources for %q: %v", libraryKey, err)
 	}
-	if _, err := database.ExecContext(ctx, `DELETE FROM theory_libraries WHERE key=$1`, libraryKey); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM theory_libraries WHERE key=$1`, libraryKey); err != nil {
 		t.Errorf("delete theory fixture library %q: %v", libraryKey, err)
+		_ = tx.Rollback()
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		t.Errorf("commit theory fixture cleanup for %q: %v", libraryKey, err)
 	}
 	if _, err := database.ExecContext(ctx, `DELETE FROM users WHERE id=$1`, actorID); err != nil {
 		t.Errorf("delete theory fixture actor %d: %v", actorID, err)

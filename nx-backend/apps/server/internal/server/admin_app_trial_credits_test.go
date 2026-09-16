@@ -113,6 +113,12 @@ func TestAdminAppTrialCreditGrantListAndRevokeIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.Close()
+	// The shared integration database resets app-user identities between tests;
+	// remove audit rows from an earlier run so reused IDs cannot affect counts.
+	if _, err := database.ExecContext(ctx, `DELETE FROM admin_operation_logs
+		WHERE action IN ('app_trial_credit.grant', 'app_trial_credit.revoke')`); err != nil {
+		t.Fatal(err)
+	}
 
 	var userID, operatorID int64
 	phone := fmt.Sprintf("198%08d", time.Now().UnixNano()%100000000)

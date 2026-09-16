@@ -1108,7 +1108,7 @@ func TestCrossModuleHelperEndpointsAllowOwningPagePermissions(t *testing.T) {
 		`s.mux.HandleFunc("/api/voice/profiles/list", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage"}, s.voiceProfiles)))`,
 		`s.mux.HandleFunc("/api/voice/options", s.method(http.MethodGet, s.requireAnyPermission([]string{"Voice:Profile:Manage", "Voice:Test:Manage", "Voice:Content:Manage", "Reading:Article:Manage", "System:XinzhiliModel:Config"}, s.voiceOptions)))`,
 		`s.mux.HandleFunc("/api/xinzhili-model-config", s.requirePermission("System:XinzhiliModel:Config", s.xinzhiliModelConfigHandler))`,
-		`s.mux.HandleFunc("/api/video/analysis/list", s.method(http.MethodGet, s.requireAnyPermission([]string{"Video:Analysis:Manage", "Video:Storyboard:Manage"}, s.videoAnalysisList)))`,
+		`s.mux.HandleFunc("/api/video/analysis/list", s.method(http.MethodGet, s.requireAnyPermission([]string{"Video:Analysis:Manage", "Video:Storyboard:Manage", "Video:Generate:Manage"}, s.videoAnalysisList)))`,
 		`s.mux.HandleFunc("/api/video/assets/polish-prompt", s.method(http.MethodPost, s.requireAnyPermission([]string{"Video:Asset:Manage", "Video:Generate:Manage"}, s.polishPrompt)))`,
 	}
 	for _, route := range expectRoutes {

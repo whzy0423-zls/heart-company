@@ -33,3 +33,5 @@ export * from './theory-library';
 export * from './enneagram-library';
 export * from './story-skill';
 export * from './story-generation-config';
+
+export * from './distribution';
