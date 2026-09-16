@@ -199,7 +199,7 @@ func (c *Coordinator) Retrieve(ctx context.Context, input Input) (Result, error)
 		if remoteErr == nil {
 			return result, nil
 		}
-		if !remoteErrorAllowsFallback(remoteErr) {
+		if !RemoteErrorAllowsFallback(remoteErr) {
 			return Result{}, remoteErr
 		}
 		if c.fallbackObserver != nil {
@@ -321,7 +321,7 @@ func remoteDocumentIDs(documents []rag.Document) []string {
 	return ids
 }
 
-func remoteErrorAllowsFallback(err error) bool {
+func RemoteErrorAllowsFallback(err error) bool {
 	if errors.Is(err, context.Canceled) {
 		return false
 	}

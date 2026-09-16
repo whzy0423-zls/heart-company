@@ -401,6 +401,12 @@ func (s *layeredKnowledgeChatStore) singleTrace(t *testing.T) chat.KnowledgeTrac
 
 func newLayeredKnowledgeServer(t *testing.T, store appChatStore, resolver appknowledge.ConversationResolver, searcher *layeredKnowledgeSearcher, generator rag.Generator) *Server {
 	t.Helper()
+	if current, ok := store.(*layeredKnowledgeChatStore); ok && current.cardID <= 0 {
+		current.cardID = 77
+	}
+	if current, ok := resolver.(*layeredKnowledgeResolver); ok && current.revision <= 0 {
+		current.revision = 1
+	}
 	server := newAppChatStreamServer(store, generator)
 	database, _ := openIdentityDependencyDB(t)
 	server.db = database

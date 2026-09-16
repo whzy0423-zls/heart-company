@@ -33,7 +33,15 @@ func (a appKnowledgeRemoteAdapter) Retrieve(ctx context.Context, input appknowle
 		ctx, cancel = context.WithTimeout(ctx, a.retrieveTimeout)
 		defer cancel()
 	}
-	mainType := input.MainType
+	profile := knowledgeclient.Profile{}
+	if input.MainType >= 1 && input.MainType <= 9 {
+		mainType := input.MainType
+		profile.MainType = &mainType
+	}
+	if input.WingType >= 1 && input.WingType <= 9 {
+		wingType := input.WingType
+		profile.WingType = &wingType
+	}
 	response, err := a.client.Retrieve(ctx, knowledgeclient.RetrievalRequest{
 		RequestID: input.RequestID,
 		Query:     input.Query,
@@ -42,7 +50,7 @@ func (a appKnowledgeRemoteAdapter) Retrieve(ctx context.Context, input appknowle
 			Public: input.Public, TheoryReleaseIDs: input.TheoryReleaseIDs,
 			EnneagramReleaseIDs: input.EnneagramReleaseIDs,
 		},
-		Profile: knowledgeclient.Profile{MainType: &mainType},
+		Profile: profile,
 		Retrieval: knowledgeclient.RetrievalOptions{
 			TopK: 8, VectorK: 20, LexicalK: 20, RerankK: 8, MaxContextRunes: 8000,
 		},

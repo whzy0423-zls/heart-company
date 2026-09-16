@@ -127,8 +127,8 @@ func TestRemoteErrorAllowsFallbackClassifiesTimeoutTransportAndClientErrors(t *t
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := remoteErrorAllowsFallback(tt.err); got != tt.want {
-				t.Fatalf("remoteErrorAllowsFallback(%v)=%v, want %v", tt.err, got, tt.want)
+			if got := RemoteErrorAllowsFallback(tt.err); got != tt.want {
+				t.Fatalf("RemoteErrorAllowsFallback(%v)=%v, want %v", tt.err, got, tt.want)
 			}
 		})
 	}

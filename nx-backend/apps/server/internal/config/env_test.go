@@ -17,6 +17,7 @@ func TestLoadKnowledgeDefaults(t *testing.T) {
 		"LANGCHAIN_CONNECT_TIMEOUT_MS", "LANGCHAIN_RETRIEVE_TIMEOUT_MS",
 		"LANGCHAIN_GENERATE_TIMEOUT_SECONDS", "LANGCHAIN_STREAM_IDLE_TIMEOUT_SECONDS",
 		"LANGCHAIN_ROLLOUT_PERCENT",
+		"LANGCHAIN_SKILL_ROLLOUT_PERCENT",
 	} {
 		t.Setenv(key, "")
 	}
@@ -30,7 +31,7 @@ func TestLoadKnowledgeDefaults(t *testing.T) {
 		env.Knowledge.GenerateTimeoutSeconds != 90 || env.Knowledge.StreamIdleTimeoutSeconds != 30 {
 		t.Fatalf("unexpected knowledge timeout defaults: %+v", env.Knowledge)
 	}
-	if env.Knowledge.RolloutPercent != 100 {
+	if env.Knowledge.RolloutPercent != 100 || env.Knowledge.SkillRolloutPercent != 0 {
 		t.Fatalf("unexpected rollout default: %+v", env.Knowledge)
 	}
 }
@@ -77,16 +78,22 @@ func TestKnowledgeConfigValidatesRolloutPercent(t *testing.T) {
 			t.Fatalf("expected rollout validation error for %d, got %v", percent, err)
 		}
 	}
+	invalidSkill := valid
+	invalidSkill.SkillRolloutPercent = 101
+	if err := invalidSkill.Validate(); err == nil || !strings.Contains(err.Error(), "LANGCHAIN_SKILL_ROLLOUT_PERCENT") {
+		t.Fatalf("expected skill rollout validation error, got %v", err)
+	}
 }
 
 func TestLoadKnowledgeRolloutPercent(t *testing.T) {
 	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
 	t.Setenv("LANGCHAIN_ROLLOUT_PERCENT", "5")
+	t.Setenv("LANGCHAIN_SKILL_ROLLOUT_PERCENT", "20")
 
 	env := Load()
 
-	if env.Knowledge.RolloutPercent != 5 {
-		t.Fatalf("rollout percent=%d", env.Knowledge.RolloutPercent)
+	if env.Knowledge.RolloutPercent != 5 || env.Knowledge.SkillRolloutPercent != 20 {
+		t.Fatalf("rollout config=%+v", env.Knowledge)
 	}
 }
 

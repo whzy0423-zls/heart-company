@@ -65,6 +65,18 @@ func TestAppKnowledgeRemoteAdapterPreservesHTTPStatusForFallbackPolicy(t *testin
 	}
 }
 
+func TestAppKnowledgeRemoteAdapterOmitsInvalidOptionalProfileTypes(t *testing.T) {
+	client := &knowledgeRetrieveClientStub{}
+	adapter := appKnowledgeRemoteAdapter{client: client}
+
+	if _, err := adapter.Retrieve(context.Background(), appknowledge.RemoteRequest{Scene: "skill_chat"}); err != nil {
+		t.Fatal(err)
+	}
+	if client.request.Profile.MainType != nil || client.request.Profile.WingType != nil {
+		t.Fatalf("optional profile=%+v", client.request.Profile)
+	}
+}
+
 func TestAppKnowledgeRemoteAdapterRejectsDocumentOutsideRequestedScope(t *testing.T) {
 	wrongRelease := int64(999)
 	client := &knowledgeRetrieveClientStub{response: knowledgeclient.RetrievalResponse{

@@ -185,6 +185,7 @@ type KnowledgeConfig struct {
 	GenerateTimeoutSeconds   int
 	StreamIdleTimeoutSeconds int
 	RolloutPercent           int
+	SkillRolloutPercent      int
 }
 
 func (c KnowledgeConfig) Validate() error {
@@ -203,6 +204,9 @@ func (c KnowledgeConfig) Validate() error {
 	}
 	if c.RolloutPercent < 0 || c.RolloutPercent > 100 {
 		return fmt.Errorf("LANGCHAIN_ROLLOUT_PERCENT must be between 0 and 100")
+	}
+	if c.SkillRolloutPercent < 0 || c.SkillRolloutPercent > 100 {
+		return fmt.Errorf("LANGCHAIN_SKILL_ROLLOUT_PERCENT must be between 0 and 100")
 	}
 	return nil
 }
@@ -449,6 +453,7 @@ func Load() Env {
 		GenerateTimeoutSeconds:   positiveIntEnv("LANGCHAIN_GENERATE_TIMEOUT_SECONDS", 90),
 		StreamIdleTimeoutSeconds: positiveIntEnv("LANGCHAIN_STREAM_IDLE_TIMEOUT_SECONDS", 30),
 		RolloutPercent:           boundedIntEnv("LANGCHAIN_ROLLOUT_PERCENT", 100),
+		SkillRolloutPercent:      boundedIntEnv("LANGCHAIN_SKILL_ROLLOUT_PERCENT", 0),
 	}
 
 	videoTimeout, err := strconv.Atoi(getenv("VIDEO_TIMEOUT_SECONDS", "120"))

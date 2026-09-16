@@ -462,6 +462,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.appChat = chat.NewStore(database)
 	s.appChatQuota = newDatabaseAppChatQuotaManager(database)
 	knowledgeOptions := []appknowledge.Option{appknowledge.WithRolloutPercent(env.Knowledge.RolloutPercent)}
+	var remoteKnowledge appknowledge.RemoteRetriever
 	if env.Knowledge.Backend != "" && env.Knowledge.Backend != "local" {
 		if err := env.Knowledge.Validate(); err != nil {
 			panic("knowledge config: " + err.Error())
@@ -478,6 +479,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 			panic("knowledge client: " + clientErr.Error())
 		}
 		adapter := appKnowledgeRemoteAdapter{client: client, retrieveTimeout: time.Duration(env.Knowledge.RetrieveTimeoutMS) * time.Millisecond, metrics: s.metrics}
+		remoteKnowledge = adapter
 		knowledgeOptions = append(knowledgeOptions, appknowledge.WithRemote(env.Knowledge.Backend, adapter, func(comparison appknowledge.ShadowComparison) {
 			observeKnowledgeShadow(s.metrics, comparison, log.Printf)
 		}))
@@ -493,7 +495,11 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	)
 	s.skillCatalog = skillcatalog.NewStore(database)
 	s.skillChat = skillchat.NewStore(database)
-	s.skillChatRuntime = skillchat.NewRuntime(s.skillChat, theorystore.NewStore(database), skillChatRuntimeGenerator{server: s})
+	skillRuntimeOptions := []skillchat.RuntimeOption{}
+	if remoteKnowledge != nil {
+		skillRuntimeOptions = append(skillRuntimeOptions, skillchat.WithRemoteKnowledge(env.Knowledge.Backend, remoteKnowledge, env.Knowledge.SkillRolloutPercent))
+	}
+	s.skillChatRuntime = skillchat.NewRuntime(s.skillChat, theorystore.NewStore(database), skillChatRuntimeGenerator{server: s}, skillRuntimeOptions...)
 	s.userPreferences = userpreference.NewStore(database)
 	s.preferenceAsyncSlots = make(chan struct{}, 2)
 	s.preferenceAsyncTimeout = 2 * time.Second
