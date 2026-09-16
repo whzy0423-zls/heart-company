@@ -77,7 +77,12 @@ func TestRuntimeUsesOnlyFixedSkillVersionAndCurrentSessionContext(t *testing.T) 
 func TestRuntimeRemoteKnowledgeUsesOnlyPinnedSkillRelease(t *testing.T) {
 	store := &runtimeStoreStub{session: runnableRuntimeSession()}
 	search := &runtimeSearchStub{}
-	remote := &runtimeRemoteStub{result: appknowledge.RemoteResult{Documents: []rag.Document{{ID: "theory:711", Title: "远程", Content: "固定版本知识"}}}}
+	remote := &runtimeRemoteStub{result: appknowledge.RemoteResult{
+		Documents:       []rag.Document{{ID: "theory:711", Title: "远程", Content: "固定版本知识"}},
+		Citations:       []rag.Citation{{DocumentID: "theory:711", Source: "学习之道", Locator: map[string]any{"chapter": "划小圈"}}},
+		TraceID:         "trace-skill",
+		RetrievalMethod: "hybrid",
+	}}
 	gen := &runtimeGeneratorStub{answer: "回答"}
 	runtime := NewRuntime(store, search, gen, WithRemoteKnowledge("langchain", remote, 100))
 
@@ -96,6 +101,9 @@ func TestRuntimeRemoteKnowledgeUsesOnlyPinnedSkillRelease(t *testing.T) {
 	}
 	if remote.request.RequestID == "" || len(result.Trace.ChunkIDs) != 1 || result.Trace.ChunkIDs[0] != 711 {
 		t.Fatalf("request=%+v trace=%+v", remote.request, result.Trace)
+	}
+	if len(result.Citations) != 1 || result.TraceID != "trace-skill" || result.RetrievalMethod != "hybrid" {
+		t.Fatalf("retrieval metadata=%+v", result)
 	}
 }
 

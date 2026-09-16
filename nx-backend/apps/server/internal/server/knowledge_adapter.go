@@ -63,6 +63,7 @@ func (a appKnowledgeRemoteAdapter) Retrieve(ctx context.Context, input appknowle
 		return appknowledge.RemoteResult{}, &appknowledge.RemoteError{Err: err}
 	}
 	documents := make([]rag.Document, 0, len(response.Documents))
+	citations := make([]rag.Citation, 0, len(response.Documents))
 	for _, document := range response.Documents {
 		if !remoteDocumentInScope(document, input) {
 			return appknowledge.RemoteResult{}, &appknowledge.RemoteError{StatusCode: 502, Err: errors.New("knowledge service returned document outside requested scope")}
@@ -76,8 +77,9 @@ func (a appKnowledgeRemoteAdapter) Retrieve(ctx context.Context, input appknowle
 			tags = append(tags, fmt.Sprintf("release:%d", *document.ReleaseID))
 		}
 		documents = append(documents, rag.Document{ID: document.ID, Title: title, Content: document.Content, Tags: tags})
+		citations = append(citations, rag.Citation{DocumentID: document.ID, Source: title, Locator: document.Locator})
 	}
-	return appknowledge.RemoteResult{Documents: documents, RetrievalMethod: response.Trace.RetrievalMethod}, nil
+	return appknowledge.RemoteResult{Documents: documents, Citations: citations, RetrievalMethod: response.Trace.RetrievalMethod, TraceID: response.RequestID}, nil
 }
 
 func remoteDocumentInScope(document knowledgeclient.Document, input appknowledge.RemoteRequest) bool {

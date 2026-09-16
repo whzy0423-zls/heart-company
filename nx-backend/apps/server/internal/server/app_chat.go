@@ -291,11 +291,23 @@ func (s *Server) retrieveKnowledgeForScene(ctx context.Context, coordinator *app
 		return result.Documents, nil, nil
 	}
 	return result.Documents, &chat.KnowledgeTrace{
-		CardID:        result.Trace.CardID,
-		EnneagramType: result.Trace.EnneagramType,
-		CardRevision:  result.Trace.CardRevision,
-		LayerHits:     layerHits,
+		CardID:          result.Trace.CardID,
+		EnneagramType:   result.Trace.EnneagramType,
+		CardRevision:    result.Trace.CardRevision,
+		LayerHits:       layerHits,
+		Citations:       result.Citations,
+		TraceID:         result.Trace.TraceID,
+		RetrievalMethod: result.Trace.RetrievalMethod,
 	}, nil
+}
+
+func attachKnowledgeMetadata(answer *rag.Answer, trace *chat.KnowledgeTrace) {
+	if answer == nil || trace == nil {
+		return
+	}
+	answer.Citations = append([]rag.Citation(nil), trace.Citations...)
+	answer.TraceID = trace.TraceID
+	answer.RetrievalMethod = trace.RetrievalMethod
 }
 
 func (s *Server) saveAppChatPair(ctx context.Context, sessionID int64, question, answer string, sources json.RawMessage, trace *chat.KnowledgeTrace) (int64, error) {
@@ -576,6 +588,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
 		return
 	}
+	attachKnowledgeMetadata(&ans, knowledgeTrace)
 	ans.Answer = answerhygiene.Clean(body.Question, ans.Answer)
 
 	sourcesJSON, _ := json.Marshal(ans.Sources)
@@ -833,6 +846,7 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			send(appChatStreamEvent{kind: appChatStreamError, publicError: "回答生成失败，请重试", errorPhase: "provider"})
 			return
 		}
+		attachKnowledgeMetadata(&ans, knowledgeTrace)
 		if err := emitSafeSentences(sentenceBuffer.Flush()); err != nil {
 			return
 		}

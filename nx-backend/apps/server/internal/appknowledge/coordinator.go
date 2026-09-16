@@ -38,6 +38,7 @@ type RemoteRequest struct {
 
 type RemoteResult struct {
 	Documents       []rag.Document
+	Citations       []rag.Citation
 	RetrievalMethod string
 	TraceID         string
 }
@@ -108,14 +109,17 @@ type LayerHit struct {
 }
 
 type Trace struct {
-	CardID        int64               `json:"card_id"`
-	EnneagramType *int                `json:"enneagram_type,omitempty"`
-	CardRevision  int64               `json:"card_revision"`
-	LayerHits     map[string]LayerHit `json:"layer_hits"`
+	CardID          int64               `json:"card_id"`
+	EnneagramType   *int                `json:"enneagram_type,omitempty"`
+	CardRevision    int64               `json:"card_revision"`
+	LayerHits       map[string]LayerHit `json:"layer_hits"`
+	TraceID         string              `json:"trace_id,omitempty"`
+	RetrievalMethod string              `json:"retrieval_method,omitempty"`
 }
 
 type Result struct {
 	Documents []rag.Document
+	Citations []rag.Citation
 	Trace     Trace
 }
 
@@ -307,7 +311,9 @@ func (c *Coordinator) retrieveRemote(ctx context.Context, resolved ConversationR
 		value := resolved.MainType
 		trace.EnneagramType = &value
 	}
-	return Result{Documents: remote.Documents, Trace: trace}, nil
+	trace.TraceID = remote.TraceID
+	trace.RetrievalMethod = remote.RetrievalMethod
+	return Result{Documents: remote.Documents, Citations: remote.Citations, Trace: trace}, nil
 }
 
 func (c *Coordinator) compareShadow(ctx context.Context, request RemoteRequest, local Result) {

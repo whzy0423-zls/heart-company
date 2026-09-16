@@ -203,6 +203,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
 			return
 		}
+		attachKnowledgeMetadata(&answer, knowledgeTrace)
 		answer.Answer = answerhygiene.Clean(transcript, answer.Answer)
 	}
 

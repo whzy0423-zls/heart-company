@@ -119,8 +119,11 @@ func (s *Server) appSkillSessionVoice(w http.ResponseWriter, r *http.Request, ap
 	}
 	httpx.OK(w, skillVoiceResponse{
 		UserMessage: skillVoiceUserMessage(sessionID, userMessageID, durationMs),
-		Answer:      rag.Answer{Answer: result.Answer, Sources: result.Sources, Suggestions: result.Suggestions},
-		MessageID:   assistantMessageID,
+		Answer: rag.Answer{
+			Answer: result.Answer, Sources: result.Sources, Suggestions: result.Suggestions,
+			Citations: result.Citations, TraceID: result.TraceID, RetrievalMethod: result.RetrievalMethod,
+		},
+		MessageID: assistantMessageID,
 	})
 }
 

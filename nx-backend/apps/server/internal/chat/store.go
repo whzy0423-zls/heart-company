@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
 var ErrNotFound = errors.New("chat: not found")
@@ -50,10 +52,13 @@ type ConversationState struct {
 }
 
 type KnowledgeTrace struct {
-	CardID        int64
-	EnneagramType *int
-	CardRevision  int64
-	LayerHits     json.RawMessage
+	CardID          int64
+	EnneagramType   *int
+	CardRevision    int64
+	LayerHits       json.RawMessage
+	Citations       []rag.Citation
+	TraceID         string
+	RetrievalMethod string
 }
 
 type Store struct{ db *sql.DB }

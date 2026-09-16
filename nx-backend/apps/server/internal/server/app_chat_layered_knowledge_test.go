@@ -118,10 +118,42 @@ func TestAppChatAskStreamEmitsKnowledgeFailureWithoutDone(t *testing.T) {
 	}
 }
 
-type failingKnowledgeRetriever struct{ err error }
+func TestAppChatAskExposesDisplaySafeRemoteCitations(t *testing.T) {
+	store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	store.cardID = 77
+	resolver := &layeredKnowledgeResolver{mainType: 3, revision: 1}
+	server := newLayeredKnowledgeServer(t, store, resolver, newLayeredKnowledgeSearcher(), &layeredKnowledgeGenerator{})
+	server.appKnowledge = appknowledge.NewCoordinator(
+		resolver,
+		newLayeredKnowledgeSearcher(),
+		newLayeredKnowledgeSearcher(),
+		appknowledge.WithRemote("langchain", failingKnowledgeRetriever{result: appknowledge.RemoteResult{
+			Documents: []rag.Document{{ID: "doc-1", Title: "学习之道", Content: "划小圈"}},
+			Citations: []rag.Citation{{DocumentID: "doc-1", Source: "学习之道", Locator: map[string]any{"chapter": "划小圈"}}},
+			TraceID:   "trace-1", RetrievalMethod: "hybrid",
+		}}, nil),
+	)
+
+	response := httptest.NewRecorder()
+	server.appChatRouter(response, layeredKnowledgeRequest(t, "/api/app/chat/sessions/42/ask", layeredKnowledgeQuestion))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	for _, expected := range []string{`"documentId":"doc-1"`, `"source":"学习之道"`, `"traceId":"trace-1"`, `"retrievalMethod":"hybrid"`} {
+		if !strings.Contains(response.Body.String(), expected) {
+			t.Fatalf("response missing %s: %s", expected, response.Body.String())
+		}
+	}
+}
+
+type failingKnowledgeRetriever struct {
+	result appknowledge.RemoteResult
+	err    error
+}
 
 func (r failingKnowledgeRetriever) Retrieve(context.Context, appknowledge.RemoteRequest) (appknowledge.RemoteResult, error) {
-	return appknowledge.RemoteResult{}, r.err
+	return r.result, r.err
 }
 
 func TestAppChatTextEndpointsResolveAndPassRequestedTier(t *testing.T) {

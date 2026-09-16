@@ -57,6 +57,9 @@ type Result struct {
 	Answer             string          `json:"answer"`
 	Sources            []rag.Source    `json:"sources"`
 	Suggestions        []string        `json:"suggestions"`
+	Citations          []rag.Citation  `json:"citations,omitempty"`
+	TraceID            string          `json:"traceId,omitempty"`
+	RetrievalMethod    string          `json:"retrievalMethod,omitempty"`
 	MessageID          int64           `json:"messageId"`
 	GenerationRevision int64           `json:"-"`
 	Trace              GenerationTrace `json:"-"`
@@ -137,10 +140,11 @@ func (r *Runtime) Generate(ctx context.Context, appUserID, sessionID int64, ques
 	if err != nil {
 		return Result{}, err
 	}
-	documents, err := r.retrieveKnowledge(ctx, appUserID, session, question)
+	retrieval, err := r.retrieveKnowledge(ctx, appUserID, session, question)
 	if err != nil {
 		return Result{}, fmt.Errorf("search skill knowledge: %w", err)
 	}
+	documents := retrieval.Documents
 	generationSources, publicSources := skillSources(documents)
 	input := rag.GenerateInput{
 		History:             history,
@@ -175,12 +179,17 @@ func (r *Runtime) Generate(ctx context.Context, appUserID, sessionID int64, ques
 		TheoryReleaseID:    session.TheoryReleaseID,
 		ChunkIDs:           skillChunkIDs(documents),
 	}
-	return Result{Answer: answer, Sources: publicSources, Suggestions: []string{}, GenerationRevision: session.GenerationRevision, Trace: trace}, nil
+	return Result{
+		Answer: answer, Sources: publicSources, Suggestions: []string{},
+		Citations: retrieval.Citations, TraceID: retrieval.TraceID, RetrievalMethod: retrieval.RetrievalMethod,
+		GenerationRevision: session.GenerationRevision, Trace: trace,
+	}, nil
 }
 
-func (r *Runtime) retrieveKnowledge(ctx context.Context, appUserID int64, session Session, question string) ([]rag.Document, error) {
-	local := func() ([]rag.Document, error) {
-		return r.searcher.SearchReleaseChunks(ctx, session.TheoryReleaseID, question, skillSearchLimit, skillSearchMinScore)
+func (r *Runtime) retrieveKnowledge(ctx context.Context, appUserID int64, session Session, question string) (appknowledge.RemoteResult, error) {
+	local := func() (appknowledge.RemoteResult, error) {
+		documents, err := r.searcher.SearchReleaseChunks(ctx, session.TheoryReleaseID, question, skillSearchLimit, skillSearchMinScore)
+		return appknowledge.RemoteResult{Documents: documents, RetrievalMethod: "local"}, err
 	}
 	request := appknowledge.RemoteRequest{
 		RequestID:        newSkillRequestID(session.ID),
@@ -194,16 +203,16 @@ func (r *Runtime) retrieveKnowledge(ctx context.Context, appUserID int64, sessio
 	case "langchain":
 		if selected && r.remote != nil {
 			result, err := r.remote.Retrieve(ctx, request)
-			return result.Documents, err
+			return result, err
 		}
 	case "fallback":
 		if selected && r.remote != nil {
 			result, err := r.remote.Retrieve(ctx, request)
 			if err == nil {
-				return result.Documents, nil
+				return result, nil
 			}
 			if !appknowledge.RemoteErrorAllowsFallback(err) {
-				return nil, err
+				return appknowledge.RemoteResult{}, err
 			}
 		}
 	case "shadow":

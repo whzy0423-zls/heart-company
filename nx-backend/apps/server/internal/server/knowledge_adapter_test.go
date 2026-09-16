@@ -34,7 +34,7 @@ func TestAppKnowledgeRemoteAdapterMapsScopeAndDocuments(t *testing.T) {
 	releaseID := int64(101)
 	client := &knowledgeRetrieveClientStub{response: knowledgeclient.RetrievalResponse{
 		RequestID: "req-1",
-		Documents: []knowledgeclient.Document{{ID: "doc-1", Content: "内容", Library: "theory", ReleaseID: &releaseID, Source: "book.pdf"}},
+		Documents: []knowledgeclient.Document{{ID: "doc-1", Content: "内容", Library: "theory", ReleaseID: &releaseID, Source: "book.pdf", Locator: map[string]any{"page": 12}}},
 		Trace:     knowledgeclient.RetrievalTrace{RetrievalMethod: "hybrid"},
 	}}
 	adapter := appKnowledgeRemoteAdapter{client: client}
@@ -51,6 +51,9 @@ func TestAppKnowledgeRemoteAdapterMapsScopeAndDocuments(t *testing.T) {
 	}
 	if len(result.Documents) != 1 || result.Documents[0].Title != "book.pdf" || result.RetrievalMethod != "hybrid" {
 		t.Fatalf("result=%+v", result)
+	}
+	if result.TraceID != "req-1" || len(result.Citations) != 1 || result.Citations[0].Locator["page"] != 12 {
+		t.Fatalf("retrieval metadata=%+v", result)
 	}
 }
 

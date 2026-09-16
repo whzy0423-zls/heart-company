@@ -49,6 +49,12 @@ type Source struct {
 	Title   string `json:"title"`
 }
 
+type Citation struct {
+	DocumentID string         `json:"documentId"`
+	Source     string         `json:"source"`
+	Locator    map[string]any `json:"locator,omitempty"`
+}
+
 type UserProfile struct {
 	Nickname string   `json:"nickname"`
 	MainType int      `json:"mainType"`
@@ -82,9 +88,12 @@ type AskInput struct {
 }
 
 type Answer struct {
-	Answer      string   `json:"answer"`
-	Sources     []Source `json:"sources"`
-	Suggestions []string `json:"suggestions"`
+	Answer          string     `json:"answer"`
+	Sources         []Source   `json:"sources"`
+	Suggestions     []string   `json:"suggestions"`
+	Citations       []Citation `json:"citations,omitempty"`
+	TraceID         string     `json:"traceId,omitempty"`
+	RetrievalMethod string     `json:"retrievalMethod,omitempty"`
 }
 
 type Service struct {
