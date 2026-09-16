@@ -1,4 +1,4 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from hmac import compare_digest
 
 from fastapi import Depends, HTTPException, status
@@ -6,10 +6,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.config import Settings, get_settings
 from app.domain.documents import RetrievedDocument
-from app.domain.queries import RetrievalQuery
+from app.domain.queries import AnswerQuery, RetrievalQuery
 
 
 Retriever = Callable[[RetrievalQuery], Awaitable[list[RetrievedDocument]]]
+AnswerGenerator = Callable[[AnswerQuery, list[RetrievedDocument]], AsyncIterator[str]]
 bearer = HTTPBearer(auto_error=False)
 
 
@@ -19,6 +20,19 @@ async def fixture_retriever(_query: RetrievalQuery) -> list[RetrievedDocument]:
 
 def get_retriever() -> Retriever:
     return fixture_retriever
+
+
+async def fixture_answer_generator(
+    query: AnswerQuery, documents: list[RetrievedDocument]
+) -> AsyncIterator[str]:
+    if documents:
+        yield documents[0].content
+    else:
+        yield f"我已收到你的问题：{query.query}"
+
+
+def get_answer_generator() -> AnswerGenerator:
+    return fixture_answer_generator
 
 
 def require_service_token(
@@ -37,4 +51,3 @@ def require_service_token(
             detail="invalid service token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-

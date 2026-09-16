@@ -30,3 +30,20 @@ class RetrievalResponse(BaseModel):
     request_id: str = Field(alias="requestId")
     documents: list[RetrievedDocument]
     trace: RetrievalTrace
+
+
+class Citation(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    document_id: str = Field(alias="documentId")
+    source: str
+    locator: dict[str, Any] = Field(default_factory=dict)
+
+
+class AnswerResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    request_id: str = Field(alias="requestId")
+    answer: str
+    citations: list[Citation]
+    trace_id: str = Field(alias="traceId")

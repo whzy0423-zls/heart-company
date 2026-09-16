@@ -44,3 +44,12 @@ class RetrievalQuery(APIModel):
     retrieval: RetrievalOptions = Field(default_factory=RetrievalOptions)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+
+class ChatMessage(APIModel):
+    role: Literal["system", "user", "assistant"]
+    content: str = Field(min_length=1, max_length=50_000)
+
+
+class AnswerQuery(RetrievalQuery):
+    messages: list[ChatMessage] = Field(default_factory=list)
+    conversation_summary: str = Field(default="", alias="conversationSummary", max_length=50_000)
