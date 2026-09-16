@@ -2,7 +2,9 @@ package appknowledge
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,11 +16,56 @@ import (
 var ErrInvalidInput = errors.New("app knowledge input is invalid")
 
 type Input struct {
+	RequestID string
 	UserID    int64
 	SessionID int64
 	CardID    int64
 	Query     string
 }
+
+type RemoteRequest struct {
+	RequestID           string
+	Query               string
+	Scene               string
+	Public              bool
+	TheoryReleaseIDs    []int64
+	EnneagramReleaseIDs []int64
+	MainType            int
+	WingType            int
+}
+
+type RemoteResult struct {
+	Documents       []rag.Document
+	RetrievalMethod string
+	TraceID         string
+}
+
+type RemoteRetriever interface {
+	Retrieve(context.Context, RemoteRequest) (RemoteResult, error)
+}
+
+type RemoteError struct {
+	StatusCode int
+	Err        error
+}
+
+func (e *RemoteError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return fmt.Sprintf("remote knowledge service returned HTTP %d", e.StatusCode)
+}
+
+func (e *RemoteError) Unwrap() error { return e.Err }
+
+type ShadowComparison struct {
+	RequestID         string
+	LocalDocumentIDs  []string
+	RemoteDocumentIDs []string
+	RemoteError       error
+}
+
+type ShadowObserver func(ShadowComparison)
 
 type ConversationResolution struct {
 	Resolution
@@ -76,15 +123,26 @@ func WithLimits(limits Limits) Option {
 	}
 }
 
+func WithRemote(backend string, remote RemoteRetriever, observer ShadowObserver) Option {
+	return func(coordinator *Coordinator) {
+		coordinator.backend = strings.ToLower(strings.TrimSpace(backend))
+		coordinator.remote = remote
+		coordinator.shadowObserver = observer
+	}
+}
+
 type Coordinator struct {
-	resolver ConversationResolver
-	public   PublicSearcher
-	releases ReleaseSearcher
-	limits   Limits
+	resolver       ConversationResolver
+	public         PublicSearcher
+	releases       ReleaseSearcher
+	limits         Limits
+	backend        string
+	remote         RemoteRetriever
+	shadowObserver ShadowObserver
 }
 
 func NewCoordinator(resolver ConversationResolver, public PublicSearcher, releases ReleaseSearcher, options ...Option) *Coordinator {
-	coordinator := &Coordinator{resolver: resolver, public: public, releases: releases, limits: defaultLimits}
+	coordinator := &Coordinator{resolver: resolver, public: public, releases: releases, limits: defaultLimits, backend: "local"}
 	for _, option := range options {
 		option(coordinator)
 	}
@@ -103,6 +161,29 @@ func (c *Coordinator) Retrieve(ctx context.Context, input Input) (Result, error)
 	if resolved.CardID != input.CardID || resolved.CardRevision <= 0 {
 		return Result{}, fmt.Errorf("resolve conversation knowledge: %w", ErrInvalidInput)
 	}
+	remoteRequest := remoteRequestFromResolution(input, resolved)
+	switch c.backend {
+	case "langchain":
+		return c.retrieveRemote(ctx, resolved, remoteRequest)
+	case "fallback":
+		result, remoteErr := c.retrieveRemote(ctx, resolved, remoteRequest)
+		if remoteErr == nil {
+			return result, nil
+		}
+		if !remoteErrorAllowsFallback(remoteErr) {
+			return Result{}, remoteErr
+		}
+	case "shadow":
+		local := c.retrieveLocal(ctx, input.Query, resolved)
+		if c.remote != nil {
+			go c.compareShadow(context.WithoutCancel(ctx), remoteRequest, local)
+		}
+		return local, nil
+	}
+	return c.retrieveLocal(ctx, input.Query, resolved), nil
+}
+
+func (c *Coordinator) retrieveLocal(ctx context.Context, query string, resolved ConversationResolution) Result {
 
 	trace := Trace{
 		CardID: resolved.CardID, CardRevision: resolved.CardRevision,
@@ -120,9 +201,9 @@ func (c *Coordinator) Retrieve(ctx context.Context, input Input) (Result, error)
 		addLayerDiagnostic(trace.LayerHits, diagnostic)
 	}
 
-	publicDocs := c.searchPublic(ctx, input.Query, &trace)
-	theoryDocs := c.searchBinding(ctx, input.Query, resolved.Theory, c.limits.Theory, &trace)
-	typeDocs := c.searchType(ctx, input.Query, resolved, &trace)
+	publicDocs := c.searchPublic(ctx, query, &trace)
+	theoryDocs := c.searchBinding(ctx, query, resolved.Theory, c.limits.Theory, &trace)
+	typeDocs := c.searchType(ctx, query, resolved, &trace)
 
 	documentsByLayer := map[string][]rag.Document{
 		LayerPublic: publicDocs, LayerTheory: theoryDocs, LayerEnneagramType: typeDocs,
@@ -140,7 +221,69 @@ func (c *Coordinator) Retrieve(ctx context.Context, input Input) (Result, error)
 	for _, layer := range []string{LayerPublic, LayerTheory, LayerEnneagramType} {
 		documents = append(documents, selected[layer]...)
 	}
-	return Result{Documents: documents, Trace: trace}, nil
+	return Result{Documents: documents, Trace: trace}
+}
+
+func remoteRequestFromResolution(input Input, resolved ConversationResolution) RemoteRequest {
+	requestID := strings.TrimSpace(input.RequestID)
+	if requestID == "" {
+		bytes := make([]byte, 16)
+		if _, err := rand.Read(bytes); err == nil {
+			requestID = hex.EncodeToString(bytes)
+		} else {
+			requestID = fmt.Sprintf("app-chat-%d-%d", input.SessionID, input.CardID)
+		}
+	}
+	request := RemoteRequest{RequestID: requestID, Query: input.Query, Scene: "app_chat", Public: true, MainType: resolved.MainType}
+	if resolved.Theory != nil {
+		request.TheoryReleaseIDs = []int64{resolved.Theory.ReleaseID}
+	}
+	if resolved.EnneagramType != nil {
+		request.EnneagramReleaseIDs = []int64{resolved.EnneagramType.ReleaseID}
+	}
+	return request
+}
+
+func (c *Coordinator) retrieveRemote(ctx context.Context, resolved ConversationResolution, request RemoteRequest) (Result, error) {
+	if c.remote == nil {
+		return Result{}, errors.New("remote knowledge retriever unavailable")
+	}
+	remote, err := c.remote.Retrieve(ctx, request)
+	if err != nil {
+		return Result{}, err
+	}
+	trace := Trace{CardID: resolved.CardID, CardRevision: resolved.CardRevision, LayerHits: map[string]LayerHit{
+		LayerPublic: {LibraryKey: LayerPublic, ChunkIDs: remoteDocumentIDs(remote.Documents), Diagnostics: []Diagnostic{{Layer: LayerPublic, Code: "remote_" + remote.RetrievalMethod}}},
+		LayerTheory: {ChunkIDs: []string{}}, LayerEnneagramType: {ChunkIDs: []string{}},
+	}}
+	if resolved.MainType >= 1 && resolved.MainType <= 9 {
+		value := resolved.MainType
+		trace.EnneagramType = &value
+	}
+	return Result{Documents: remote.Documents, Trace: trace}, nil
+}
+
+func (c *Coordinator) compareShadow(ctx context.Context, request RemoteRequest, local Result) {
+	remote, err := c.remote.Retrieve(ctx, request)
+	if c.shadowObserver != nil {
+		c.shadowObserver(ShadowComparison{RequestID: request.RequestID, LocalDocumentIDs: remoteDocumentIDs(local.Documents), RemoteDocumentIDs: remoteDocumentIDs(remote.Documents), RemoteError: err})
+	}
+}
+
+func remoteDocumentIDs(documents []rag.Document) []string {
+	ids := make([]string, len(documents))
+	for index := range documents {
+		ids[index] = documents[index].ID
+	}
+	return ids
+}
+
+func remoteErrorAllowsFallback(err error) bool {
+	var remoteErr *RemoteError
+	if !errors.As(err, &remoteErr) || remoteErr.StatusCode == 0 {
+		return true
+	}
+	return remoteErr.StatusCode == 408 || remoteErr.StatusCode == 429 || remoteErr.StatusCode >= 500
 }
 
 func (c *Coordinator) searchPublic(ctx context.Context, query string, trace *Trace) []rag.Document {

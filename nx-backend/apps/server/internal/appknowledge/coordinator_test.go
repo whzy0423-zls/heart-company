@@ -37,6 +37,91 @@ type releaseSearchStub struct {
 	releaseIDs    []int64
 }
 
+type remoteRetrieverStub struct {
+	result RemoteResult
+	err    error
+	input  RemoteRequest
+	calls  int
+}
+
+func (s *remoteRetrieverStub) Retrieve(_ context.Context, input RemoteRequest) (RemoteResult, error) {
+	s.calls++
+	s.input = input
+	return s.result, s.err
+}
+
+func TestCoordinatorLangChainUsesResolvedReleaseScope(t *testing.T) {
+	typeThree := 3
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{
+		CardID: 9, CardRevision: 4, MainType: 3,
+		Resolution: Resolution{
+			Theory:        &Binding{Layer: LayerTheory, ReleaseID: 101},
+			EnneagramType: &Binding{Layer: LayerEnneagramType, ReleaseID: 103, EnneagramType: &typeThree, LibraryKey: "enneagram-type-03"},
+		},
+	}}
+	public := &publicSearchStub{}
+	remote := &remoteRetrieverStub{result: RemoteResult{Documents: []rag.Document{{ID: "remote", Title: "远程", Content: "结果"}}, RetrievalMethod: "hybrid"}}
+	coordinator := NewCoordinator(resolver, public, &releaseSearchStub{}, WithRemote("langchain", remote, nil))
+
+	result, err := coordinator.Retrieve(context.Background(), Input{UserID: 7, SessionID: 8, CardID: 9, Query: "问题", RequestID: "req-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(documentIDs(result.Documents), []string{"remote"}) || public.calls != 0 {
+		t.Fatalf("result=%+v local calls=%d", result, public.calls)
+	}
+	if !reflect.DeepEqual(remote.input.TheoryReleaseIDs, []int64{101}) || !reflect.DeepEqual(remote.input.EnneagramReleaseIDs, []int64{103}) || remote.input.MainType != 3 {
+		t.Fatalf("remote scope = %+v", remote.input)
+	}
+}
+
+func TestCoordinatorGeneratesRemoteRequestIDWhenCallerHasNone(t *testing.T) {
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{CardID: 9, CardRevision: 1}}
+	remote := &remoteRetrieverStub{result: RemoteResult{}}
+	coordinator := NewCoordinator(resolver, &publicSearchStub{}, &releaseSearchStub{}, WithRemote("langchain", remote, nil))
+
+	if _, err := coordinator.Retrieve(context.Background(), Input{UserID: 7, SessionID: 8, CardID: 9, Query: "问题"}); err != nil {
+		t.Fatal(err)
+	}
+	if remote.input.RequestID == "" {
+		t.Fatal("remote request ID must not be empty")
+	}
+}
+
+func TestCoordinatorFallbackUsesLocalOnlyForRetryableRemoteErrors(t *testing.T) {
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{CardID: 9, CardRevision: 1}}
+	public := &publicSearchStub{docs: []rag.Document{{ID: "local", Title: "本地", Content: "结果"}}}
+	remote := &remoteRetrieverStub{err: &RemoteError{StatusCode: 503}}
+	coordinator := NewCoordinator(resolver, public, &releaseSearchStub{}, WithRemote("fallback", remote, nil))
+
+	result, err := coordinator.Retrieve(context.Background(), Input{UserID: 7, SessionID: 8, CardID: 9, Query: "问题"})
+	if err != nil || !reflect.DeepEqual(documentIDs(result.Documents), []string{"local"}) {
+		t.Fatalf("expected local fallback, result=%+v err=%v", result, err)
+	}
+
+	remote.err = &RemoteError{StatusCode: 400}
+	if _, err := coordinator.Retrieve(context.Background(), Input{UserID: 7, SessionID: 8, CardID: 9, Query: "问题"}); err == nil {
+		t.Fatal("4xx contract errors must not silently fall back")
+	}
+}
+
+func TestCoordinatorShadowReturnsLocalAndReportsComparison(t *testing.T) {
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{CardID: 9, CardRevision: 1}}
+	public := &publicSearchStub{docs: []rag.Document{{ID: "local", Title: "本地", Content: "结果"}}}
+	remote := &remoteRetrieverStub{result: RemoteResult{Documents: []rag.Document{{ID: "remote", Title: "远程", Content: "结果"}}}}
+	reported := make(chan ShadowComparison, 1)
+	coordinator := NewCoordinator(resolver, public, &releaseSearchStub{}, WithRemote("shadow", remote, func(comparison ShadowComparison) { reported <- comparison }))
+
+	result, err := coordinator.Retrieve(context.Background(), Input{UserID: 7, SessionID: 8, CardID: 9, Query: "问题"})
+	if err != nil || !reflect.DeepEqual(documentIDs(result.Documents), []string{"local"}) {
+		t.Fatalf("expected local result, result=%+v err=%v", result, err)
+	}
+	comparison := <-reported
+	if !reflect.DeepEqual(comparison.LocalDocumentIDs, []string{"local"}) || !reflect.DeepEqual(comparison.RemoteDocumentIDs, []string{"remote"}) {
+		t.Fatalf("comparison=%+v", comparison)
+	}
+}
+
 func (s *releaseSearchStub) SearchReleaseChunks(_ context.Context, releaseID int64, _ string, _ int, _ float64) ([]rag.Document, error) {
 	s.releaseIDs = append(s.releaseIDs, releaseID)
 	return append([]rag.Document(nil), s.docsByRelease[releaseID]...), s.errors[releaseID]

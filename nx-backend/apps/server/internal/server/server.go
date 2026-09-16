@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"mime"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -44,6 +45,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/friends"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/image"
+	"nine-xing/nx-backend/apps/server/internal/knowledgeclient"
 	"nine-xing/nx-backend/apps/server/internal/lifestory"
 	"nine-xing/nx-backend/apps/server/internal/llm"
 	"nine-xing/nx-backend/apps/server/internal/location"
@@ -459,10 +461,32 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	}
 	s.appChat = chat.NewStore(database)
 	s.appChatQuota = newDatabaseAppChatQuotaManager(database)
+	knowledgeOptions := []appknowledge.Option{}
+	if env.Knowledge.Backend != "" && env.Knowledge.Backend != "local" {
+		if err := env.Knowledge.Validate(); err != nil {
+			panic("knowledge config: " + err.Error())
+		}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.DialContext = (&net.Dialer{Timeout: time.Duration(env.Knowledge.ConnectTimeoutMS) * time.Millisecond}).DialContext
+		client, clientErr := knowledgeclient.New(knowledgeclient.Config{
+			BaseURL:           env.Knowledge.ServiceURL,
+			Token:             env.Knowledge.ServiceToken,
+			HTTPClient:        &http.Client{Transport: transport},
+			StreamIdleTimeout: time.Duration(env.Knowledge.StreamIdleTimeoutSeconds) * time.Second,
+		})
+		if clientErr != nil {
+			panic("knowledge client: " + clientErr.Error())
+		}
+		adapter := appKnowledgeRemoteAdapter{client: client, retrieveTimeout: time.Duration(env.Knowledge.RetrieveTimeoutMS) * time.Millisecond}
+		knowledgeOptions = append(knowledgeOptions, appknowledge.WithRemote(env.Knowledge.Backend, adapter, func(comparison appknowledge.ShadowComparison) {
+			log.Printf("knowledge shadow request=%s local=%v remote=%v error=%v", comparison.RequestID, comparison.LocalDocumentIDs, comparison.RemoteDocumentIDs, comparison.RemoteError)
+		}))
+	}
 	s.appKnowledge = appknowledge.NewCoordinator(
 		appknowledge.NewResolver(database),
 		appKnowledgePublicSearcher{server: s},
 		theorystore.NewStore(database),
+		knowledgeOptions...,
 	)
 	s.skillCatalog = skillcatalog.NewStore(database)
 	s.skillChat = skillchat.NewStore(database)
