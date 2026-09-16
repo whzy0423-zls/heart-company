@@ -19,6 +19,7 @@ func TestLoadKnowledgeDefaults(t *testing.T) {
 		"LANGCHAIN_ROLLOUT_PERCENT",
 		"LANGCHAIN_SKILL_ROLLOUT_PERCENT",
 		"LANGCHAIN_XINZHILI_ROLLOUT_PERCENT",
+		"LANGCHAIN_XINZHILI_REALTIME_ROLLOUT_PERCENT",
 	} {
 		t.Setenv(key, "")
 	}
@@ -32,7 +33,7 @@ func TestLoadKnowledgeDefaults(t *testing.T) {
 		env.Knowledge.GenerateTimeoutSeconds != 90 || env.Knowledge.StreamIdleTimeoutSeconds != 30 {
 		t.Fatalf("unexpected knowledge timeout defaults: %+v", env.Knowledge)
 	}
-	if env.Knowledge.RolloutPercent != 100 || env.Knowledge.SkillRolloutPercent != 0 || env.Knowledge.XinzhiliRolloutPercent != 0 {
+	if env.Knowledge.RolloutPercent != 100 || env.Knowledge.SkillRolloutPercent != 0 || env.Knowledge.XinzhiliRolloutPercent != 0 || env.Knowledge.XinzhiliRealtimeRolloutPercent != 0 {
 		t.Fatalf("unexpected rollout default: %+v", env.Knowledge)
 	}
 }
@@ -89,6 +90,11 @@ func TestKnowledgeConfigValidatesRolloutPercent(t *testing.T) {
 	if err := invalidXinzhili.Validate(); err == nil || !strings.Contains(err.Error(), "LANGCHAIN_XINZHILI_ROLLOUT_PERCENT") {
 		t.Fatalf("expected xinzhili rollout validation error, got %v", err)
 	}
+	invalidRealtime := valid
+	invalidRealtime.XinzhiliRealtimeRolloutPercent = 101
+	if err := invalidRealtime.Validate(); err == nil || !strings.Contains(err.Error(), "LANGCHAIN_XINZHILI_REALTIME_ROLLOUT_PERCENT") {
+		t.Fatalf("expected xinzhili realtime rollout validation error, got %v", err)
+	}
 }
 
 func TestLoadKnowledgeRolloutPercent(t *testing.T) {
@@ -96,10 +102,11 @@ func TestLoadKnowledgeRolloutPercent(t *testing.T) {
 	t.Setenv("LANGCHAIN_ROLLOUT_PERCENT", "5")
 	t.Setenv("LANGCHAIN_SKILL_ROLLOUT_PERCENT", "20")
 	t.Setenv("LANGCHAIN_XINZHILI_ROLLOUT_PERCENT", "50")
+	t.Setenv("LANGCHAIN_XINZHILI_REALTIME_ROLLOUT_PERCENT", "75")
 
 	env := Load()
 
-	if env.Knowledge.RolloutPercent != 5 || env.Knowledge.SkillRolloutPercent != 20 || env.Knowledge.XinzhiliRolloutPercent != 50 {
+	if env.Knowledge.RolloutPercent != 5 || env.Knowledge.SkillRolloutPercent != 20 || env.Knowledge.XinzhiliRolloutPercent != 50 || env.Knowledge.XinzhiliRealtimeRolloutPercent != 75 {
 		t.Fatalf("rollout config=%+v", env.Knowledge)
 	}
 }

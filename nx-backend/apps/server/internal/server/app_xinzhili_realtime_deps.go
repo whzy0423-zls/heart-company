@@ -154,7 +154,7 @@ func (a serverXinzhiliLayeredKnowledge) Retrieve(ctx context.Context, userID, co
 	if a.server == nil {
 		return xinzhili.LayeredKnowledgeResult{}, errors.New("layered knowledge unavailable")
 	}
-	documents, trace, err := a.server.retrieveXinzhiliKnowledge(ctx, userID, conversationID, cardID, query)
+	documents, trace, err := a.server.retrieveXinzhiliRealtimeKnowledge(ctx, userID, conversationID, cardID, query)
 	if err != nil {
 		return xinzhili.LayeredKnowledgeResult{}, err
 	}

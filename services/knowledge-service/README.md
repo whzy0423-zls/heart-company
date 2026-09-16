@@ -28,3 +28,6 @@ python scripts/index_chunks.py var/knowledge/chunks.jsonl --index-version bge-m3
 python scripts/build_evaluation.py var/knowledge/evaluation-500.jsonl
 python scripts/evaluate.py var/knowledge/evaluation-500.jsonl --report var/knowledge/evaluation-report.json
 ```
+
+生产灰度、观测门槛和回滚步骤见
+[`docs/deployment/langchain-rag-rollout.md`](../../docs/deployment/langchain-rag-rollout.md)。

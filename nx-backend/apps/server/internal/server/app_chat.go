@@ -275,6 +275,17 @@ func (s *Server) retrieveXinzhiliKnowledge(ctx context.Context, userID, sessionI
 	return s.retrieveKnowledgeForScene(ctx, coordinator, "xinzhili", userID, sessionID, cardID, query)
 }
 
+func (s *Server) retrieveXinzhiliRealtimeKnowledge(ctx context.Context, userID, sessionID, cardID int64, query string) ([]rag.Document, *chat.KnowledgeTrace, error) {
+	coordinator := s.xinzhiliRealtimeKnowledge
+	if coordinator == nil {
+		coordinator = s.xinzhiliKnowledge
+	}
+	if coordinator == nil {
+		coordinator = s.appKnowledge
+	}
+	return s.retrieveKnowledgeForScene(ctx, coordinator, "xinzhili", userID, sessionID, cardID, query)
+}
+
 func (s *Server) retrieveKnowledgeForScene(ctx context.Context, coordinator *appknowledge.Coordinator, scene string, userID, sessionID, cardID int64, query string) ([]rag.Document, *chat.KnowledgeTrace, error) {
 	if coordinator == nil {
 		documents, _ := s.retrieveAppDocsForQuery(ctx, query, 6)

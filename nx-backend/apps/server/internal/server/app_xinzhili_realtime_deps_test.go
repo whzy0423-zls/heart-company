@@ -49,7 +49,15 @@ func TestServerXinzhiliLayeredKnowledgeUsesXinzhiliRemoteScene(t *testing.T) {
 	resolver := &layeredKnowledgeResolver{mainType: 4, revision: 12}
 	searcher := newLayeredKnowledgeSearcher()
 	remote := &recordingXinzhiliRemoteRetriever{}
-	server := &Server{xinzhiliKnowledge: appknowledge.NewCoordinator(resolver, searcher, searcher, appknowledge.WithRemote("langchain", remote, nil))}
+	server := &Server{
+		xinzhiliKnowledge: appknowledge.NewCoordinator(resolver, searcher, searcher),
+		xinzhiliRealtimeKnowledge: appknowledge.NewCoordinator(
+			resolver,
+			searcher,
+			searcher,
+			appknowledge.WithRemote("langchain", remote, nil),
+		),
+	}
 
 	if _, err := (serverXinzhiliLayeredKnowledge{server: server}).Retrieve(context.Background(), 7, 91, 55, layeredKnowledgeQuestion); err != nil {
 		t.Fatal(err)

@@ -179,6 +179,7 @@ type Server struct {
 	appChatPlanLoader              func(context.Context, int64) (appPlanConfig, error)
 	appKnowledge                   *appknowledge.Coordinator
 	xinzhiliKnowledge              *appknowledge.Coordinator
+	xinzhiliRealtimeKnowledge      *appknowledge.Coordinator
 	skillCatalog                   *skillcatalog.Store
 	skillChat                      *skillchat.Store
 	skillChatRuntime               *skillchat.Runtime
@@ -504,6 +505,12 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		appKnowledgePublicSearcher{server: s},
 		theorystore.NewStore(database),
 		knowledgeOptionsFor(env.Knowledge.XinzhiliRolloutPercent)...,
+	)
+	s.xinzhiliRealtimeKnowledge = appknowledge.NewCoordinator(
+		appknowledge.NewResolver(database),
+		appKnowledgePublicSearcher{server: s},
+		theorystore.NewStore(database),
+		knowledgeOptionsFor(env.Knowledge.XinzhiliRealtimeRolloutPercent)...,
 	)
 	s.skillCatalog = skillcatalog.NewStore(database)
 	s.skillChat = skillchat.NewStore(database)
