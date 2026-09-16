@@ -58,14 +58,35 @@ func OpenWithPoolConfig(ctx context.Context, dsn, adminUser, adminPassword strin
 
 	// 等待数据库就绪（容器编排下 server 可能比 postgres 先起）
 	if err := waitReady(ctx, database); err != nil {
+		_ = database.Close()
 		return nil, err
 	}
 
+	// A separate, short-lived connection owns the session lock across BOTH
+	// migration and seed. It also works when the application pool has size one.
+	// Closing this pool always releases the lock, even on cancellation/errors.
+	lockDB, err := sql.Open("pgx", dsn)
+	if err != nil {
+		_ = database.Close()
+		return nil, err
+	}
+	defer lockDB.Close()
+	lockConn, err := lockDB.Conn(ctx)
+	if err != nil {
+		_ = database.Close()
+		return nil, err
+	}
+	defer lockConn.Close()
+	if _, err = lockConn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtextextended('nine-xing:database-initialization', 0))`); err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("initialization lock: %w", err)
+	}
 	if err := migrateSchema(ctx, database); err != nil {
+		_ = database.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-
 	if err := seed(ctx, database, adminUser, adminPassword); err != nil {
+		_ = database.Close()
 		return nil, fmt.Errorf("seed: %w", err)
 	}
 
@@ -137,7 +158,10 @@ func seed(ctx context.Context, database *sql.DB, adminUser, adminPassword string
 		return err
 	}
 	if err := seedAppPlanManagementMenu(ctx, database); err != nil {
-		return err
+		return fmt.Errorf("seed app plan management menu: %w", err)
+	}
+	if err := seedDistributionMenuBindings(ctx, database); err != nil {
+		return fmt.Errorf("seed distribution menu bindings: %w", err)
 	}
 	if err := seedCustomerMiniappMenuBindings(ctx, database); err != nil {
 		return err
@@ -199,6 +223,12 @@ var defaultMenus = []seedMenu{
 	{ID: 1406, PID: 1401, Name: "MiniappClassroomPublish", AuthCode: "Miniapp:Classroom:Publish", Type: "button", Sort: 3, Icon: "lucide:send", Title: "发布/下线课件"},
 	{ID: 1407, PID: 1401, Name: "MiniappClassroomPrice", AuthCode: "Miniapp:Classroom:Price", Type: "button", Sort: 4, Icon: "lucide:badge-dollar-sign", Title: "设置课件价格"},
 	{ID: 1600, PID: 0, Name: "AppManage", Path: "/app", Type: "catalog", Sort: 14, Icon: "lucide:panels-top-left", Title: "App 管理"},
+	{ID: 1614, PID: 1600, Name: "AppPlanManagement", Path: "/app/plan-management", Component: "/app/plan-management", AuthCode: "App:PlanManagement:View", Type: "menu", Sort: 12, Icon: "lucide:badge-dollar-sign", Title: "套餐管理"},
+	{ID: 1615, PID: 1600, Name: "AppDistributionManagement", Path: "/app/distribution", Component: "/app/distribution-management", AuthCode: "Customer:App:List", Type: "menu", Sort: 13, Icon: "lucide:share-2", Title: "代理管理"},
+	{ID: 1616, PID: 1600, Name: "AppDistributionCommissions", Path: "/app/distribution-commissions", Component: "/app/distribution-commissions", AuthCode: "Customer:App:List", Type: "menu", Sort: 14, Icon: "lucide:coins", Title: "佣金明细"},
+	{ID: 1617, PID: 1600, Name: "AppDistributionRules", Path: "/app/distribution-rules", Component: "/app/distribution-rules", AuthCode: "Customer:App:List", Type: "menu", Sort: 15, Icon: "lucide:percent", Title: "佣金规则"},
+	{ID: 1618, PID: 1600, Name: "AppDistributionSettlements", Path: "/app/distribution-settlements", Component: "/app/distribution-settlements", AuthCode: "Customer:App:List", Type: "menu", Sort: 16, Icon: "lucide:wallet-cards", Title: "分销结算"},
+	{ID: 1619, PID: 1614, Name: "AppPlanManagementWrite", AuthCode: "App:PlanManagement:Write", Type: "button", Sort: 1, Icon: "lucide:pencil", Title: "编辑套餐"},
 	{ID: 500, PID: 0, Name: "CustomerManage", Path: "/customer", Type: "catalog", Sort: 15, Icon: "lucide:contact-round", Title: "客户管理"},
 	{ID: 501, PID: 500, Name: "CustomerSignupLeads", Path: "/customer/signups", Component: "/site-config/signup-leads", AuthCode: "Customer:Signup:List", Type: "menu", Sort: 1, Icon: "lucide:inbox", Title: "报名信息"},
 	{ID: 502, PID: 1600, Name: "CustomerAppUsers", Path: "/customer/app-users", Component: "/customer/app-users", AuthCode: "Customer:App:List", Type: "menu", Sort: 2, Icon: "lucide:users-round", Title: "App 客户"},
@@ -308,14 +338,17 @@ const deprecatedMenusSQL = `DELETE FROM menus
     OR name = 'WebsiteNavigation'
     OR name = 'WebsiteSignupLeads'
     OR name = 'CustomerAppPrivateRule'
-    OR name = 'TheoryLibrary'
+	OR name = 'TheoryLibrary'
+	OR name = 'AppProducts'
     OR path = '/website/navigation'
     OR path = '/website/signup-leads'
     OR path = '/customer/app-private-rules'
-    OR path = '/theory/library'
+	OR path = '/theory/library'
+	OR path = '/app/products'
     OR component = '/site-config/navigation'
-    OR component = '/customer/app-private-rules'
-    OR component = '/theory/library'`
+	OR component = '/customer/app-private-rules'
+	OR component = '/theory/library'
+	OR component = '/app/products'`
 
 func migrateLegacyVideoMenuBindings(ctx context.Context, database *sql.DB) error {
 	_, err := database.ExecContext(ctx,

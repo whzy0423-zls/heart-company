@@ -420,7 +420,11 @@ func (s *Server) adminAppOrderRefund(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, 500, err.Error())
 		return
 	}
-	if _, err = tx.ExecContext(r.Context(), `UPDATE distribution_commission_records SET status='reversed',updated_at=now() WHERE order_id=$1 AND status<>'reversed'`, id); err != nil {
+	if err = lockDistributionLedger(r.Context(), tx); err != nil {
+		httpx.Fail(w, 500, "distribution ledger lock failed")
+		return
+	}
+	if _, err = tx.ExecContext(r.Context(), `UPDATE distribution_commission_records SET status='reversed',reversal_reason=$2,updated_at=now() WHERE order_id=$1 AND status<>'reversed'`, id, strings.TrimSpace(body.Reason)); err != nil {
 		httpx.Fail(w, 500, err.Error())
 		return
 	}

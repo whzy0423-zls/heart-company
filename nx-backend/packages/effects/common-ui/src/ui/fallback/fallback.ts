@@ -22,4 +22,27 @@ interface FallbackProps {
    */
   title?: string;
 }
+
+function resolveFallbackRetryPath(
+  redirect: null | string | (null | string)[] | undefined,
+  homePath = '/',
+) {
+  const rawRedirect = Array.isArray(redirect) ? redirect[0] : redirect;
+  if (!rawRedirect) {
+    return homePath;
+  }
+
+  try {
+    const decoded = decodeURIComponent(rawRedirect);
+    if (decoded.startsWith('/') && !decoded.startsWith('//')) {
+      return decoded;
+    }
+  } catch {
+    // Use homePath when the redirect query is malformed.
+  }
+
+  return homePath;
+}
+
+export { resolveFallbackRetryPath };
 export type { FallbackProps };

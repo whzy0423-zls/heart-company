@@ -851,6 +851,13 @@ func newAppAPITestServer(t *testing.T) (http.Handler, *sql.DB) {
 	if err != nil {
 		t.Fatalf("db open: %v", err)
 	}
+	// Each App integration test owns a clean fixture universe. The production
+	// database is deliberately shared by the test suite, so reset user-owned
+	// rows before creating fixed-phone fixtures; CASCADE covers orders, chats,
+	// preferences, quizzes, analytics, and distribution relations.
+	if _, err := database.ExecContext(ctx, `TRUNCATE app_users RESTART IDENTITY CASCADE`); err != nil {
+		t.Fatalf("reset app integration fixtures: %v", err)
+	}
 	lockConn, err := database.Conn(ctx)
 	if err != nil {
 		_ = database.Close()

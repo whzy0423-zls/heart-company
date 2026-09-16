@@ -76,7 +76,8 @@ func (s *Server) adminAppOrders(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(o.payment_provider,'manual'), COALESCE(o.pay_channel,''), COALESCE(o.gateway_id,''),
 		       COALESCE(o.provider_trade_no,''), COALESCE(o.provider_status,''), COALESCE(o.pay_url,''),
 		       COALESCE(to_char(o.last_query_at AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'), ''),
-		       COALESCE(o.payment_error,''),
+			       COALESCE(o.payment_error,''),
+			       o.duration_days,
 		       to_char(o.create_time AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'),
 		       to_char(o.update_time AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'),
 		       o.paid_at,
@@ -100,7 +101,7 @@ func (s *Server) adminAppOrders(w http.ResponseWriter, r *http.Request) {
 		var item adminAppOrder
 		var paidAt sql.NullTime
 		if err := rows.Scan(&item.ID, &item.OutTradeNo, &item.AppUserID, &item.Phone, &item.Nickname, &item.MemberLevel, &item.ProductID, &item.Title, &item.Amount, &item.Status, &item.TransactionID,
-			&item.PaymentProvider, &item.PayChannel, &item.GatewayID, &item.ProviderTradeNo, &item.ProviderStatus, &item.PayURL, &item.LastQueryAt, &item.PaymentError,
+			&item.PaymentProvider, &item.PayChannel, &item.GatewayID, &item.ProviderTradeNo, &item.ProviderStatus, &item.PayURL, &item.LastQueryAt, &item.PaymentError, &item.DurationDays,
 			&item.CreateTime, &item.UpdateTime, &paidAt, &item.MemberStartedAt, &item.MemberExpiresAt, &item.RemainingDays, &item.ActivationAt, &item.MembershipExpiresAt); err != nil {
 			httpx.Fail(w, http.StatusInternalServerError, err.Error())
 			return
@@ -108,7 +109,9 @@ func (s *Server) adminAppOrders(w http.ResponseWriter, r *http.Request) {
 		if paidAt.Valid {
 			item.PaidAt = paidAt.Time.Format("2006/01/02 15:04:05")
 		}
-		item.DurationDays, _ = membershipDurationDays(item.ProductID)
+		if item.DurationDays <= 0 {
+			item.DurationDays, _ = membershipDurationDays(item.ProductID)
+		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {

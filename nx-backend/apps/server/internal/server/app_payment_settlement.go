@@ -242,6 +242,9 @@ func generateDistributionCommissionsTx(ctx context.Context, tx *sql.Tx, orderID,
 	if amount <= 0 {
 		return nil
 	}
+	if err := lockDistributionLedger(ctx, tx); err != nil {
+		return fmt.Errorf("distribution ledger lock: %w", err)
+	}
 	// One INSERT SELECT avoids issuing a second command while PostgreSQL rows
 	// are still streaming on the transaction connection. Every beneficiary keeps
 	// the same complete referral snapshot, not a progressively truncated path.

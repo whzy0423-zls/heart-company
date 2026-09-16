@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/testutil"
@@ -93,7 +94,13 @@ func TestCopyProfileToBailianReusesMiniMaxSampleAndDeactivatesSourceAfterQwenRea
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"output": map[string]any{"voice": "bailian-qwen-voice"}})
 	}))
-	defer upstream.Close()
+	defer func() {
+		// The handler intentionally waits for request cancellation; explicitly
+		// close the client connection so httptest cleanup cannot deadlock if the
+		// transport keeps the socket open after the context is done.
+		upstream.CloseClientConnections()
+		upstream.Close()
+	}()
 	store.bailian = NewBailianClient(BailianConfig{APIBase: upstream.URL, APIKey: "test-key", TargetModel: defaultBailianTargetModel})
 	store.bailian.client = upstream.Client()
 
@@ -191,9 +198,15 @@ func TestCloneProfilePersistsFailedStatusAfterRequestCancellation(t *testing.T) 
 	started := make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		close(started)
-		<-r.Context().Done()
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
 	}))
-	defer upstream.Close()
+	defer func() {
+		upstream.CloseClientConnections()
+		upstream.Close()
+	}()
 	store.bailian = NewBailianClient(BailianConfig{APIBase: upstream.URL, APIKey: "test-key", TargetModel: defaultBailianTargetModel})
 	store.bailian.client = upstream.Client()
 

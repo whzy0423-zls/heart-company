@@ -26,24 +26,50 @@ type distributionAgentResponse struct {
 
 func (s *Server) adminDistributionAgentCreate(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		AppUserID int64  `json:"appUserId"`
-		AgentCode string `json:"agentCode"`
+		AppUserID int64 `json:"appUserId"`
 	}
 	if json.NewDecoder(r.Body).Decode(&in) != nil || in.AppUserID <= 0 {
 		httpx.Fail(w, http.StatusBadRequest, "invalid appUserId")
 		return
 	}
-	code := strings.TrimSpace(in.AgentCode)
-	if code == "" {
-		code = "A" + strconv.FormatInt(in.AppUserID, 10)
+	code := "A" + strconv.FormatInt(in.AppUserID, 10)
+	var appUserExists bool
+	if err := s.db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM app_users WHERE id=$1)`, in.AppUserID).Scan(&appUserExists); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
 	}
+	if !appUserExists {
+		httpx.Fail(w, http.StatusNotFound, "app user not found")
+		return
+	}
+	var existingAgentID int64
+	err := s.db.QueryRowContext(r.Context(), `SELECT id FROM distribution_agents WHERE app_user_id=$1 OR lower(agent_code)=lower($2) LIMIT 1`, in.AppUserID, code).Scan(&existingAgentID)
+	if err == nil {
+		httpx.Fail(w, http.StatusConflict, "user is already an agent or agentCode already exists")
+		return
+	}
+	if err != sql.ErrNoRows {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer tx.Rollback()
+	createdBy := sql.NullInt64{Int64: userFromRequest(r).ID, Valid: userFromRequest(r).ID > 0}
 	var out distributionAgentResponse
-	err := s.db.QueryRowContext(r.Context(), `INSERT INTO distribution_agents(id,app_user_id,agent_code,level,root_agent_id,agent_path,status) VALUES(nextval('distribution_agents_id_seq'),$1,$2,1,currval('distribution_agents_id_seq'),'/'||currval('distribution_agents_id_seq')||'/','active') RETURNING id,app_user_id,agent_code,level,COALESCE(parent_agent_id,0),root_agent_id,agent_path,status`, in.AppUserID, code).Scan(&out.ID, &out.AppUserID, &out.AgentCode, &out.Level, &out.ParentAgentID, &out.RootAgentID, &out.Path, &out.Status)
+	err = tx.QueryRowContext(r.Context(), `INSERT INTO distribution_agents(id,app_user_id,agent_code,level,root_agent_id,agent_path,status,created_by) VALUES(nextval('distribution_agents_id_seq'),$1,$2,1,currval('distribution_agents_id_seq'),'/'||currval('distribution_agents_id_seq')||'/','active',$3) RETURNING id,app_user_id,agent_code,level,COALESCE(parent_agent_id,0),root_agent_id,agent_path,status`, in.AppUserID, code, createdBy).Scan(&out.ID, &out.AppUserID, &out.AgentCode, &out.Level, &out.ParentAgentID, &out.RootAgentID, &out.Path, &out.Status)
 	if err != nil {
 		httpx.Fail(w, http.StatusConflict, err.Error())
 		return
 	}
-	if _, err = s.db.ExecContext(r.Context(), `UPDATE distribution_agents SET root_agent_id=id,agent_path='/'||id||'/' WHERE id=$1`, out.ID); err != nil {
+	if _, err = tx.ExecContext(r.Context(), `UPDATE distribution_agents SET root_agent_id=id,agent_path='/'||id||'/' WHERE id=$1`, out.ID); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err = tx.Commit(); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -199,7 +225,7 @@ func (s *Server) adminDistributionAgentStatus(w http.ResponseWriter, r *http.Req
 	var in struct {
 		Status string `json:"status"`
 	}
-	if json.NewDecoder(r.Body).Decode(&in) != nil || (in.Status != "active" && in.Status != "paused" && in.Status != "disabled") {
+	if json.NewDecoder(r.Body).Decode(&in) != nil || (in.Status != "active" && in.Status != "paused") {
 		httpx.Fail(w, 400, "invalid status")
 		return
 	}
@@ -299,7 +325,17 @@ func (s *Server) adminDistributionCommissionReverse(w http.ResponseWriter, r *ht
 		httpx.Fail(w, 400, "reason is required")
 		return
 	}
-	res, err := s.db.ExecContext(r.Context(), `UPDATE distribution_commission_records SET status='reversed',updated_at=now() WHERE id=$1 AND status<>'reversed'`, id)
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		httpx.Fail(w, 500, err.Error())
+		return
+	}
+	defer tx.Rollback()
+	if err = lockDistributionLedger(r.Context(), tx); err != nil {
+		httpx.Fail(w, 500, "distribution ledger lock failed")
+		return
+	}
+	res, err := tx.ExecContext(r.Context(), `UPDATE distribution_commission_records SET status='reversed',reversal_reason=$2,updated_at=now() WHERE id=$1 AND status='pending'`, id, strings.TrimSpace(in.Reason))
 	if err != nil {
 		httpx.Fail(w, 500, err.Error())
 		return
@@ -309,118 +345,11 @@ func (s *Server) adminDistributionCommissionReverse(w http.ResponseWriter, r *ht
 		httpx.Fail(w, 404, "commission not found or already reversed")
 		return
 	}
-	httpx.OK(w, map[string]any{"reversed": true, "reason": in.Reason})
-}
-
-func (s *Server) adminDistributionSettlementPreview(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		AgentID int64  `json:"agentId"`
-		Start   string `json:"start"`
-		End     string `json:"end"`
-	}
-	if json.NewDecoder(r.Body).Decode(&in) != nil || in.AgentID <= 0 || strings.TrimSpace(in.Start) == "" || strings.TrimSpace(in.End) == "" {
-		httpx.Fail(w, 400, "agentId, start and end are required")
-		return
-	}
-	var amount int64
-	var count int
-	err := s.db.QueryRowContext(r.Context(), `SELECT COALESCE(sum(commission_amount),0),count(*) FROM distribution_commission_records WHERE agent_id=$1 AND status='pending' AND created_at >= $2::date AND created_at < ($3::date + INTERVAL '1 day')`, in.AgentID, in.Start, in.End).Scan(&amount, &count)
-	if err != nil {
-		httpx.Fail(w, 500, err.Error())
-		return
-	}
-	httpx.OK(w, map[string]any{"agentId": in.AgentID, "amount": amount, "count": count, "start": in.Start, "end": in.End})
-}
-
-func (s *Server) adminDistributionSettlementCreate(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		AgentID int64  `json:"agentId"`
-		Start   string `json:"start"`
-		End     string `json:"end"`
-	}
-	if json.NewDecoder(r.Body).Decode(&in) != nil || in.AgentID <= 0 || strings.TrimSpace(in.Start) == "" || strings.TrimSpace(in.End) == "" {
-		httpx.Fail(w, 400, "agentId, start and end are required")
-		return
-	}
-	tx, err := s.db.BeginTx(r.Context(), nil)
-	if err != nil {
-		httpx.Fail(w, 500, err.Error())
-		return
-	}
-	defer tx.Rollback()
-	var id, amount int64
-	var count int
-	err = tx.QueryRowContext(r.Context(), `WITH picked AS (SELECT COALESCE(sum(commission_amount),0) amount,count(*) count FROM distribution_commission_records WHERE agent_id=$1 AND status='pending' AND created_at >= $2::date AND created_at < ($3::date + INTERVAL '1 day')) INSERT INTO distribution_settlements(agent_id,period_start,period_end,amount,status) SELECT $1,$2::date,$3::date,amount,'draft' FROM picked WHERE count>0 RETURNING id,amount,(SELECT count FROM picked)`, in.AgentID, in.Start, in.End).Scan(&id, &amount, &count)
-	if err == sql.ErrNoRows {
-		httpx.Fail(w, 409, "no settleable commissions")
-		return
-	}
-	if err != nil {
-		httpx.Fail(w, 409, err.Error())
-		return
-	}
-	_, err = tx.ExecContext(r.Context(), `INSERT INTO distribution_settlement_items(settlement_id,commission_id,amount) SELECT $1,id,commission_amount FROM distribution_commission_records WHERE agent_id=$2 AND status='pending' AND created_at >= $3::date AND created_at < ($4::date + INTERVAL '1 day')`, id, in.AgentID, in.Start, in.End)
-	if err != nil {
-		httpx.Fail(w, 500, err.Error())
-		return
-	}
-	if _, err = tx.ExecContext(r.Context(), `UPDATE distribution_commission_records SET status='pending',updated_at=now() WHERE agent_id=$1 AND status='pending' AND created_at >= $2::date AND created_at < ($3::date + INTERVAL '1 day')`, in.AgentID, in.Start, in.End); err != nil {
-		httpx.Fail(w, 500, err.Error())
-		return
-	}
 	if err = tx.Commit(); err != nil {
 		httpx.Fail(w, 500, err.Error())
 		return
 	}
-	httpx.OK(w, map[string]any{"settlementId": id, "amount": amount, "count": count})
-}
-
-func (s *Server) adminDistributionSettlementAction(w http.ResponseWriter, r *http.Request) {
-	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/admin/distribution/settlements/"), "/"), "/")
-	if len(parts) != 2 {
-		httpx.Fail(w, 400, "invalid settlement path")
-		return
-	}
-	id, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil || id <= 0 {
-		httpx.Fail(w, 400, "invalid id")
-		return
-	}
-	action := parts[1]
-	next := map[string]string{"approve": "approved", "paid": "paid", "reject": "rejected", "cancel": "canceled"}[action]
-	if next == "" {
-		httpx.Fail(w, 400, "invalid action")
-		return
-	}
-	var clause string
-	switch next {
-	case "approved":
-		clause = "status='draft'"
-	case "paid":
-		clause = "status='approved'"
-	case "rejected":
-		clause = "status='draft'"
-	case "canceled":
-		clause = "status IN ('draft','approved')"
-	}
-	q := `UPDATE distribution_settlements SET status=$1,paid_at=CASE WHEN $1='paid' THEN COALESCE(paid_at,now()) ELSE paid_at END WHERE id=$2 AND ` + clause
-	res, err := s.db.ExecContext(r.Context(), q, next, id)
-	if err != nil {
-		httpx.Fail(w, 500, err.Error())
-		return
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		httpx.Fail(w, 409, "invalid settlement state or not found")
-		return
-	}
-	if next == "paid" {
-		if _, err = s.db.ExecContext(r.Context(), `UPDATE distribution_commission_records SET status='settled', updated_at=now() WHERE id IN (SELECT commission_id FROM distribution_settlement_items WHERE settlement_id=$1) AND status='pending'`, id); err != nil {
-			httpx.Fail(w, 500, err.Error())
-			return
-		}
-	}
-	httpx.OK(w, map[string]any{"updated": true, "status": next})
+	httpx.OK(w, map[string]any{"reversed": true, "reason": in.Reason})
 }
 
 func (s *Server) publicDistributionInvite(w http.ResponseWriter, r *http.Request) {
@@ -449,7 +378,7 @@ func bindDistributionAgent(ctx context.Context, db *sql.DB, userID int64, code s
 	if db == nil || userID <= 0 || code == "" {
 		return
 	}
-	_, _ = db.ExecContext(ctx, `INSERT INTO distribution_user_relations(app_user_id,direct_agent_id) SELECT $1,id FROM distribution_agents WHERE lower(agent_code)=lower($2) AND status='active' ON CONFLICT(app_user_id) DO NOTHING`, userID, code)
+	_, _ = db.ExecContext(ctx, `INSERT INTO distribution_user_relations(app_user_id,direct_agent_id) SELECT $1,id FROM distribution_agents WHERE lower(agent_code)=lower($2) AND status='active' AND app_user_id<>$1 AND NOT EXISTS (SELECT 1 FROM distribution_agents existing WHERE existing.app_user_id=$1) ON CONFLICT(app_user_id) DO NOTHING`, userID, code)
 }
 
 func (s *Server) adminDistributionSettlements(w http.ResponseWriter, r *http.Request) {
@@ -590,8 +519,21 @@ func (s *Server) adminDistributionRuleCreate(w http.ResponseWriter, r *http.Requ
 		httpx.Fail(w, 400, "name is required")
 		return
 	}
-	if len(in.Rates) == 0 {
-		httpx.Fail(w, 400, "rates are required")
+	if len(in.Rates) != 3 {
+		httpx.Fail(w, 400, "rates for levels 1, 2 and 3 are required")
+		return
+	}
+	var totalRate int64
+	for level := 1; level <= 3; level++ {
+		rate, exists := in.Rates[level]
+		if !exists || rate < 0 || rate > 10000 {
+			httpx.Fail(w, 400, "invalid rate")
+			return
+		}
+		totalRate += rate
+	}
+	if totalRate > 10000 {
+		httpx.Fail(w, 400, "commission rates cannot exceed 10000 bps")
 		return
 	}
 	tx, err := s.db.BeginTx(r.Context(), nil)
@@ -666,29 +608,50 @@ func (s *Server) adminDistributionRuleActivate(w http.ResponseWriter, r *http.Re
 }
 
 func (s *Server) adminDistributionRules(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.QueryContext(r.Context(), `SELECT id,version,status,created_at,COALESCE(activated_at,created_at) FROM distribution_commission_rules ORDER BY version DESC`)
+	rows, err := s.db.QueryContext(r.Context(), `
+		SELECT r.id,
+		       r.version,
+		       r.status,
+		       r.created_at,
+		       COALESCE(r.activated_at,r.created_at),
+		       COALESCE(jsonb_object_agg(i.agent_level::text,i.rate_bps ORDER BY i.agent_level) FILTER (WHERE i.id IS NOT NULL),'{}'::jsonb),
+		       COALESCE(sum(i.rate_bps),0)
+		  FROM distribution_commission_rules r
+		  LEFT JOIN distribution_commission_rule_items i ON i.rule_id=r.id
+		 GROUP BY r.id
+		 ORDER BY r.version DESC`)
 	if err != nil {
 		httpx.Fail(w, 500, err.Error())
 		return
 	}
 	defer rows.Close()
 	type item struct {
-		ID          int64  `json:"id"`
-		Version     int64  `json:"version"`
-		Status      string `json:"status"`
-		CreatedAt   string `json:"createdAt"`
-		ActivatedAt string `json:"activatedAt"`
+		ID           int64         `json:"id"`
+		Version      int64         `json:"version"`
+		Status       string        `json:"status"`
+		CreatedAt    string        `json:"createdAt"`
+		ActivatedAt  string        `json:"activatedAt"`
+		Rates        map[int]int64 `json:"rates"`
+		TotalRateBPS int64         `json:"totalRateBps"`
 	}
 	out := []item{}
 	for rows.Next() {
 		var x item
 		var a, b time.Time
-		if err := rows.Scan(&x.ID, &x.Version, &x.Status, &a, &b); err != nil {
+		var ratesRaw []byte
+		if err := rows.Scan(&x.ID, &x.Version, &x.Status, &a, &b, &ratesRaw, &x.TotalRateBPS); err != nil {
 			httpx.Fail(w, 500, err.Error())
 			return
 		}
 		x.CreatedAt = a.Format(time.RFC3339)
 		x.ActivatedAt = b.Format(time.RFC3339)
+		x.Rates = map[int]int64{1: 0, 2: 0, 3: 0}
+		var rates map[int]int64
+		if len(ratesRaw) > 0 && json.Unmarshal(ratesRaw, &rates) == nil {
+			for level := 1; level <= 3; level++ {
+				x.Rates[level] = rates[level]
+			}
+		}
 		out = append(out, x)
 	}
 	httpx.OK(w, map[string]any{"items": out, "total": len(out)})

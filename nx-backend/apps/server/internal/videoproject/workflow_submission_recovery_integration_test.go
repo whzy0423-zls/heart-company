@@ -54,7 +54,13 @@ func TestRecoveredPaidSubmissionAppearsInWorkflowRecovery(t *testing.T) {
 	).Scan(&demoShotID); err != nil {
 		t.Fatal(err)
 	}
-	requestKey := "77777777-7777-4777-8777-777777777777"
+	requestKeys := []string{fmt.Sprintf("77777777-7777-4777-8777-%012d", time.Now().UnixNano()%1000000000000), fmt.Sprintf("66666666-6666-4666-8666-%012d", (time.Now().UnixNano()+1)%1000000000000)}
+	t.Cleanup(func() {
+		for _, key := range requestKeys {
+			_, _ = database.ExecContext(context.Background(), `DELETE FROM video_generation_submissions WHERE request_key=$1::uuid`, key)
+		}
+	})
+	requestKey := requestKeys[0]
 	if _, err := database.ExecContext(ctx, `
 		INSERT INTO video_generation_submissions
 		    (request_key, shot_id, status, request_snapshot)
@@ -65,8 +71,8 @@ func TestRecoveredPaidSubmissionAppearsInWorkflowRecovery(t *testing.T) {
 	if _, err := database.ExecContext(ctx, `
 		INSERT INTO video_generation_submissions
 		    (request_key, shot_id, status, request_snapshot)
-		VALUES ('66666666-6666-4666-8666-666666666666',$1::bigint,'submitting',
-		        '{"generationMode":"demo"}'::jsonb)`, demoShotID,
+		VALUES ($2::uuid,$1::bigint,'submitting',
+		        '{"generationMode":"demo"}'::jsonb)`, demoShotID, requestKeys[1],
 	); err != nil {
 		t.Fatal(err)
 	}

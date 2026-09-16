@@ -125,7 +125,11 @@ function setupAccessGuard(router: Router) {
       if (preferences.transition.progress) {
         stopProgress();
       }
-      return { path: '/offline', replace: true };
+      return {
+        path: '/offline',
+        query: { redirect: encodeURIComponent(to.fullPath) },
+        replace: true,
+      };
     }
   });
 }

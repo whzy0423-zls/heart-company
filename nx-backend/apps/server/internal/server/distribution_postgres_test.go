@@ -78,6 +78,26 @@ func TestDistributionPostgresCommissionSnapshotAndReplay(t *testing.T) {
 	}
 }
 
+func TestDistributionPostgresAdminAgentCreateAutoGeneratesAgentCode(t *testing.T) {
+	db := distributionDatabase(t)
+	s := &Server{db: db}
+
+	missingUser := distributionRequest(s.adminDistributionAgentCreate, "/", `{"appUserId":999}`)
+	if missingUser.Code != 404 || !strings.Contains(missingUser.Body.String(), "app user not found") {
+		t.Fatalf("missing user status=%d body=%s", missingUser.Code, missingUser.Body.String())
+	}
+
+	existingAgent := distributionRequest(s.adminDistributionAgentCreate, "/", `{"appUserId":100}`)
+	if existingAgent.Code != 409 || !strings.Contains(existingAgent.Body.String(), "user is already an agent") {
+		t.Fatalf("existing agent status=%d body=%s", existingAgent.Code, existingAgent.Body.String())
+	}
+
+	created := distributionRequest(s.adminDistributionAgentCreate, "/", `{"appUserId":400}`)
+	if created.Code != 200 || !strings.Contains(created.Body.String(), `"agentCode":"A400"`) {
+		t.Fatalf("create agent status=%d body=%s", created.Code, created.Body.String())
+	}
+}
+
 func TestDistributionPostgresChildCreationReturnsPersistedAgent(t *testing.T) {
 	db := distributionDatabase(t)
 	if _, err := db.Exec(`INSERT INTO app_users VALUES(500); INSERT INTO distribution_user_relations(app_user_id,direct_agent_id) VALUES(500,10)`); err != nil {
@@ -189,5 +209,154 @@ func TestDistributionPostgresConcurrentActivation(t *testing.T) {
 	}
 	if active != 1 {
 		t.Fatalf("active rules=%d, want exactly one", active)
+	}
+}
+
+func seedDistributionCommission(t *testing.T, db *sql.DB) {
+	t.Helper()
+	_, err := db.Exec(`INSERT INTO distribution_commission_records(order_id,agent_id,app_user_id,agent_level,order_amount,rate_bps,commission_amount,rule_version,chain_snapshot,created_at) VALUES(1,10,400,1,10000,1000,1000,1,'/10/','2026-09-10')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+func distributionRequest(h http.HandlerFunc, path, body string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	h(w, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+	return w
+}
+func TestDistributionPostgresSettlementReservations(t *testing.T) {
+	db := distributionDatabase(t)
+	seedDistributionCommission(t, db)
+	s := &Server{db: db}
+	body := `{"agentId":10,"start":"2026-09-01","end":"2026-09-30"}`
+	first := distributionRequest(s.adminDistributionSettlementCreate, "/", body)
+	if first.Code != 200 {
+		t.Fatal(first.Body.String())
+	}
+	preview := distributionRequest(s.adminDistributionSettlementPreview, "/", body)
+	if !strings.Contains(preview.Body.String(), `"count":0`) {
+		t.Errorf("reserved commission still available: %s", preview.Body.String())
+	}
+	second := distributionRequest(s.adminDistributionSettlementCreate, "/", `{"agentId":10,"start":"2026-09-02","end":"2026-09-30"}`)
+	if second.Code != 409 {
+		t.Errorf("overlapping settlement status=%d: %s", second.Code, second.Body.String())
+	}
+	cancel := distributionRequest(s.adminDistributionSettlementAction, "/api/admin/distribution/settlements/1/cancel", `{"reason":"重新核账"}`)
+	if cancel.Code != 200 {
+		t.Fatalf("cancel: %s", cancel.Body.String())
+	}
+	retry := distributionRequest(s.adminDistributionSettlementCreate, "/", body)
+	if retry.Code != 200 {
+		t.Fatalf("recreate canceled period: %s", retry.Body.String())
+	}
+}
+func TestDistributionPostgresPayoutRejectsReversedCommission(t *testing.T) {
+	db := distributionDatabase(t)
+	seedDistributionCommission(t, db)
+	s := &Server{db: db}
+	distributionRequest(s.adminDistributionSettlementCreate, "/", `{"agentId":10,"start":"2026-09-01","end":"2026-09-30"}`)
+	distributionRequest(s.adminDistributionSettlementAction, "/api/admin/distribution/settlements/1/approve", `{}`)
+	if _, err := db.Exec(`UPDATE distribution_commission_records SET status='reversed'`); err != nil {
+		t.Fatal(err)
+	}
+	w := distributionRequest(s.adminDistributionSettlementAction, "/api/admin/distribution/settlements/1/paid", `{"paymentReference":"test-bank-001"}`)
+	if w.Code != 409 {
+		t.Fatalf("refunded commission payout status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+func TestDistributionPostgresPayoutAtomicOnFailure(t *testing.T) {
+	db := distributionDatabase(t)
+	seedDistributionCommission(t, db)
+	s := &Server{db: db}
+	distributionRequest(s.adminDistributionSettlementCreate, "/", `{"agentId":10,"start":"2026-09-01","end":"2026-09-30"}`)
+	distributionRequest(s.adminDistributionSettlementAction, "/api/admin/distribution/settlements/1/approve", `{}`)
+	_, err := db.Exec(`CREATE FUNCTION fail_settle() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.status='settled' THEN RAISE EXCEPTION 'simulated storage failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_settle BEFORE UPDATE ON distribution_commission_records FOR EACH ROW EXECUTE FUNCTION fail_settle();`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := distributionRequest(s.adminDistributionSettlementAction, "/api/admin/distribution/settlements/1/paid", `{"paymentReference":"test-bank-002"}`)
+	if w.Code < 400 {
+		t.Fatal("expected storage error")
+	}
+	var status string
+	if err = db.QueryRow(`SELECT status FROM distribution_settlements WHERE id=1`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "approved" {
+		t.Fatalf("partial payout committed: status=%s", status)
+	}
+}
+func TestDistributionPostgresLoginBindingRejectsSelfAndAgentCycle(t *testing.T) {
+	db := distributionDatabase(t)
+	bindDistributionAgent(context.Background(), db, 100, "A10")
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM distribution_user_relations WHERE app_user_id=100`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatal("login created self referral")
+	}
+	bindDistributionAgent(context.Background(), db, 100, "A30")
+	if err := db.QueryRow(`SELECT count(*) FROM distribution_user_relations WHERE app_user_id=100`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatal("existing root agent bound to own descendant")
+	}
+}
+
+func TestDistributionPostgresRulesValidateBudget(t *testing.T) {
+	db := distributionDatabase(t)
+	s := &Server{db: db}
+	for _, body := range []string{`{"name":"over","rates":{"1":6000,"2":6000,"3":0}}`, `{"name":"missing","rates":{"1":1000}}`} {
+		w := distributionRequest(s.adminDistributionRuleCreate, "/", body)
+		if w.Code != 400 {
+			t.Errorf("invalid rule accepted %d: %s", w.Code, w.Body.String())
+		}
+	}
+}
+func TestDistributionPostgresConcurrentSettlementCreation(t *testing.T) {
+	db := distributionDatabase(t)
+	seedDistributionCommission(t, db)
+	s := &Server{db: db}
+	start := make(chan struct{})
+	results := make(chan int, 2)
+	for _, day := range []string{"01", "02"} {
+		go func(day string) {
+			<-start
+			w := distributionRequest(s.adminDistributionSettlementCreate, "/", fmt.Sprintf(`{"agentId":10,"start":"2026-09-%s","end":"2026-09-30"}`, day))
+			results <- w.Code
+		}(day)
+	}
+	close(start)
+	a, b := <-results, <-results
+	if !((a == 200 && b == 409) || (a == 409 && b == 200)) {
+		t.Fatalf("concurrent reservation statuses %d/%d", a, b)
+	}
+}
+func TestDistributionPostgresSuccessfulPayoutRequiresProof(t *testing.T) {
+	db := distributionDatabase(t)
+	seedDistributionCommission(t, db)
+	s := &Server{db: db}
+	distributionRequest(s.adminDistributionSettlementCreate, "/", `{"agentId":10,"start":"2026-09-01","end":"2026-09-30"}`)
+	distributionRequest(s.adminDistributionSettlementAction, "/api/admin/distribution/settlements/1/approve", `{}`)
+	noProof := distributionRequest(s.adminDistributionSettlementAction, "/api/admin/distribution/settlements/1/paid", `{}`)
+	if noProof.Code != 400 {
+		t.Fatal("payout proof must be required")
+	}
+	w := distributionRequest(s.adminDistributionSettlementAction, "/api/admin/distribution/settlements/1/paid", `{"paymentReference":"test-bank-003"}`)
+	if w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM distribution_commission_records WHERE agent_id=10`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "settled" {
+		t.Fatal(status)
+	}
+	replay := distributionRequest(s.adminDistributionSettlementAction, "/api/admin/distribution/settlements/1/paid", `{"paymentReference":"test-bank-003"}`)
+	if replay.Code != 409 {
+		t.Fatal("duplicate payout accepted")
 	}
 }

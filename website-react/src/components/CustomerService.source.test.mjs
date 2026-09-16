@@ -12,7 +12,7 @@ const config = JSON.parse(readFileSync(resolve(__dirname, '../../../shared/site-
 
 test('客服二维码入口接入全局布局并使用指定弹窗标题', () => {
   assert.match(layout, /import CustomerService from '\.\/CustomerService'/)
-  assert.match(layout, /<CustomerService \/>/)
+  assert.match(layout, /<CustomerService(?:\s+hidden=\{isAppPage\})? \/>/)
   assert.match(component, /芯之力 小助手/)
   assert.match(component, /siteConfig\?\.site\?\.customerServiceQr/)
   assert.match(component, /\/public\/customer-service-qr/)

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"nine-xing/nx-backend/apps/server/internal/answerhygiene"
 	"nine-xing/nx-backend/apps/server/internal/chat"
@@ -152,8 +153,21 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if utf8.RuneCountInString(transcript) > appChatQuestionMaxRunes {
+		httpx.Fail(w, http.StatusBadRequest, "识别内容太长，请控制在 300 字以内")
+		return
+	}
 
 	answer, isModelIdentity := appChatModelIdentityAnswer(transcript)
+	quotaKey := ""
+	if !isModelIdentity {
+		quotaKey, _, err = s.reserveAppChatQuota(r.Context(), userInfo.ID)
+		if err != nil {
+			failAppChatQuota(w, err)
+			return
+		}
+		defer s.releaseAppChatQuota(quotaKey)
+	}
 	var knowledgeTrace *chat.KnowledgeTrace
 	extraction := userpreference.Extraction{}
 	if !isModelIdentity {
@@ -171,7 +185,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		}
 		generator := s.generator()
 		promptContext := s.appChatContextForPrompt(ctx, sessionID, generator)
-		answer, err = rag.NewService(docs, rag.WithGenerator(generator)).Ask(ctx, rag.AskInput{
+		answer, err = rag.NewService(docs, rag.WithGenerator(generator), rag.WithStrictGeneratorErrors()).Ask(ctx, rag.AskInput{
 			History:             promptContext.History,
 			ConversationSummary: promptContext.Summary,
 			Question:            transcript,
@@ -214,6 +228,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, "回答保存失败，请重试")
 		return
 	}
+	s.commitAppChatQuota(quotaKey)
 	if !isModelIdentity {
 		if err := s.persistAppChatPreferences(ctx, userInfo.ID, extraction); err != nil {
 			httpx.Fail(w, http.StatusInternalServerError, "偏好保存失败，请重试")

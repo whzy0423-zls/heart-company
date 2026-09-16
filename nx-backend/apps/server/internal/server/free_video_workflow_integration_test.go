@@ -107,7 +107,7 @@ func TestFreeVideoWorkflowRealHTTPClosure(t *testing.T) {
 		t.Fatalf("workflow mode = %q, want demo", workflow.GenerationMode)
 	}
 
-	requestKey := "11111111-1111-4111-8111-111111111111"
+	requestKey := fmt.Sprintf("11111111-1111-4111-8111-%012d", time.Now().UnixNano()%1000000000000)
 	var batch videoproject.BatchGenerateResult
 	workflowRequest(t, client, http.MethodPost, backend.URL+"/api/video/projects-batch-generate-safe/"+project.ID, login.AccessToken, map[string]any{
 		"items": []map[string]string{{"requestKey": requestKey, "shotId": shotID}},

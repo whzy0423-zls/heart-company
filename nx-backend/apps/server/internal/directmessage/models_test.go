@@ -49,3 +49,36 @@ func TestMessageDeliveryMetadataIsNotSerialized(t *testing.T) {
 		t.Fatalf("internal delivery metadata leaked into API JSON: %s", encoded)
 	}
 }
+
+func TestConversationSummarySerializesLatestMessageAndUnreadCount(t *testing.T) {
+	conversation := Conversation{
+		ID:          12,
+		UserLowID:   7,
+		UserHighID:  9,
+		UnreadCount: 3,
+		LastMessage: &Message{
+			ID:             41,
+			ConversationID: 12,
+			SenderID:       9,
+			MessageType:    "text",
+			Body:           "刚发来的消息",
+			SequenceNo:     8,
+		},
+	}
+
+	encoded, err := json.Marshal(conversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["unreadCount"] != float64(3) {
+		t.Fatalf("unexpected unread count: %#v", payload["unreadCount"])
+	}
+	message, ok := payload["lastMessage"].(map[string]any)
+	if !ok || message["body"] != "刚发来的消息" || message["sequenceNo"] != float64(8) {
+		t.Fatalf("unexpected last message: %#v", payload["lastMessage"])
+	}
+}

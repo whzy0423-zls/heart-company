@@ -40,6 +40,7 @@ func TestAdminMiniappQueriesFilterBeforeMaskingAndReturnPagedDetails(t *testing.
 		 ('admin-query-b','访客','13987654321','campaign','poster',2,0)`,
 		`INSERT INTO test_records (wx_user_id,gender,result_type,second_type,scores,centers)
 		 SELECT id,'female',9,1,'{"9":18}'::jsonb,'[]'::jsonb FROM wx_users WHERE openid='admin-query-a'`,
+		`INSERT INTO signups (id,name,contact) VALUES (91,'预约用户','13812345678') ON CONFLICT (id) DO NOTHING`,
 		`INSERT INTO bookings (wx_user_id,kind,contact_name,phone,status,signup_id)
 		 SELECT id,'consult','张三','13812345678','pending',91 FROM wx_users WHERE openid='admin-query-a'`,
 	} {

@@ -370,7 +370,7 @@ func testVbenCompatibleAPI(t *testing.T) {
 				paths:   []string{"/api/voice/generations/list?page=1&pageSize=1", "/api/voice/profiles/list?page=1&pageSize=1"},
 			},
 			{
-				menuIDs: []int{1004},
+				menuIDs: []int{1001},
 				name:    "storyboard",
 				paths:   []string{"/api/video/storyboards/list?page=1&pageSize=1", "/api/video/analysis/list?page=1&pageSize=1"},
 			},
@@ -687,6 +687,16 @@ func newTestServer(t *testing.T) (http.Handler, string) {
 	if err != nil {
 		t.Fatalf("db open: %v", err)
 	}
+	// Keep the shared integration database from leaking the voice-model
+	// configuration into the dedicated xinzhili config-store tests.
+	if _, err := database.ExecContext(ctx, `DELETE FROM site_configs WHERE key='xinzhili_model_config'`); err != nil {
+		t.Fatalf("reset xinzhili config fixture: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		_, _ = database.ExecContext(cleanupCtx, `DELETE FROM site_configs WHERE key='xinzhili_model_config'`)
+	})
 	holdLoginRateLimitTestLock(t, database, ctx)
 
 	env := config.Env{

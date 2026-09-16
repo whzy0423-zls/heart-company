@@ -1190,19 +1190,28 @@ func roundPackageRoot(t *testing.T) string {
 
 func cleanupPackageFixture(t *testing.T, db *sql.DB, libraryKey string) {
 	t.Helper()
-	if _, err := db.Exec(`DELETE FROM theory_card_sources WHERE card_id IN (SELECT c.id FROM theory_cards c JOIN theory_libraries l ON l.id=c.library_id WHERE l.key=$1)`, libraryKey); err != nil {
+	tx, err := db.Begin()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`DELETE FROM theory_package_promotions WHERE import_id IN (SELECT i.id FROM theory_package_imports i JOIN theory_libraries l ON l.id=i.library_id WHERE l.key=$1)`, libraryKey); err != nil {
+	defer tx.Rollback()
+	if _, err := tx.Exec(`SELECT set_config('nine_xing.allow_fixture_cleanup','on',true)`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`DELETE FROM theory_package_imports WHERE library_id IN (SELECT id FROM theory_libraries WHERE key=$1)`, libraryKey); err != nil {
+	for _, query := range []string{
+		`DELETE FROM theory_card_sources WHERE card_id IN (SELECT c.id FROM theory_cards c JOIN theory_libraries l ON l.id=c.library_id WHERE l.key=$1)`,
+		`DELETE FROM theory_package_promotions WHERE import_id IN (SELECT i.id FROM theory_package_imports i JOIN theory_libraries l ON l.id=i.library_id WHERE l.key=$1)`,
+		`DELETE FROM theory_package_imports WHERE library_id IN (SELECT id FROM theory_libraries WHERE key=$1)`,
+		`DELETE FROM theory_libraries WHERE key=$1`,
+	} {
+		if _, err := tx.Exec(query, libraryKey); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM users WHERE username LIKE $1`, "theorysync-test-"+libraryKey+"-%"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`DELETE FROM theory_libraries WHERE key=$1`, libraryKey); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`DELETE FROM users WHERE username LIKE $1`, "theorysync-test-"+libraryKey+"-%"); err != nil {
+	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 }

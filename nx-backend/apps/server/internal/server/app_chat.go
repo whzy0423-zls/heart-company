@@ -24,7 +24,10 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/userpreference"
 )
 
-const appChatHistoryLimit = 12
+const (
+	appChatHistoryLimit     = 12
+	appChatQuestionMaxRunes = 300
+)
 
 const appChatFallbackHistoryLimit = 20
 
@@ -52,14 +55,18 @@ func (s *Server) appChatTierForUser(ctx context.Context, appUserID int64, reques
 	if err == nil || errors.Is(err, errInvalidAppChatTier) {
 		return tier, err
 	}
-	if s.appUsers == nil {
-		return "", errors.New("app user store unavailable")
-	}
-	user, err := s.appUsers.FindByID(ctx, appUserID)
+	plan, err := s.appChatPlanForUser(ctx, appUserID)
 	if err != nil {
 		return "", err
 	}
-	return resolveAppChatTier(requested, user.MemberLevel)
+	tier, err = resolveAppChatTier(requested, plan.Code)
+	if err != nil {
+		return "", err
+	}
+	if (tier == "deep" && !plan.DeepChatEnabled) || (tier == "companion" && !plan.CompanionEnabled) {
+		return "", errAppChatTierRequiresMembership
+	}
+	return tier, nil
 }
 
 func failAppChatTier(w http.ResponseWriter, err error) {
@@ -70,6 +77,62 @@ func failAppChatTier(w http.ResponseWriter, err error) {
 		httpx.Fail(w, http.StatusForbidden, "当前对话模式需要会员权益")
 	default:
 		httpx.Fail(w, http.StatusInternalServerError, "会员权益读取失败，请重试")
+	}
+}
+
+func (s *Server) appChatPlanForUser(ctx context.Context, appUserID int64) (appPlanConfig, error) {
+	if s.appChatPlanLoader != nil {
+		return s.appChatPlanLoader(ctx, appUserID)
+	}
+	if s.appUsers == nil {
+		return appPlanConfig{}, errors.New("app user store unavailable")
+	}
+	user, err := s.appUsers.FindByID(ctx, appUserID)
+	if err != nil {
+		return appPlanConfig{}, err
+	}
+	planCode := appEffectivePlanCode(user.MemberLevel, parseAppMembershipExpiry(user.MemberExpiresAt), time.Now())
+	return s.appPlan(ctx, planCode), nil
+}
+
+func (s *Server) reserveAppChatQuota(ctx context.Context, appUserID int64) (string, appChatQuotaSnapshot, error) {
+	if s.appChatQuota == nil {
+		return "", newAppChatQuotaSnapshot(-1, 0, 0), nil
+	}
+	plan, err := s.appChatPlanForUser(ctx, appUserID)
+	if err != nil {
+		return "", appChatQuotaSnapshot{}, err
+	}
+	return s.appChatQuota.Reserve(ctx, appUserID, plan.DailyChatLimit, time.Now())
+}
+
+func failAppChatQuota(w http.ResponseWriter, err error) {
+	if errors.Is(err, errAppChatQuotaExhausted) {
+		httpx.Fail(w, http.StatusTooManyRequests, "免费及试用对话次数已用完，请查看会员方案")
+		return
+	}
+	httpx.Fail(w, http.StatusInternalServerError, "对话额度读取失败，请重试")
+}
+
+func (s *Server) releaseAppChatQuota(key string) {
+	if key == "" || s.appChatQuota == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := s.appChatQuota.Release(ctx, key); err != nil {
+		log.Printf("app chat quota release failed: %v", err)
+	}
+}
+
+func (s *Server) commitAppChatQuota(key string) {
+	if key == "" || s.appChatQuota == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := s.appChatQuota.Commit(ctx, key); err != nil {
+		log.Printf("app chat quota commit failed: %v", err)
 	}
 }
 
@@ -421,9 +484,19 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Question string        `json:"question"`
 		History  []rag.Message `json:"history"`
+		Tier     string        `json:"tier"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 32<<10)).Decode(&body); err != nil || strings.TrimSpace(body.Question) == "" {
 		httpx.Fail(w, http.StatusBadRequest, "question required")
+		return
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(body.Question)) > appChatQuestionMaxRunes {
+		httpx.Fail(w, http.StatusBadRequest, "问题太长，请控制在 300 字以内")
+		return
+	}
+	tier, err := s.appChatTierForUser(r.Context(), userInfo.ID, body.Tier)
+	if err != nil {
+		failAppChatTier(w, err)
 		return
 	}
 	if answer, ok := appChatModelIdentityAnswer(body.Question); ok {
@@ -444,6 +517,12 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		httpx.OK(w, askResponse{Answer: answer, MessageID: messageID})
 		return
 	}
+	quotaKey, _, err := s.reserveAppChatQuota(r.Context(), userInfo.ID)
+	if err != nil {
+		failAppChatQuota(w, err)
+		return
+	}
+	defer s.releaseAppChatQuota(quotaKey)
 	preferenceExtraction := userpreference.Extract(body.Question)
 	preferenceTurn := appChatPreferenceTurn{userID: userInfo.ID}
 	if len(preferenceExtraction.Mutations) > 0 || userpreference.NeedsLLMFallback(body.Question) {
@@ -467,7 +546,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	promptContext := s.appChatContextForPrompt(ctx, sessionID, generator)
 
-	ans, err := rag.NewService(docs, rag.WithGenerator(generator)).Ask(ctx, rag.AskInput{
+	ans, err := rag.NewService(docs, rag.WithGenerator(generator), rag.WithStrictGeneratorErrors()).Ask(ctx, rag.AskInput{
 		History:             promptContext.History,
 		ConversationSummary: promptContext.Summary,
 		Question:            body.Question,
@@ -475,6 +554,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		ConversationCard:    conversationCard,
 		UserPreferences:     preferences,
 		CurrentDirectives:   directives,
+		Tier:                tier,
 	})
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
@@ -484,9 +564,12 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 
 	sourcesJSON, _ := json.Marshal(ans.Sources)
 	messageID, saveErr := s.saveAppChatPair(ctx, sessionID, body.Question, ans.Answer, sourcesJSON, knowledgeTrace)
-	if saveErr == nil {
-		s.scheduleAppChatPreferenceFallback(preferenceTurn, body.Question)
+	if saveErr != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "回答保存失败，请重试")
+		return
 	}
+	s.commitAppChatQuota(quotaKey)
+	s.scheduleAppChatPreferenceFallback(preferenceTurn, body.Question)
 	s.rememberChatAnswer(ctx, userInfo.ID, sess.CardID, body.Question, ans.Answer)
 	if messageID > 0 {
 		s.recordAppProfileEvidenceAsync(userInfo.ID, sess.CardID, "chat", messageID, body.Question)
@@ -527,12 +610,32 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Question string        `json:"question"`
 		History  []rag.Message `json:"history"`
+		Tier     string        `json:"tier"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, 32<<10)).Decode(&body); err != nil || strings.TrimSpace(body.Question) == "" {
 		httpx.Fail(w, http.StatusBadRequest, "question required")
 		return
 	}
+	if utf8.RuneCountInString(strings.TrimSpace(body.Question)) > appChatQuestionMaxRunes {
+		httpx.Fail(w, http.StatusBadRequest, "问题太长，请控制在 300 字以内")
+		return
+	}
+	tier, err := s.appChatTierForUser(r.Context(), userInfo.ID, body.Tier)
+	if err != nil {
+		failAppChatTier(w, err)
+		return
+	}
 	fixedAnswer, isModelIdentity := appChatModelIdentityAnswer(body.Question)
+	quotaKey := ""
+	if !isModelIdentity {
+		var quotaErr error
+		quotaKey, _, quotaErr = s.reserveAppChatQuota(r.Context(), userInfo.ID)
+		if quotaErr != nil {
+			failAppChatQuota(w, quotaErr)
+			return
+		}
+		defer s.releaseAppChatQuota(quotaKey)
+	}
 	preferenceExtraction := userpreference.Extraction{}
 	preferenceTurn := appChatPreferenceTurn{userID: userInfo.ID}
 	if !isModelIdentity {
@@ -568,12 +671,14 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 		sessionID:            sessionID,
 		cardID:               sess.CardID,
 		question:             body.Question,
+		tier:                 tier,
 		preferenceTurn:       preferenceTurn,
 		preferenceExtraction: preferenceExtraction,
 		generator:            generator,
 		lifecycle:            lifecycle,
 		fixedAnswer:          fixedAnswer,
 		isModelIdentity:      isModelIdentity,
+		quotaKey:             quotaKey,
 	})
 	s.pumpAppChatStream(ctx, cancel, r.Context(), w, flusher, events, lifecycle, userInfo.ID, sessionID, streamStartedAt, chatTimeout)
 }
@@ -591,12 +696,14 @@ type appChatStreamPipelineInput struct {
 	sessionID            int64
 	cardID               int64
 	question             string
+	tier                 string
 	preferenceTurn       appChatPreferenceTurn
 	preferenceExtraction userpreference.Extraction
 	generator            rag.Generator
 	lifecycle            *appChatStreamLifecycle
 	fixedAnswer          rag.Answer
 	isModelIdentity      bool
+	quotaKey             string
 }
 
 func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- appChatStreamEvent, input appChatStreamPipelineInput) {
@@ -681,7 +788,7 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			return nil
 		}
 
-		ans, err = rag.NewService(docs, rag.WithGenerator(input.generator)).AskStream(ctx, rag.AskInput{
+		ans, err = rag.NewService(docs, rag.WithGenerator(input.generator), rag.WithStrictGeneratorErrors()).AskStream(ctx, rag.AskInput{
 			History:             promptContext.History,
 			ConversationSummary: promptContext.Summary,
 			Question:            input.question,
@@ -689,6 +796,7 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			ConversationCard:    conversationCard,
 			UserPreferences:     preferences,
 			CurrentDirectives:   directives,
+			Tier:                input.tier,
 		}, func(delta string) error {
 			if delta == "" {
 				return nil
@@ -749,6 +857,7 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 		events <- appChatStreamEvent{kind: appChatStreamError, publicError: "回答保存失败，请重试", errorPhase: "save"}
 		return
 	}
+	s.commitAppChatQuota(input.quotaKey)
 	// Start the reserved fallback without waiting on the per-user mutation lock,
 	// then publish the committed terminal immediately.
 	fallback.start()

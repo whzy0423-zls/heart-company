@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/testdb"
 	"nine-xing/nx-backend/apps/server/internal/testutil"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -86,15 +87,7 @@ func TestTheoryVerticalSliceSeedExecutesTwice(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	database, err := sql.Open("pgx", dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := database.Close(); err != nil {
-			t.Errorf("close PostgreSQL database: %v", err)
-		}
-	})
+	database, _ := testdb.OpenIsolatedSchema(t, dsn, "theory_seed")
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	t.Cleanup(cancel)
 
@@ -131,18 +124,9 @@ func TestTheoryVerticalSliceSeedExecutesTwice(t *testing.T) {
 			t.Fatalf("schema execution %d: %v", i+1, err)
 		}
 	}
-	if err := cleanupTheoryVerticalSliceSeed(ctx, conn); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cleanupCancel()
-		if err := cleanupTheoryVerticalSliceSeed(cleanupCtx, database); err != nil {
-			t.Errorf("clean up theory vertical slice seed: %v", err)
-		}
-	})
 	for i := 0; i < 2; i++ {
 		if _, err := conn.ExecContext(ctx, string(seed)); err != nil {
+			_, _ = conn.ExecContext(ctx, "ROLLBACK")
 			t.Fatalf("seed execution %d: %v", i+1, err)
 		}
 	}
@@ -194,31 +178,23 @@ func TestTheoryVerticalSliceSeedExecutesTwice(t *testing.T) {
 		t.Fatalf("active vertical slice chain count = %d, want 1", chainCount)
 	}
 
-	t.Run("seed preserves published card and enabled chunk snapshots", func(t *testing.T) {
-		if _, err := conn.ExecContext(ctx, `
-			UPDATE theory_cards
-			SET definition='card-sentinel-definition'
-			WHERE canonical_key='inner_observer' AND version=1 AND library_id=(SELECT id FROM theory_libraries WHERE key='xinzhili');
-			UPDATE theory_chunks
-			SET content='chunk-sentinel-content', content_hash=repeat('f', 64)
-			WHERE chunk_key='inner_observer.card' AND version=1 AND library_id=(SELECT id FROM theory_libraries WHERE key='xinzhili')`); err != nil {
+	t.Run("seed preserves immutable published snapshots", func(t *testing.T) {
+		var before, after string
+		query := `SELECT row_to_json(c)::text FROM theory_chunks c WHERE chunk_key='inner_observer.card'`
+		if err := conn.QueryRowContext(ctx, query).Scan(&before); err != nil {
 			t.Fatal(err)
+		}
+		if _, err := conn.ExecContext(ctx, `UPDATE theory_chunks SET content='tampered' WHERE chunk_key='inner_observer.card'`); err == nil {
+			t.Fatal("released chunk must reject modification")
 		}
 		if _, err := conn.ExecContext(ctx, string(seed)); err != nil {
-			t.Fatalf("seed execution after publishing sentinels: %v", err)
-		}
-
-		var definition, content, contentHash string
-		if err := conn.QueryRowContext(ctx, `
-			SELECT card.definition, chunk.content, chunk.content_hash
-			FROM theory_libraries library
-			JOIN theory_cards card ON card.library_id=library.id AND card.canonical_key='inner_observer' AND card.version=1
-			JOIN theory_chunks chunk ON chunk.library_id=library.id AND chunk.chunk_key='inner_observer.card' AND chunk.version=1
-			WHERE library.key='xinzhili'`).Scan(&definition, &content, &contentHash); err != nil {
 			t.Fatal(err)
 		}
-		if definition != "card-sentinel-definition" || content != "chunk-sentinel-content" || contentHash != strings.Repeat("f", 64) {
-			t.Fatalf("seed overwrote published snapshot: definition=%q content=%q hash=%q", definition, content, contentHash)
+		if err := conn.QueryRowContext(ctx, query).Scan(&after); err != nil {
+			t.Fatal(err)
+		}
+		if before != after {
+			t.Fatal("seed changed released snapshot")
 		}
 	})
 
@@ -258,7 +234,7 @@ func TestTheoryVerticalSliceSeedExecutesTwice(t *testing.T) {
 			library_id, version, status, embedding_model, embedding_dimensions, retrieval_mode,
 			index_version, card_count, chunk_count, build_error, activated_at
 		)
-		SELECT id, 2, 'active', '', 1536, 'lexical_only', 'test-v2', 1, 1, '', now()
+		SELECT id, 2, 'building', '', 1536, 'lexical_only', 'test-v2', 1, 1, '', now()
 		FROM theory_libraries WHERE key='xinzhili';
 		INSERT INTO theory_release_cards (release_id, card_id, chunk_id)
 		SELECT release.id, card.id, chunk.id
@@ -269,6 +245,7 @@ func TestTheoryVerticalSliceSeedExecutesTwice(t *testing.T) {
 		JOIN theory_chunks chunk ON chunk.library_id=library.id
 		  AND chunk.chunk_key='inner_observer.card' AND chunk.version=1
 		WHERE library.key='xinzhili';
+		UPDATE theory_library_releases SET status='active' WHERE version=2 AND library_id=(SELECT id FROM theory_libraries WHERE key='xinzhili');
 		UPDATE theory_libraries SET current_version=2 WHERE key='xinzhili'`); err != nil {
 		t.Fatalf("create active v2 fixture: %v", err)
 	}

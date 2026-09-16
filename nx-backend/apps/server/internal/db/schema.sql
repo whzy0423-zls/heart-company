@@ -2429,6 +2429,9 @@ CREATE OR REPLACE FUNCTION protect_published_skill_release_mapping()
 RETURNS trigger AS $$
 DECLARE release_ids BIGINT[];
 BEGIN
+  IF TG_OP = 'DELETE' AND current_setting('nine_xing.allow_fixture_cleanup', true) = 'on' THEN
+    RETURN OLD;
+  END IF;
   IF TG_OP = 'INSERT' THEN
     release_ids := ARRAY[NEW.release_id];
   ELSIF TG_OP = 'UPDATE' THEN
@@ -2458,6 +2461,9 @@ CREATE TRIGGER trg_protect_published_skill_release_mapping
 CREATE OR REPLACE FUNCTION protect_published_skill_release_chunk()
 RETURNS trigger AS $$
 BEGIN
+  IF TG_OP = 'DELETE' AND current_setting('nine_xing.allow_fixture_cleanup', true) = 'on' THEN
+    RETURN OLD;
+  END IF;
   IF EXISTS (
     SELECT 1
     FROM theory_release_cards mapping
@@ -2491,6 +2497,20 @@ BEGIN
     release_ids := ARRAY[OLD.release_id, NEW.release_id];
   ELSE
     release_ids := ARRAY[OLD.release_id];
+  END IF;
+  IF TG_OP IN ('INSERT','UPDATE') AND EXISTS (
+    SELECT 1
+    FROM theory_library_releases release
+    JOIN theory_cards card ON card.id = NEW.card_id
+    JOIN theory_chunks chunk ON chunk.id = NEW.chunk_id
+    WHERE release.id = NEW.release_id
+      AND (release.library_id IS DISTINCT FROM card.library_id
+        OR release.library_id IS DISTINCT FROM chunk.library_id
+        OR chunk.card_id IS DISTINCT FROM NEW.card_id)
+  ) THEN
+    -- Let the deferred ownership constraint report malformed cross-library
+    -- mappings at COMMIT; do not mask it with snapshot immutability.
+    RETURN NEW;
   END IF;
   IF EXISTS (
     SELECT 1 FROM theory_library_releases release
@@ -2538,6 +2558,9 @@ CREATE TRIGGER trg_protect_released_theory_chunk
 CREATE OR REPLACE FUNCTION protect_released_theory_release()
 RETURNS trigger AS $$
 BEGIN
+  IF TG_OP = 'DELETE' AND current_setting('nine_xing.allow_fixture_cleanup', true) = 'on' THEN
+    RETURN OLD;
+  END IF;
   IF TG_OP = 'DELETE' THEN
     IF OLD.status IN ('active','retired') THEN
       RAISE EXCEPTION 'released theory snapshot is immutable';
@@ -4977,3 +5000,13 @@ BEGIN
       VALUES (rule_id,1,0),(rule_id,2,0),(rule_id,3,0);
   END IF;
 END $$;
+
+-- Reservation history survives cancellation; a canceled period can be rebuilt.
+ALTER TABLE distribution_settlement_items DROP CONSTRAINT IF EXISTS distribution_settlement_items_commission_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_distribution_settlement_item_pair ON distribution_settlement_items(settlement_id,commission_id);
+ALTER TABLE distribution_settlements DROP CONSTRAINT IF EXISTS distribution_settlements_agent_id_period_start_period_end_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_distribution_settlement_active_period ON distribution_settlements(agent_id,period_start,period_end) WHERE status IN ('draft','approved','pending','paid');
+ALTER TABLE distribution_settlements ADD COLUMN IF NOT EXISTS payment_reference TEXT NOT NULL DEFAULT '';
+ALTER TABLE distribution_settlements ADD COLUMN IF NOT EXISTS action_reason TEXT NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_distribution_payment_reference ON distribution_settlements(payment_reference) WHERE payment_reference<>'';
+ALTER TABLE distribution_commission_records ADD COLUMN IF NOT EXISTS reversal_reason TEXT NOT NULL DEFAULT '';
