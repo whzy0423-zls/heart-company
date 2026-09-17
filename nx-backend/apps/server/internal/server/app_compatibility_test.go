@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/quiz"
+	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
 func TestAppCompatibilityCreateReturnsReportWithCompatibleFieldNames(t *testing.T) {
@@ -125,6 +127,39 @@ func TestAppCompatibilityListAndDetailScopeToCurrentUser(t *testing.T) {
 	if detail["algorithmVersion"] != "v1" || detail["relationLevel"] == "" {
 		t.Fatalf("expected detail algorithm metadata, got %+v", detail)
 	}
+}
+
+func TestAppCompatibilityAskFallsBackToReportWhenGeneratorFails(t *testing.T) {
+	s := newAppCompatibilityTestServer(t, "compatibility")
+	s.ragGen = compatibilityFailingGenerator{}
+
+	response := performAppCompatibilityRequest(t, s.appCompatibilityRouter, http.MethodPost, "/api/app/compatibility/11/ask", map[string]any{
+		"question": "我们最容易在哪些场景发生冲突？",
+		"history":  []map[string]string{{"role": "user", "content": "先看沟通问题"}},
+	})
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected report fallback after generator failure, got %d body=%s", response.Code, response.Body.String())
+	}
+	body := decodeAppCompatibilityResponse(t, response)
+	data, ok := body.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("expected object data, got %T", body.Data)
+	}
+	answer, _ := data["answer"].(string)
+	if !strings.Contains(answer, "节奏不同") || !strings.Contains(answer, "先确认期待") {
+		t.Fatalf("expected fallback grounded in report, got %q", answer)
+	}
+	suggestions, ok := data["suggestions"].([]any)
+	if !ok || len(suggestions) == 0 {
+		t.Fatalf("expected actionable follow-up suggestions, got %+v", data["suggestions"])
+	}
+}
+
+type compatibilityFailingGenerator struct{}
+
+func (compatibilityFailingGenerator) Generate(context.Context, rag.GenerateInput) (string, error) {
+	return "", errors.New("provider timeout")
 }
 
 func newAppCompatibilityTestServer(t *testing.T, mode string) *Server {

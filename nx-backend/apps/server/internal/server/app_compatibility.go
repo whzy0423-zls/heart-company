@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -171,11 +172,38 @@ func (s *Server) appCompatibilityAsk(w http.ResponseWriter, r *http.Request, rep
 		},
 	})
 	if err != nil {
-		httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
-		return
+		log.Printf("compatibility question generation failed report=%d user=%d: %v", report.ID, userInfo.ID, err)
+		answer = appCompatibilityFallbackAnswer(report)
 	}
 	s.commitAppChatQuota(quotaKey)
 	httpx.OK(w, askResponse{Answer: answer})
+}
+
+func appCompatibilityFallbackAnswer(report appCompatibilityReport) rag.Answer {
+	parts := make([]string, 0, 3)
+	if len(report.ConflictPoints) > 0 {
+		parts = append(parts, "结合这份合盘，最需要留意的是："+strings.Join(report.ConflictPoints, "；")+"。")
+	} else if strings.TrimSpace(report.Summary) != "" {
+		parts = append(parts, "结合这份合盘："+strings.TrimSpace(report.Summary))
+	}
+	if len(report.Suggestions) > 0 {
+		parts = append(parts, "可以先这样做："+strings.Join(report.Suggestions, "；")+"。")
+	}
+	if len(report.Highlights) > 0 {
+		parts = append(parts, "同时可以继续发挥："+strings.Join(report.Highlights, "；")+"。")
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "可以先从一次具体、平静的沟通开始，分别说清自己的感受、需要和期待。")
+	}
+	return rag.Answer{
+		Answer:  strings.Join(parts, "\n\n"),
+		Sources: []rag.Source{},
+		Suggestions: []string{
+			"怎么把这条建议变成一句沟通开场白？",
+			"出现分歧时，怎样避免冲突升级？",
+			"我们最适合先做哪个小练习？",
+		},
+	}
 }
 
 func (s *Server) appCompatibilityCreate(w http.ResponseWriter, r *http.Request) {
