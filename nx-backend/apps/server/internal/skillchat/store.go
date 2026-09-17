@@ -634,3 +634,19 @@ func (s *Store) GetVoiceTranscript(ctx context.Context, appUserID, messageID int
 	}
 	return strings.TrimSpace(transcript), err
 }
+
+func (s *Store) ToggleFavorite(ctx context.Context, appUserID, messageID int64) (bool, error) {
+	var favorite bool
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE app_chat_messages message
+		SET favorite = NOT message.favorite
+		FROM app_chat_sessions session
+		WHERE message.id=$1 AND message.session_id=session.id
+		  AND session.app_user_id=$2 AND session.scene='skill_chat'
+		  AND message.role='assistant'
+		RETURNING message.favorite`, messageID, appUserID).Scan(&favorite)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	return favorite, err
+}

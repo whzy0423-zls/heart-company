@@ -162,6 +162,18 @@ func (s *Server) appSkillMessagesRouter(w http.ResponseWriter, r *http.Request) 
 	}
 	path := r.URL.Path
 	switch {
+	case strings.HasSuffix(path, "/favorite") && r.Method == http.MethodPost:
+		messageID, valid := appPathID(path, "/api/app/skill-messages/", "/favorite")
+		if !valid {
+			httpx.Fail(w, http.StatusBadRequest, "消息编号无效")
+			return
+		}
+		favorite, err := s.skillChat.ToggleFavorite(r.Context(), user.ID, messageID)
+		if err != nil {
+			httpx.Fail(w, http.StatusNotFound, "消息不存在")
+			return
+		}
+		httpx.OK(w, map[string]bool{"favorite": favorite})
 	case strings.HasSuffix(path, "/audio") && r.Method == http.MethodGet:
 		messageID, valid := appPathID(path, "/api/app/skill-messages/", "/audio")
 		if !valid {
