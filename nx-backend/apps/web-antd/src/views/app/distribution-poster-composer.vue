@@ -163,7 +163,7 @@ async function render() {
   renderError.value = '';
   if (loading.value || loadError.value || !canvasRef.value) return;
   const visible = canvasRef.value;
-  if (!templateUrl.value || (!qrImageUrl.value && !landingUrl.value.trim())) {
+  if (!templateUrl.value) {
     visible.getContext('2d')?.clearRect(0, 0, visible.width, visible.height);
     rendering.value = false;
     return;
@@ -172,18 +172,18 @@ async function render() {
   try {
     const background = await loadImage(templateUrl.value);
     let qrSource = qrImageUrl.value;
-    if (!qrSource) {
+    if (!qrSource && landingUrl.value.trim()) {
       const url = new URL(landingUrl.value.trim());
       if (!['http:', 'https:'].includes(url.protocol)) throw new Error('请输入有效的二维码链接');
       // The administrator owns the QR destination; invitation text never changes it.
       qrSource = await QRCode.toDataURL(landingUrl.value.trim(), { margin: 4, width: 660, errorCorrectionLevel: 'M' });
     }
-    const qr = qrImageUrl.value ? await loadImage(qrSource) : await new Promise<HTMLImageElement>((resolve, reject) => {
+    const qr = qrSource && !qrImageUrl.value ? await new Promise<HTMLImageElement>((resolve, reject) => {
       const image = new Image();
       image.onload = () => resolve(image);
       image.onerror = () => reject(new Error('二维码生成失败'));
       image.src = qrSource;
-    });
+    }) : qrImageUrl.value ? await loadImage(qrSource) : undefined;
     const canvas = document.createElement('canvas');
     canvas.width = 720; canvas.height = 1280;
     const ctx = canvas.getContext('2d');
@@ -197,9 +197,16 @@ async function render() {
     text(ctx, subtitle.value, 62, 998, 596);
     const size = qrSize.value;
     ctx.fillStyle = '#fff'; ctx.fillRect(qrX.value, qrY.value, size, size);
-    const qrScale = Math.min(size / qr.naturalWidth, size / qr.naturalHeight);
-    const qw = qr.naturalWidth * qrScale, qh = qr.naturalHeight * qrScale;
-    ctx.drawImage(qr, qrX.value+(size-qw)/2, qrY.value+(size-qh)/2, qw, qh);
+    if (qr) {
+      const qrScale = Math.min(size / qr.naturalWidth, size / qr.naturalHeight);
+      const qw = qr.naturalWidth * qrScale, qh = qr.naturalHeight * qrScale;
+      ctx.drawImage(qr, qrX.value+(size-qw)/2, qrY.value+(size-qh)/2, qw, qh);
+    } else {
+      ctx.strokeStyle = '#2563eb'; ctx.setLineDash([8, 6]); ctx.strokeRect(qrX.value, qrY.value, size, size); ctx.setLineDash([]);
+      ctx.fillStyle = '#2563eb'; ctx.font = '600 16px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('二维码待配置', qrX.value + size / 2, qrY.value + size / 2);
+      ctx.textAlign = 'start';
+    }
     ctx.fillStyle = '#111827';
     ctx.textBaseline = 'top';
     ctx.font = '700 ' + inviteFontSize.value + 'px sans-serif';
