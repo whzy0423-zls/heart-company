@@ -74,6 +74,16 @@ const routes: RouteRecordRaw[] = [
         path: 'distribution',
       },
       {
+        component: () => import('#/views/app/distribution-poster-management.vue'),
+        meta: {
+          authority: ['Customer:App:List', 'Agent:Distribution:View', 'agent'],
+          icon: 'lucide:image',
+          title: '海报管理',
+        },
+        name: 'AppDistributionPosterManagement',
+        path: 'distribution-poster',
+      },
+      {
         component: () => import('#/views/app/plan-management.vue'),
         meta: {
           authority: ['App:PlanManagement:View'],
