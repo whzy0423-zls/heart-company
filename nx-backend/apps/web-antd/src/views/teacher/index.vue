@@ -48,8 +48,15 @@ import ImagePathInput from '../site-config/components/image-path-input.vue';
 type TeacherDraft = TeacherProfile & { appUserIdInput?: number };
 
 const accessStore = useAccessStore();
-const canWrite = computed(() => accessStore.accessCodes.includes('Teacher:Write'));
-const canReview = computed(() => accessStore.accessCodes.includes('Teacher:Review'));
+const canManage = computed(() =>
+  accessStore.accessCodes.includes('Miniapp:Teacher:Manage'),
+);
+const canWrite = computed(
+  () => canManage.value || accessStore.accessCodes.includes('Teacher:Write'),
+);
+const canReview = computed(
+  () => canManage.value || accessStore.accessCodes.includes('Teacher:Review'),
+);
 const activeTab = ref('profiles');
 const loading = ref(false);
 const reviewLoading = ref(false);

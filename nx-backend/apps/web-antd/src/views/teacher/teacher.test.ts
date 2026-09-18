@@ -9,7 +9,7 @@ const read = (path: string) => readFileSync(resolve(root, path), 'utf8');
 describe('teacher admin management contract', () => {
   it('registers a permission-gated teacher management route', () => {
     const route = read('router/routes/modules/teacher.ts');
-    expect(route).toContain("authority: ['Teacher:List']");
+    expect(route).toContain("'Miniapp:Teacher:Manage'");
     expect(route).toContain("path: '/teachers'");
     expect(route).toContain("import('#/views/teacher/index.vue')");
   });
