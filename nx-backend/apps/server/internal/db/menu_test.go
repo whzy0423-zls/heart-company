@@ -344,10 +344,11 @@ func TestDefaultMenusIncludeDistributionManagement(t *testing.T) {
 		title string
 		sort  int
 	}{
-		"AppDistributionManagement":  {path: "/app/distribution", title: "代理管理", sort: 13},
-		"AppDistributionCommissions": {path: "/app/distribution-commissions", title: "佣金明细", sort: 14},
-		"AppDistributionRules":       {path: "/app/distribution-rules", title: "佣金规则", sort: 15},
-		"AppDistributionSettlements": {path: "/app/distribution-settlements", title: "分销结算", sort: 16},
+		"AppDistributionManagement":       {path: "/app/distribution", title: "代理管理", sort: 13},
+		"AppDistributionCommissions":      {path: "/app/distribution-commissions", title: "佣金明细", sort: 14},
+		"AppDistributionRules":            {path: "/app/distribution-rules", title: "佣金规则", sort: 15},
+		"AppDistributionSettlements":      {path: "/app/distribution-settlements", title: "分销结算", sort: 16},
+		"AppDistributionPosterManagement": {path: "/app/distribution-poster", title: "海报管理", sort: 17},
 	}
 	found := make(map[string]bool, len(want))
 	for _, menu := range defaultMenus {
@@ -357,6 +358,12 @@ func TestDefaultMenusIncludeDistributionManagement(t *testing.T) {
 		}
 		found[menu.Name] = true
 		expectedComponent := expected.path
+		if menu.Name == "AppDistributionPosterManagement" {
+			expectedComponent = "/app/distribution-poster-management"
+			if menu.HideInMenu {
+				t.Fatal("poster menu must be visible")
+			}
+		}
 		if menu.Name == "AppDistributionManagement" {
 			expectedComponent = "/app/distribution-management"
 		}

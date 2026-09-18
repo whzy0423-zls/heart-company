@@ -11,8 +11,12 @@ func TestAgentBackendMenusExposeDistributionRoute(t *testing.T) {
 	if root.Name != "AppManage" || root.Path != "/app" {
 		t.Fatalf("root menu = %+v", root)
 	}
-	if len(root.Children) != 1 {
-		t.Fatalf("root children length=%d, want 1", len(root.Children))
+	if len(root.Children) != 2 {
+		t.Fatalf("root children length=%d, want 2", len(root.Children))
+	}
+	poster := root.Children[1]
+	if poster.Name != "AppDistributionPosterManagement" || poster.Path != "/app/distribution-poster" || poster.Component != "/app/distribution-poster-management" || poster.AuthCode != "Agent:Distribution:View" {
+		t.Fatalf("invalid agent poster menu: %+v", poster)
 	}
 	child := root.Children[0]
 	if child.Name != "AppDistributionManagement" {

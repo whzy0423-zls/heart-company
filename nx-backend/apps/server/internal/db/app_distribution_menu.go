@@ -14,7 +14,8 @@ JOIN menus target ON target.name IN (
   'AppDistributionManagement',
   'AppDistributionCommissions',
   'AppDistributionRules',
-  'AppDistributionSettlements'
+  'AppDistributionSettlements',
+  'AppDistributionPosterManagement'
 )
 WHERE source_menu.name IN ('AppManage','CustomerAppUsers','CustomerAppUsersEdit')
    OR source_menu.auth_code IN ('Customer:App:List','Customer:App:Write')

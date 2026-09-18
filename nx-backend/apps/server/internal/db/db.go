@@ -228,6 +228,7 @@ var defaultMenus = []seedMenu{
 	{ID: 1616, PID: 1600, Name: "AppDistributionCommissions", Path: "/app/distribution-commissions", Component: "/app/distribution-commissions", AuthCode: "Customer:App:List", Type: "menu", Sort: 14, Icon: "lucide:coins", Title: "佣金明细"},
 	{ID: 1617, PID: 1600, Name: "AppDistributionRules", Path: "/app/distribution-rules", Component: "/app/distribution-rules", AuthCode: "Customer:App:List", Type: "menu", Sort: 15, Icon: "lucide:percent", Title: "佣金规则"},
 	{ID: 1618, PID: 1600, Name: "AppDistributionSettlements", Path: "/app/distribution-settlements", Component: "/app/distribution-settlements", AuthCode: "Customer:App:List", Type: "menu", Sort: 16, Icon: "lucide:wallet-cards", Title: "分销结算"},
+	{ID: 1620, PID: 1600, Name: "AppDistributionPosterManagement", Path: "/app/distribution-poster", Component: "/app/distribution-poster-management", AuthCode: "Customer:App:List", Type: "menu", Sort: 17, Icon: "lucide:image", Title: "海报管理"},
 	{ID: 1619, PID: 1614, Name: "AppPlanManagementWrite", AuthCode: "App:PlanManagement:Write", Type: "button", Sort: 1, Icon: "lucide:pencil", Title: "编辑套餐"},
 	{ID: 500, PID: 0, Name: "CustomerManage", Path: "/customer", Type: "catalog", Sort: 15, Icon: "lucide:contact-round", Title: "客户管理"},
 	{ID: 501, PID: 500, Name: "CustomerSignupLeads", Path: "/customer/signups", Component: "/site-config/signup-leads", AuthCode: "Customer:Signup:List", Type: "menu", Sort: 1, Icon: "lucide:inbox", Title: "报名信息"},

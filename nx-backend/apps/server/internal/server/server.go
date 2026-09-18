@@ -1553,6 +1553,12 @@ func agentBackendMenus() []system.MenuItem {
 						"title":     "代理管理",
 					},
 				},
+				{
+					ID: -1002, PID: -1000, Name: "AppDistributionPosterManagement",
+					Path: "/app/distribution-poster", Component: "/app/distribution-poster-management",
+					AuthCode: "Agent:Distribution:View", Status: 1, Type: "menu",
+					Meta: map[string]any{"authority": []string{"agent", "Agent:Distribution:View"}, "icon": "lucide:image", "title": "海报管理"},
+				},
 			},
 		},
 	}
