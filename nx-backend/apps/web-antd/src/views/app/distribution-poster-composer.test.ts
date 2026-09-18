@@ -19,7 +19,7 @@ vi.mock('ant-design-vue', async () => {
 import Composer from './distribution-poster-composer.vue';
 async function settle() { for (let i = 0; i < 12; i++) await flushVuePromises(); }
 function mount(editable = false) { return mountVueComponent(defineComponent({ setup: () => () => h(Composer, { editable, agentCode: 'A123' }) })); }
-const config = { templateUrl: '/api/upload-assets/1', headline: '总部海报', subtitle: '统一文案', cta: '立即参与', landingUrl: 'https://example.com/fixed', qrImageUrl: '', qrSize: 176, qrX: 62, qrY: 1010, inviteX: 286, inviteY: 1100, inviteWidth: 350, inviteFontSize: 26 };
+const config = { templateUrl: '/api/upload-assets/1', landingUrl: 'https://example.com/fixed', qrImageUrl: '', qrSize: 176, qrX: 62, qrY: 1010, inviteX: 286, inviteY: 1100, inviteWidth: 350, inviteFontSize: 26 };
 describe('central poster configuration', () => {
   beforeEach(() => {
     state.codes = ['Agent:Distribution:View'];

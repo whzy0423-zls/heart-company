@@ -2,9 +2,9 @@ import { requestClient } from '#/api/request';
 
 export interface PosterConfig {
   templateUrl: string;
-  headline: string;
-  subtitle: string;
-  cta: string;
+  headline?: string;
+  subtitle?: string;
+  cta?: string;
   landingUrl: string;
   qrImageUrl: string;
   qrSize: number;

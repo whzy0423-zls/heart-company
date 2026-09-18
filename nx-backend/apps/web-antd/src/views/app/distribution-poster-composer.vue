@@ -13,9 +13,6 @@ const props = defineProps<{ agentCode?: string; editable?: boolean }>();
 const access = useAccessStore();
 const canEdit = computed(() => !!props.editable && access.accessCodes.includes('Customer:App:Write'));
 const canvasRef = ref<HTMLCanvasElement>();
-const headline = ref('');
-const subtitle = ref('');
-const cta = ref('');
 const inviteCode = ref(props.agentCode || '');
 const landingUrl = ref('');
 const templateUrl = ref('');
@@ -124,9 +121,6 @@ async function loadConfig() {
   try {
     const cfg = await getPosterConfigApi();
     templateUrl.value = cfg.templateUrl || '';
-    headline.value = cfg.headline || '';
-    subtitle.value = cfg.subtitle || '';
-    cta.value = cfg.cta || '';
     landingUrl.value = cfg.landingUrl || '';
     qrImageUrl.value = cfg.qrImageUrl || '';
     qrSize.value = cfg.qrSize || 176;
@@ -144,9 +138,8 @@ async function saveConfig() {
   saving.value = true;
   try {
     await savePosterConfigApi({
-      templateUrl: templateUrl.value, headline: headline.value, subtitle: subtitle.value,
       qrX: qrX.value, qrY: qrY.value, inviteX: inviteX.value, inviteY: inviteY.value, inviteWidth: inviteWidth.value, inviteFontSize: inviteFontSize.value,
-      cta: cta.value, landingUrl: landingUrl.value.trim(), qrImageUrl: qrImageUrl.value, qrSize: qrSize.value,
+      templateUrl: templateUrl.value, landingUrl: landingUrl.value.trim(), qrImageUrl: qrImageUrl.value, qrSize: qrSize.value,
     });
     message.success('海报配置已发布，代理重新打开页面即可使用');
   } catch { message.error('保存失败，请检查模板和二维码设置'); }
@@ -191,10 +184,6 @@ async function render() {
     const scale = Math.max(720 / background.naturalWidth, 1280 / background.naturalHeight);
     const w = background.naturalWidth * scale, h = background.naturalHeight * scale;
     ctx.drawImage(background, (720-w)/2, (1280-h)/2, w, h);
-    ctx.fillStyle = '#1f2937'; ctx.font = '700 32px sans-serif';
-    text(ctx, headline.value, 62, 963, 596);
-    ctx.fillStyle = '#667085'; ctx.font = '18px sans-serif';
-    text(ctx, subtitle.value, 62, 998, 596);
     const size = qrSize.value;
     ctx.fillStyle = '#fff'; ctx.fillRect(qrX.value, qrY.value, size, size);
     if (qr) {
@@ -211,9 +200,6 @@ async function render() {
     ctx.textBaseline = 'top';
     ctx.font = '700 ' + inviteFontSize.value + 'px sans-serif';
     text(ctx, inviteCode.value.trim() || '邀请码', inviteX.value, inviteY.value + 6, inviteWidth.value);
-    ctx.textBaseline = 'alphabetic';
-    ctx.font = '600 20px sans-serif';
-    text(ctx, cta.value, 286, 1180, 372);
     if (disposed || version !== renderVersion) return;
     visible.width = 720; visible.height = 1280;
     visible.getContext('2d')?.drawImage(canvas, 0, 0);
@@ -233,7 +219,7 @@ function downloadPoster() {
   } catch { message.error('海报导出失败，请重新加载图片'); }
 }
 
-watch([headline, subtitle, cta, inviteCode, landingUrl, qrImageUrl, templateUrl, qrSize, qrX, qrY, inviteX, inviteY, inviteWidth, inviteFontSize], () => void render());
+watch([inviteCode, landingUrl, qrImageUrl, templateUrl, qrSize, qrX, qrY, inviteX, inviteY, inviteWidth, inviteFontSize], () => void render());
 watch([qrSize, inviteWidth, inviteFontSize], () => {
   moveElement('qr', qrX.value, qrY.value);
   moveElement('invite', inviteX.value, inviteY.value);
@@ -252,7 +238,7 @@ onBeforeUnmount(() => {
     <template #extra>
       <Space wrap>
         <Button @click="loadConfig">重新加载</Button>
-        <Button v-if="canEdit" type="primary" :loading="saving" :disabled="!ready || rendering || uploading" @click="saveConfig">保存并发布</Button>
+        <Button v-if="canEdit" type="primary" :loading="saving" :disabled="!ready || rendering || uploading || (!landingUrl.trim() && !qrImageUrl)" @click="saveConfig">保存并发布</Button>
         <Button :disabled="!ready || rendering || !inviteCode.trim()" @click="downloadPoster">生成并下载 PNG</Button>
       </Space>
     </template>
@@ -276,13 +262,10 @@ onBeforeUnmount(() => {
       </div>
       <Form layout="vertical" class="poster-form">
         <template v-if="canEdit">
-          <Form.Item label="海报模板">
+          <Form.Item label="海报模板（上传后立即预览）">
             <Upload accept="image/png,image/jpeg,image/webp" :show-upload-list="false" :disabled="uploading || saving" :before-upload="file => upload(file, 'template')"><Button :loading="uploading">上传海报模板</Button></Upload>
           </Form.Item>
-          <Form.Item label="主标题"><Input v-model:value="headline" :maxlength="32" /></Form.Item>
-          <Form.Item label="副文案"><Input.TextArea v-model:value="subtitle" :maxlength="80" :rows="2" /></Form.Item>
-          <Form.Item label="行动文案"><Input v-model:value="cta" :maxlength="24" /></Form.Item>
-          <Form.Item label="固定二维码图片（优先使用）">
+          <Form.Item label="二维码（上传图片或填写链接二选一）">
             <Space>
               <Upload accept="image/png,image/jpeg,image/webp" :show-upload-list="false" :disabled="uploading || saving" :before-upload="file => upload(file, 'qr')"><Button>上传二维码</Button></Upload>
               <Button v-if="qrImageUrl" @click="qrImageUrl = ''">移除二维码图片</Button>
