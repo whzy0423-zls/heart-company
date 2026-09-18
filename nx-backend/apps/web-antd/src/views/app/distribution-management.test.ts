@@ -240,7 +240,7 @@ describe('distribution management page', () => {
     }
   });
 
-  it('provides a browser-local poster composer for agent sharing', () => {
+  it('provides a centrally configured poster composer for agent sharing', () => {
     const posterSource = readFileSync(
       resolve('apps/web-antd/src/views/app/distribution-poster-composer.vue'),
       'utf8',
@@ -253,9 +253,9 @@ describe('distribution management page', () => {
       'inviteCode',
       'landingUrl',
       'QRCode.toDataURL',
-      'canvas.toDataURL',
-      'URL.createObjectURL',
-      'register?agentCode=',
+      'toDataURL',
+      'getPosterConfigApi',
+      'savePosterConfigApi',
     ]) {
       expect(posterSource).toContain(expected);
     }

@@ -285,6 +285,7 @@ type miniappBookingCreator interface {
 }
 
 var uploadPermissionCodes = []string{
+	"Customer:App:Write",
 	"RAG:Knowledge:Manage",
 	"Reading:Article:Manage",
 	"System:Branding",
@@ -953,6 +954,14 @@ func (s *Server) routes() {
 		}
 		s.requirePermission(permission, s.appFeatureConfig)(w, r)
 	})
+	s.mux.HandleFunc("/api/distribution-poster-config", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			s.requireAnyPermission([]string{"Customer:App:List", "Agent:Distribution:View"}, s.distributionPosterConfig)(w, r)
+			return
+		}
+		s.requirePermission("Customer:App:Write", s.distributionPosterConfig)(w, r)
+	})
+
 	// 对话模型连通性测试：对 MiniMax 网关做一次轻量探活，需登录。
 	s.mux.HandleFunc("/api/model-config/test-chat", s.requirePermission("System:Model:Config", s.method(http.MethodPost, s.testChatModel)))
 	// ===== App API =====

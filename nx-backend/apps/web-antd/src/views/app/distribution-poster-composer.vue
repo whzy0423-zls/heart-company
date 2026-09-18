@@ -1,206 +1,225 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { Button, Card, Form, Input, Slider, Space, Typography, Upload, message } from 'ant-design-vue';
-import type { UploadProps } from 'ant-design-vue';
+import { useAccessStore } from '@vben/stores';
+import { Alert, Button, Card, Form, Input, Slider, Space, Typography, Upload, message } from 'ant-design-vue';
 import QRCode from 'qrcode';
+import { getPosterConfigApi, savePosterConfigApi } from '#/api/core/distribution-poster';
+import { uploadFileApi } from '#/api/core/upload';
+import { createUploadAssetObjectURL } from '#/utils/upload-asset-preview';
 
-const props = defineProps<{ agentCode?: string }>();
-
+const props = defineProps<{ agentCode?: string; editable?: boolean }>();
+const access = useAccessStore();
+const canEdit = computed(() => !!props.editable && access.accessCodes.includes('Customer:App:Write'));
 const canvasRef = ref<HTMLCanvasElement>();
-const fileInputRef = ref<HTMLInputElement>();
-const image = ref<HTMLImageElement>();
-const imageUrl = ref('');
-const headline = ref('看见自己，也读懂关系');
-const subtitle = ref('从人格画像到日常陪伴，让每一次觉察都成为成长的开始。');
-const cta = ref('立即开启自我探索');
-const inviteCode = ref(props.agentCode || 'INVITE_CODE');
+const headline = ref('');
+const subtitle = ref('');
+const cta = ref('');
+const inviteCode = ref(props.agentCode || '');
 const landingUrl = ref('');
+const templateUrl = ref('');
+const qrImageUrl = ref('');
 const qrSize = ref(176);
+const loading = ref(true);
+const saving = ref(false);
+const uploading = ref(false);
 const rendering = ref(false);
+const ready = ref(false);
+const loadError = ref(false);
+const renderError = ref('');
+let renderVersion = 0;
+let disposed = false;
+const imageCache = new Map<string, Promise<HTMLImageElement>>();
+const objectURLs = new Set<string>();
 
-const resolvedUrl = computed(() =>
-  landingUrl.value.trim() || `https://xinzhili.app/register?agentCode=${encodeURIComponent(inviteCode.value.trim())}`,
-);
-
-function resetInviteCode() {
-  if (props.agentCode) inviteCode.value = props.agentCode;
-}
-
-function openFilePicker() {
-  fileInputRef.value?.click();
-}
-
-function handleFile(event: Event) {
-  const file = (event.target as HTMLInputElement).files?.[0];
-  if (!file) return;
-  if (!file.type.startsWith('image/')) {
-    message.error('请选择 PNG、JPG 或 WebP 图片');
-    return;
+async function loadImage(source: string) {
+  if (!imageCache.has(source)) {
+    const pending = (async () => {
+      const url = await createUploadAssetObjectURL(source, access.accessToken);
+      if (!url) throw new Error('图片加载失败');
+      if (url.startsWith('blob:')) objectURLs.add(url);
+      return new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error('图片加载失败'));
+        image.src = url;
+      });
+    })();
+    imageCache.set(source, pending);
+    pending.catch(() => imageCache.delete(source));
   }
-  if (file.size > 12 * 1024 * 1024) {
-    message.error('图片大小不能超过 12MB');
-    return;
-  }
-  const nextUrl = URL.createObjectURL(file);
-  if (imageUrl.value) URL.revokeObjectURL(imageUrl.value);
-  imageUrl.value = nextUrl;
-  const nextImage = new Image();
-  nextImage.onload = () => {
-    image.value = nextImage;
-    void render();
-  };
-  nextImage.src = nextUrl;
+  return imageCache.get(source)!;
 }
 
-const uploadProps: UploadProps = {
-  accept: 'image/png,image/jpeg,image/webp',
-  showUploadList: false,
-  beforeUpload: (file) => {
-    if (file instanceof File) {
-      const dataTransfer = new DataTransfer();
-      dataTransfer.items.add(file);
-      if (fileInputRef.value) fileInputRef.value.files = dataTransfer.files;
-      handleFile({ target: { files: dataTransfer.files } } as unknown as Event);
-    }
+async function upload(file: File, kind: 'template' | 'qr') {
+  if (!canEdit.value) return false;
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 12 * 1024 * 1024) {
+    message.error('请选择不超过 12MB 的 PNG、JPG 或 WebP 图片');
     return false;
-  },
-};
-
-function drawCover(ctx: CanvasRenderingContext2D, source: CanvasImageSource, width: number, height: number) {
-  const sourceWidth = source instanceof HTMLImageElement ? source.naturalWidth : width;
-  const sourceHeight = source instanceof HTMLImageElement ? source.naturalHeight : height;
-  const scale = Math.max(width / sourceWidth, height / sourceHeight);
-  const drawWidth = sourceWidth * scale;
-  const drawHeight = sourceHeight * scale;
-  ctx.drawImage(source, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+  }
+  uploading.value = true;
+  try {
+    const result = await uploadFileApi(file, 'poster');
+    await loadImage(result.url);
+    if (kind === 'template') templateUrl.value = result.url;
+    else qrImageUrl.value = result.url;
+    message.success('图片已上传，请保存配置发布给代理');
+  } catch { message.error('图片上传失败，请重试'); }
+  finally { uploading.value = false; }
+  return false;
 }
 
-function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
-  ctx.beginPath();
-  ctx.roundRect(x, y, width, height, radius);
-  ctx.closePath();
+async function loadConfig() {
+  loading.value = true;
+  loadError.value = false;
+  try {
+    const cfg = await getPosterConfigApi();
+    templateUrl.value = cfg.templateUrl || '';
+    headline.value = cfg.headline || '';
+    subtitle.value = cfg.subtitle || '';
+    cta.value = cfg.cta || '';
+    landingUrl.value = cfg.landingUrl || '';
+    qrImageUrl.value = cfg.qrImageUrl || '';
+    qrSize.value = cfg.qrSize || 176;
+  } catch { loadError.value = true; }
+  finally { loading.value = false; }
+  await nextTick();
+  await render();
+}
+
+async function saveConfig() {
+  if (!canEdit.value || !ready.value || uploading.value) return;
+  saving.value = true;
+  try {
+    await savePosterConfigApi({
+      templateUrl: templateUrl.value, headline: headline.value, subtitle: subtitle.value,
+      cta: cta.value, landingUrl: landingUrl.value.trim(), qrImageUrl: qrImageUrl.value, qrSize: qrSize.value,
+    });
+    message.success('海报配置已发布，代理重新打开页面即可使用');
+  } catch { message.error('保存失败，请检查模板和二维码设置'); }
+  finally { saving.value = false; }
+}
+
+function text(ctx: CanvasRenderingContext2D, value: string, x: number, y: number, maxWidth: number) {
+  ctx.fillText(value, x, y, maxWidth);
 }
 
 async function render() {
-  const canvas = canvasRef.value;
-  if (!canvas) return;
+  const version = ++renderVersion;
+  ready.value = false;
+  renderError.value = '';
+  if (loading.value || loadError.value || !canvasRef.value) return;
+  const visible = canvasRef.value;
+  if (!templateUrl.value || (!qrImageUrl.value && !landingUrl.value.trim())) {
+    visible.getContext('2d')?.clearRect(0, 0, visible.width, visible.height);
+    rendering.value = false;
+    return;
+  }
   rendering.value = true;
   try {
-    const width = 720;
-    const height = 1280;
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.fillStyle = '#f8f4ee';
-    ctx.fillRect(0, 0, width, height);
-    if (image.value) drawCover(ctx, image.value, width, height);
-    else {
-      const gradient = ctx.createLinearGradient(0, 0, width, height);
-      gradient.addColorStop(0, '#f8f1e7');
-      gradient.addColorStop(1, '#e8edf5');
-      ctx.fillStyle = gradient;
-      ctx.fillRect(0, 0, width, height);
+    const background = await loadImage(templateUrl.value);
+    let qrSource = qrImageUrl.value;
+    if (!qrSource) {
+      const url = new URL(landingUrl.value.trim());
+      if (!['http:', 'https:'].includes(url.protocol)) throw new Error('请输入有效的二维码链接');
+      // The administrator owns the QR destination; invitation text never changes it.
+      qrSource = await QRCode.toDataURL(landingUrl.value.trim(), { margin: 4, width: 660, errorCorrectionLevel: 'M' });
     }
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.88)';
-    roundedRect(ctx, 34, height - 338, width - 68, 286, 28);
-    ctx.fill();
-    ctx.fillStyle = '#1f2937';
-    ctx.font = '700 32px sans-serif';
-    ctx.fillText(headline.value.trim() || '看见自己，也读懂关系', 62, height - 290);
-    ctx.fillStyle = '#667085';
-    ctx.font = '20px sans-serif';
-    const description = subtitle.value.trim() || '从人格画像到日常陪伴，让每一次觉察都成为成长的开始。';
-    ctx.fillText(description.slice(0, 30), 62, height - 254);
-    ctx.fillStyle = '#111827';
-    ctx.font = '600 21px sans-serif';
-    ctx.fillText('新用户专属邀请码', 278, height - 200);
-    ctx.fillStyle = '#667085';
-    ctx.font = '18px sans-serif';
-    ctx.fillText(inviteCode.value.trim() || 'INVITE_CODE', 278, height - 165);
-    ctx.fillStyle = '#111827';
-    ctx.font = '700 21px sans-serif';
-    ctx.fillText(cta.value.trim() || '立即开启自我探索', 278, height - 112);
-    const qrDataUrl = await QRCode.toDataURL(resolvedUrl.value, { margin: 1, width: qrSize.value, errorCorrectionLevel: 'M' });
-    const qrImage = new Image();
-    await new Promise<void>((resolve, reject) => {
-      qrImage.onload = () => resolve();
-      qrImage.onerror = () => reject(new Error('二维码生成失败'));
-      qrImage.src = qrDataUrl;
+    const qr = qrImageUrl.value ? await loadImage(qrSource) : await new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error('二维码生成失败'));
+      image.src = qrSource;
     });
-    ctx.fillStyle = '#fff';
-    roundedRect(ctx, 62, height - 238, qrSize.value + 18, qrSize.value + 18, 12);
-    ctx.fill();
-    ctx.drawImage(qrImage, 71, height - 229, qrSize.value, qrSize.value);
-  } catch {
-    message.error('海报预览生成失败');
-  } finally {
-    rendering.value = false;
-  }
+    const canvas = document.createElement('canvas');
+    canvas.width = 720; canvas.height = 1280;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('浏览器不支持海报绘制');
+    const scale = Math.max(720 / background.naturalWidth, 1280 / background.naturalHeight);
+    const w = background.naturalWidth * scale, h = background.naturalHeight * scale;
+    ctx.drawImage(background, (720-w)/2, (1280-h)/2, w, h);
+    ctx.fillStyle = 'rgba(255,255,255,0.94)';
+    ctx.beginPath(); ctx.roundRect(34, 916, 652, 330, 28); ctx.fill();
+    ctx.fillStyle = '#1f2937'; ctx.font = '700 32px sans-serif';
+    text(ctx, headline.value, 62, 963, 596);
+    ctx.fillStyle = '#667085'; ctx.font = '18px sans-serif';
+    text(ctx, subtitle.value, 62, 998, 596);
+    const size = qrSize.value;
+    ctx.fillStyle = '#fff'; ctx.fillRect(62, 1010, size, size);
+    const qrScale = Math.min(size / qr.naturalWidth, size / qr.naturalHeight);
+    const qw = qr.naturalWidth * qrScale, qh = qr.naturalHeight * qrScale;
+    ctx.drawImage(qr, 62+(size-qw)/2, 1010+(size-qh)/2, qw, qh);
+    const x = 62 + size + 24, available = 658-x;
+    ctx.fillStyle = '#111827'; ctx.font = '600 21px sans-serif';
+    text(ctx, '新用户专属邀请码', x, 1070, available);
+    ctx.font = '700 26px sans-serif';
+    text(ctx, inviteCode.value.trim() || '邀请码', x, 1120, available);
+    ctx.font = '600 20px sans-serif';
+    text(ctx, cta.value, x, 1180, available);
+    if (disposed || version !== renderVersion) return;
+    visible.width = 720; visible.height = 1280;
+    visible.getContext('2d')?.drawImage(canvas, 0, 0);
+    ready.value = true;
+  } catch (error) {
+    if (version === renderVersion) renderError.value = error instanceof Error ? error.message : '海报预览生成失败';
+  } finally { if (version === renderVersion) rendering.value = false; }
 }
 
 function downloadPoster() {
-  const canvas = canvasRef.value;
-  if (!canvas) return;
-  const link = document.createElement('a');
-  link.download = `芯之力-代理海报-${inviteCode.value.trim() || 'invite'}.png`;
-  link.href = canvas.toDataURL('image/png');
-  link.click();
-  message.success('海报已生成并下载');
+  if (!ready.value || rendering.value || !inviteCode.value.trim() || !canvasRef.value) return;
+  try {
+    const link = document.createElement('a');
+    link.download = '芯之力-代理海报.png';
+    link.href = canvasRef.value.toDataURL('image/png');
+    link.click();
+  } catch { message.error('海报导出失败，请重新加载图片'); }
 }
 
-watch([headline, subtitle, cta, inviteCode, landingUrl, qrSize], () => void render());
-watch(() => props.agentCode, resetInviteCode);
-
-onMounted(async () => {
-  await nextTick();
-  await render();
-});
-
+watch([headline, subtitle, cta, inviteCode, landingUrl, qrImageUrl, templateUrl, qrSize], () => void render());
+watch(() => props.agentCode, code => { if (code) inviteCode.value = code; });
+onMounted(async () => { await nextTick(); await loadConfig(); });
 onBeforeUnmount(() => {
-  if (imageUrl.value) URL.revokeObjectURL(imageUrl.value);
+  disposed = true; renderVersion++;
+  objectURLs.forEach(url => URL.revokeObjectURL(url));
 });
 </script>
 
 <template>
-  <Card :bordered="false" class="poster-composer-card">
-    <template #title>分享海报生成器</template>
+  <Card :bordered="false" class="poster-composer-card" :loading="loading">
+    <template #title>{{ canEdit ? '海报模板与二维码设置' : '生成我的分享海报' }}</template>
     <template #extra>
-      <Space>
-        <Upload v-bind="uploadProps">
-          <Button>上传海报模板</Button>
-        </Upload>
-        <Button type="primary" :loading="rendering" @click="downloadPoster">生成并下载 PNG</Button>
+      <Space wrap>
+        <Button @click="loadConfig">重新加载</Button>
+        <Button v-if="canEdit" type="primary" :loading="saving" :disabled="!ready || rendering || uploading" @click="saveConfig">保存并发布</Button>
+        <Button :disabled="!ready || rendering || !inviteCode.trim()" @click="downloadPoster">生成并下载 PNG</Button>
       </Space>
     </template>
-    <input ref="fileInputRef" type="file" hidden accept="image/png,image/jpeg,image/webp" @change="handleFile" />
+    <Alert v-if="loadError" type="error" show-icon message="海报配置加载失败，请重新加载" />
+    <Alert v-else-if="!templateUrl || (!landingUrl && !qrImageUrl)" type="info" show-icon :message="canEdit ? '请上传模板并设置固定二维码，保存后代理即可使用' : '管理员尚未发布海报，请稍后重试'" />
+    <Alert v-if="renderError" type="error" show-icon :message="renderError" />
     <div class="poster-composer-layout">
       <div class="poster-preview-shell">
-        <canvas ref="canvasRef" class="poster-canvas" @click="openFilePicker"></canvas>
-        <Typography.Text type="secondary">点击预览也可以重新上传模板</Typography.Text>
+        <canvas ref="canvasRef" class="poster-canvas" width="720" height="1280"></canvas>
+        <Typography.Text type="secondary">二维码由管理端统一设置，填写邀请码不会改变二维码</Typography.Text>
       </div>
       <Form layout="vertical" class="poster-form">
-        <Form.Item label="主标题">
-          <Input v-model:value="headline" :maxlength="32" show-count />
-        </Form.Item>
-        <Form.Item label="副文案">
-          <Input.TextArea v-model:value="subtitle" :rows="2" :maxlength="80" show-count />
-        </Form.Item>
-        <Form.Item label="行动按钮文案">
-          <Input v-model:value="cta" :maxlength="24" />
-        </Form.Item>
-        <Form.Item label="邀请码">
-          <Input v-model:value="inviteCode" :maxlength="32" addon-before="邀请码" />
-        </Form.Item>
-        <Form.Item label="二维码链接">
-          <Input v-model:value="landingUrl" placeholder="留空则自动使用注册邀请链接" />
-        </Form.Item>
-        <Form.Item label="二维码尺寸">
-          <Slider v-model:value="qrSize" :min="132" :max="220" :step="4" />
-        </Form.Item>
-        <Typography.Paragraph type="secondary" class="poster-hint">
-          上传图片只在当前浏览器中处理，不会自动上传到后台。二维码默认绑定当前邀请码，适合直接分享给新用户。
-        </Typography.Paragraph>
+        <template v-if="canEdit">
+          <Form.Item label="海报模板">
+            <Upload accept="image/png,image/jpeg,image/webp" :show-upload-list="false" :disabled="uploading || saving" :before-upload="file => upload(file, 'template')"><Button :loading="uploading">上传海报模板</Button></Upload>
+          </Form.Item>
+          <Form.Item label="主标题"><Input v-model:value="headline" :maxlength="32" /></Form.Item>
+          <Form.Item label="副文案"><Input.TextArea v-model:value="subtitle" :maxlength="80" :rows="2" /></Form.Item>
+          <Form.Item label="行动文案"><Input v-model:value="cta" :maxlength="24" /></Form.Item>
+          <Form.Item label="固定二维码图片（优先使用）">
+            <Space>
+              <Upload accept="image/png,image/jpeg,image/webp" :show-upload-list="false" :disabled="uploading || saving" :before-upload="file => upload(file, 'qr')"><Button>上传二维码</Button></Upload>
+              <Button v-if="qrImageUrl" @click="qrImageUrl = ''">移除二维码图片</Button>
+            </Space>
+          </Form.Item>
+          <Form.Item label="固定二维码链接（未上传二维码图片时使用）"><Input v-model:value="landingUrl" placeholder="https://..." :maxlength="2048" /></Form.Item>
+          <Form.Item label="二维码尺寸"><Slider v-model:value="qrSize" :min="132" :max="220" :step="4" /></Form.Item>
+        </template>
+        <Form.Item :label="canEdit ? '预览邀请码（不保存）' : '邀请码'"><Input v-model:value="inviteCode" :maxlength="32" placeholder="请输入邀请码" /></Form.Item>
+        <Typography.Paragraph type="secondary">{{ canEdit ? '保存并发布后，模板、文字和二维码统一供代理使用。' : '只需填写邀请码，再下载分享海报。' }}</Typography.Paragraph>
       </Form>
     </div>
   </Card>
@@ -228,7 +247,6 @@ onBeforeUnmount(() => {
   display: block;
   width: min(100%, 390px);
   height: auto;
-  cursor: pointer;
   border: 1px solid hsl(var(--border));
   border-radius: 12px;
   box-shadow: 0 16px 36px rgb(15 23 42 / 15%);
