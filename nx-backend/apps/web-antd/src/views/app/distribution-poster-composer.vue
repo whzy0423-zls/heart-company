@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAccessStore } from '@vben/stores';
 import { Alert, Button, Card, Form, Input, InputNumber, Slider, Space, Typography, Upload, message } from 'ant-design-vue';
 import QRCode from 'qrcode';
-import { getPosterConfigApi, savePosterConfigApi } from '#/api/core/distribution-poster';
+import { getPosterConfigApi, savePosterConfigApi, type PosterTemplate } from '#/api/core/distribution-poster';
 import { uploadFileApi } from '#/api/core/upload';
 import { createUploadAssetObjectURL } from '#/utils/upload-asset-preview';
 
@@ -17,6 +17,8 @@ const inviteCode = ref(props.agentCode || '');
 const defaultLandingUrl = 'https://xn--9iq9az5uo8fz16d.com/app';
 const landingUrl = ref(defaultLandingUrl);
 const templateUrl = ref('');
+const templates = ref<PosterTemplate[]>([]);
+const selectedTemplateId = ref('');
 const qrImageUrl = ref('');
 const qrSize = ref(176);
 const qrX = ref(62);
@@ -88,6 +90,44 @@ const dynamicLandingUrl = computed(() => {
   } catch { return base; }
 });
 
+function templateSnapshot(): PosterTemplate {
+  return { id: selectedTemplateId.value || `poster-${Date.now()}`, name: templates.value.find(item => item.id === selectedTemplateId.value)?.name || '海报模板', enabled: templates.value.find(item => item.id === selectedTemplateId.value)?.enabled ?? true, sortOrder: templates.value.find(item => item.id === selectedTemplateId.value)?.sortOrder ?? templates.value.length, templateUrl: templateUrl.value, landingUrl: landingUrl.value.trim() || defaultLandingUrl, qrImageUrl: '', qrSize: qrSize.value, qrX: qrX.value, qrY: qrY.value, inviteX: inviteX.value, inviteY: inviteY.value, inviteWidth: inviteWidth.value, inviteFontSize: inviteFontSize.value };
+}
+
+function applyTemplate(template: PosterTemplate) {
+  selectedTemplateId.value = template.id;
+  templateUrl.value = template.templateUrl || '';
+  landingUrl.value = template.landingUrl || defaultLandingUrl;
+  qrImageUrl.value = '';
+  qrSize.value = template.qrSize || 176; qrX.value = template.qrX ?? 62; qrY.value = template.qrY ?? 1010;
+  inviteX.value = template.inviteX ?? 286; inviteY.value = template.inviteY ?? 1100;
+  inviteWidth.value = template.inviteWidth ?? 350; inviteFontSize.value = template.inviteFontSize ?? 26;
+}
+
+function syncCurrentTemplate() {
+  const index = templates.value.findIndex(item => item.id === selectedTemplateId.value);
+  if (index >= 0) templates.value[index] = templateSnapshot();
+}
+function updateTemplateName(value: unknown) {
+  const item = templates.value.find(item => item.id === selectedTemplateId.value);
+  if (item) item.name = String(value ?? '');
+}
+
+function addTemplate(copy = false) {
+  syncCurrentTemplate();
+  const source = copy && templates.value.length ? templates.value.find(item => item.id === selectedTemplateId.value) || templates.value[0] : undefined;
+  const id = `poster-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const next: PosterTemplate = { ...(source || { templateUrl: '', landingUrl: defaultLandingUrl, qrImageUrl: '', qrSize: 176, qrX: 62, qrY: 1010, inviteX: 286, inviteY: 1100, inviteWidth: 350, inviteFontSize: 26 }), id, name: source ? `${source.name} 副本` : `海报模板 ${templates.value.length + 1}`, enabled: true, sortOrder: templates.value.length };
+  templates.value.push(next); applyTemplate(next);
+}
+
+function removeTemplate() {
+  if (templates.value.length <= 1) return message.warning('至少保留一个海报模板');
+  const index = templates.value.findIndex(item => item.id === selectedTemplateId.value);
+  templates.value.splice(index, 1);
+  applyTemplate(templates.value[Math.max(0, index - 1)]!);
+}
+
 async function loadImage(source: string) {
   if (!imageCache.has(source)) {
     const pending = (async () => {
@@ -130,15 +170,8 @@ async function loadConfig() {
   loadError.value = false;
   try {
     const cfg = await getPosterConfigApi();
-    templateUrl.value = cfg.templateUrl || '';
-    landingUrl.value = cfg.landingUrl || defaultLandingUrl;
-    // QR codes are generated from the official download URL. Keep the legacy
-    // field in the API contract, but do not render or publish uploaded QR data.
-    qrImageUrl.value = '';
-    qrSize.value = cfg.qrSize || 176;
-    qrX.value = cfg.qrX ?? 62; qrY.value = cfg.qrY ?? 1010;
-    inviteX.value = cfg.inviteX ?? 286; inviteY.value = cfg.inviteY ?? 1100;
-    inviteWidth.value = cfg.inviteWidth ?? 350; inviteFontSize.value = cfg.inviteFontSize ?? 26;
+    templates.value = (cfg.templates?.length ? cfg.templates : [cfg]).map((item, index) => ({ ...item, id: item.id || `poster-${index}`, name: item.name || `海报模板 ${index + 1}`, enabled: item.enabled !== false, sortOrder: item.sortOrder ?? index }));
+    applyTemplate(templates.value[0]!);
   } catch { loadError.value = true; }
   finally { loading.value = false; }
   await nextTick();
@@ -149,9 +182,9 @@ async function saveConfig() {
   if (!canEdit.value || !ready.value || uploading.value) return;
   saving.value = true;
   try {
+    syncCurrentTemplate();
     await savePosterConfigApi({
-      qrX: qrX.value, qrY: qrY.value, inviteX: inviteX.value, inviteY: inviteY.value, inviteWidth: inviteWidth.value, inviteFontSize: inviteFontSize.value,
-      templateUrl: templateUrl.value, landingUrl: landingUrl.value.trim() || defaultLandingUrl, qrImageUrl: '', qrSize: qrSize.value,
+      ...templateSnapshot(), templates: templates.value,
     });
     message.success('海报配置已发布，代理重新打开页面即可使用');
   } catch { message.error('保存失败，请检查模板和二维码设置'); }
@@ -252,6 +285,9 @@ onBeforeUnmount(() => {
     <template #extra>
       <Space wrap>
         <Button @click="loadConfig">重新加载</Button>
+        <Button v-if="canEdit" @click="addTemplate()">新增模板</Button>
+        <Button v-if="canEdit" @click="addTemplate(true)" :disabled="!templates.length">复制模板</Button>
+        <Button v-if="canEdit" danger @click="removeTemplate" :disabled="templates.length <= 1">删除模板</Button>
         <Button v-if="canEdit" type="primary" :loading="saving" :disabled="!ready || rendering || uploading || (!landingUrl.trim() && !qrImageUrl)" @click="saveConfig">保存并发布</Button>
         <Button :disabled="!ready || rendering || !inviteCode.trim()" @click="downloadPoster">生成并下载 PNG</Button>
       </Space>
@@ -276,6 +312,13 @@ onBeforeUnmount(() => {
       </div>
       <Form layout="vertical" class="poster-form">
         <template v-if="canEdit">
+          <Form.Item label="已发布模板">
+            <Space wrap>
+              <Button v-for="item in templates" :key="item.id" :type="item.id === selectedTemplateId ? 'primary' : 'default'" @click="syncCurrentTemplate(); applyTemplate(item)">{{ item.name }}</Button>
+            </Space>
+          </Form.Item>
+          <Form.Item label="模板名称"><input class="template-name-input" :value="templates.find(item => item.id === selectedTemplateId)?.name" maxlength="40" @input="updateTemplateName(($event.target as HTMLInputElement).value)" /></Form.Item>
+          <Form.Item label="对代理端可见"><input type="checkbox" :checked="templates.find(item => item.id === selectedTemplateId)?.enabled" @change="event => { const item = templates.find(item => item.id === selectedTemplateId); if (item) item.enabled = (event.target as HTMLInputElement).checked; }" /></Form.Item>
           <Form.Item label="海报模板（上传后立即预览）">
             <Upload accept="image/png,image/jpeg,image/webp" :show-upload-list="false" :disabled="uploading || saving" :before-upload="file => upload(file, 'template')"><Button :loading="uploading">上传海报模板</Button></Upload>
           </Form.Item>

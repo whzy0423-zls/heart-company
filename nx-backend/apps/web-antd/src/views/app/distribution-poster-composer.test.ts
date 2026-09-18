@@ -42,7 +42,7 @@ describe('central poster configuration', () => {
     inputs[0]!.value = 'B456'; inputs[0]!.dispatchEvent(new Event('input', { bubbles: true }));
     await settle();
     expect(state.qr).toHaveBeenCalled();
-    for (const call of state.qr.mock.calls) expect(call[0]).toBe(config.landingUrl);
+    expect(state.qr.mock.calls.at(-1)?.[0]).toContain('agentCode=B456');
     expect(state.save).not.toHaveBeenCalled();
     wrapper.unmount();
   });
@@ -54,13 +54,13 @@ describe('central poster configuration', () => {
     target.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, bubbles: true }));
     await settle();
     wrapper.button('保存并发布')!.click(); await settle();
-    expect(state.save).toHaveBeenCalledWith({ ...config, qrX: 72 });
+    expect(state.save).toHaveBeenCalledWith(expect.objectContaining({ qrX: 72, templates: expect.any(Array) }));
     wrapper.unmount();
   });
-  it('fixed QR image takes precedence over URL', async () => {
+  it('official QR URL remains the source even when a legacy image exists', async () => {
     state.get.mockResolvedValue({ ...config, qrImageUrl: '/api/upload-assets/2' });
     const wrapper = mount(); await settle();
-    expect(state.qr).not.toHaveBeenCalled();
+    expect(state.qr).toHaveBeenCalled();
     expect(wrapper.button('生成并下载 PNG')?.disabled).toBe(false);
     wrapper.unmount();
   });

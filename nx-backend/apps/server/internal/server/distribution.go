@@ -561,7 +561,8 @@ func (s *Server) appDistributionOverview(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	httpx.OK(w, map[string]any{"isAgent": true, "agent": a, "directUsers": users, "todayInvites": today, "monthInvites": month, "teamUserCount": team,
-		"commissionRecords": orders, "commissionAmount": commission, "pendingCommission": pending, "settledCommission": settled, "settleableCommission": available})
+		"commissionRecords": orders, "commissionAmount": commission, "pendingCommission": pending, "settledCommission": settled, "settleableCommission": available,
+		"posterTemplates": s.appPosterTemplates(r.Context())})
 }
 
 func (s *Server) appDistributionBind(w http.ResponseWriter, r *http.Request) {

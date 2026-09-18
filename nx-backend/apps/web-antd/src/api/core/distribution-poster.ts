@@ -1,6 +1,10 @@
 import { requestClient } from '#/api/request';
 
-export interface PosterConfig {
+export interface PosterTemplate {
+  id: string;
+  name: string;
+  enabled: boolean;
+  sortOrder: number;
   templateUrl: string;
   headline?: string;
   subtitle?: string;
@@ -14,6 +18,10 @@ export interface PosterConfig {
   inviteY: number;
   inviteWidth: number;
   inviteFontSize: number;
+}
+
+export interface PosterConfig extends PosterTemplate {
+  templates: PosterTemplate[];
 }
 
 export const getPosterConfigApi = () => requestClient.get<PosterConfig>('/distribution-poster-config');
