@@ -15,13 +15,23 @@ import (
 const distributionPosterKey = "distribution_poster"
 
 type posterConfig struct {
-	TemplateURL string `json:"templateUrl"`
-	Headline    string `json:"headline"`
-	Subtitle    string `json:"subtitle"`
-	CTA         string `json:"cta"`
-	LandingURL  string `json:"landingUrl"`
-	QRImageURL  string `json:"qrImageUrl"`
-	QRSize      int    `json:"qrSize"`
+	TemplateURL    string `json:"templateUrl"`
+	Headline       string `json:"headline"`
+	Subtitle       string `json:"subtitle"`
+	CTA            string `json:"cta"`
+	LandingURL     string `json:"landingUrl"`
+	QRImageURL     string `json:"qrImageUrl"`
+	QRSize         int    `json:"qrSize"`
+	QRX            int    `json:"qrX"`
+	QRY            int    `json:"qrY"`
+	InviteX        int    `json:"inviteX"`
+	InviteY        int    `json:"inviteY"`
+	InviteWidth    int    `json:"inviteWidth"`
+	InviteFontSize int    `json:"inviteFontSize"`
+}
+
+func defaultPosterConfig() posterConfig {
+	return posterConfig{QRSize: 176, QRX: 62, QRY: 1010, InviteX: 286, InviteY: 1100, InviteWidth: 350, InviteFontSize: 26}
 }
 
 func validPosterImage(value string) bool {
@@ -46,6 +56,12 @@ func validatePosterConfig(cfg posterConfig) error {
 	}
 	if cfg.QRSize < 132 || cfg.QRSize > 220 {
 		return errors.New("二维码尺寸应为 132–220")
+	}
+	if cfg.QRX < 0 || cfg.QRY < 0 || cfg.QRX+cfg.QRSize > 720 || cfg.QRY+cfg.QRSize > 1280 {
+		return errors.New("二维码位置超出海报范围")
+	}
+	if cfg.InviteWidth < 120 || cfg.InviteWidth > 600 || cfg.InviteFontSize < 16 || cfg.InviteFontSize > 64 || cfg.InviteX < 0 || cfg.InviteY < 0 || cfg.InviteX+cfg.InviteWidth > 720 || cfg.InviteY+cfg.InviteFontSize+12 > 1280 {
+		return errors.New("邀请码位置或字号超出海报范围")
 	}
 	if utf8.RuneCountInString(cfg.Headline) > 32 || utf8.RuneCountInString(cfg.Subtitle) > 80 || utf8.RuneCountInString(cfg.CTA) > 24 {
 		return errors.New("海报文字超出长度限制")
@@ -72,7 +88,7 @@ func (s *Server) distributionPosterConfig(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if r.Method == http.MethodGet {
-		cfg := posterConfig{QRSize: 176}
+		cfg := defaultPosterConfig()
 		var raw []byte
 		err := s.db.QueryRowContext(r.Context(), "SELECT config FROM site_configs WHERE key=$1", distributionPosterKey).Scan(&raw)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -86,7 +102,7 @@ func (s *Server) distributionPosterConfig(w http.ResponseWriter, r *http.Request
 		httpx.OK(w, cfg)
 		return
 	}
-	var cfg posterConfig
+	cfg := defaultPosterConfig()
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&cfg) != nil {

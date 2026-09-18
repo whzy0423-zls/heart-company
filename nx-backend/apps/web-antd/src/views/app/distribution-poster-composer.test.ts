@@ -14,12 +14,12 @@ vi.mock('ant-design-vue', async () => {
   return { Alert: defineComponent({ props: ['message'], setup: p => () => h('p', p.message) }),
     Button: defineComponent({ setup: (_, { slots }) => () => h('button', slots.default?.()) }),
     Card: Box, Form: Object.assign(Box, { Item: Box }), Input: Object.assign(Input, { TextArea: Input }),
-    Slider: Box, Space: Box, Upload: Box, Typography: { Text: Box, Paragraph: Box }, message: { success: vi.fn(), error: vi.fn() } };
+    InputNumber: Input, Slider: Box, Space: Box, Upload: Box, Typography: { Text: Box, Paragraph: Box }, message: { success: vi.fn(), error: vi.fn() } };
 });
 import Composer from './distribution-poster-composer.vue';
 async function settle() { for (let i = 0; i < 12; i++) await flushVuePromises(); }
 function mount(editable = false) { return mountVueComponent(defineComponent({ setup: () => () => h(Composer, { editable, agentCode: 'A123' }) })); }
-const config = { templateUrl: '/api/upload-assets/1', headline: '总部海报', subtitle: '统一文案', cta: '立即参与', landingUrl: 'https://example.com/fixed', qrImageUrl: '', qrSize: 176 };
+const config = { templateUrl: '/api/upload-assets/1', headline: '总部海报', subtitle: '统一文案', cta: '立即参与', landingUrl: 'https://example.com/fixed', qrImageUrl: '', qrSize: 176, qrX: 62, qrY: 1010, inviteX: 286, inviteY: 1100, inviteWidth: 350, inviteFontSize: 26 };
 describe('central poster configuration', () => {
   beforeEach(() => {
     state.codes = ['Agent:Distribution:View'];
@@ -38,6 +38,7 @@ describe('central poster configuration', () => {
     expect(wrapper.text()).not.toContain('保存并发布');
     const inputs = document.body.querySelectorAll('input');
     expect(inputs).toHaveLength(1);
+    expect(document.body.querySelector('[data-element]')).toBeNull();
     inputs[0]!.value = 'B456'; inputs[0]!.dispatchEvent(new Event('input', { bubbles: true }));
     await settle();
     expect(state.qr).toHaveBeenCalled();
@@ -49,8 +50,11 @@ describe('central poster configuration', () => {
     state.codes = ['Customer:App:List', 'Customer:App:Write'];
     const wrapper = mount(true); await settle();
     expect(wrapper.text()).toContain('上传海报模板');
+    const target = document.body.querySelector('[data-element="qr"]') as HTMLElement;
+    target.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', shiftKey: true, bubbles: true }));
+    await settle();
     wrapper.button('保存并发布')!.click(); await settle();
-    expect(state.save).toHaveBeenCalledWith(config);
+    expect(state.save).toHaveBeenCalledWith({ ...config, qrX: 72 });
     wrapper.unmount();
   });
   it('fixed QR image takes precedence over URL', async () => {

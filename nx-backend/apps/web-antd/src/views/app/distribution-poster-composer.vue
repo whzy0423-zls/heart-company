@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useAccessStore } from '@vben/stores';
-import { Alert, Button, Card, Form, Input, Slider, Space, Typography, Upload, message } from 'ant-design-vue';
+import { Alert, Button, Card, Form, Input, InputNumber, Slider, Space, Typography, Upload, message } from 'ant-design-vue';
 import QRCode from 'qrcode';
 import { getPosterConfigApi, savePosterConfigApi } from '#/api/core/distribution-poster';
 import { uploadFileApi } from '#/api/core/upload';
 import { createUploadAssetObjectURL } from '#/utils/upload-asset-preview';
+
+import { clampPosterPosition, dragPosterPosition } from './distribution-poster-layout';
 
 const props = defineProps<{ agentCode?: string; editable?: boolean }>();
 const access = useAccessStore();
@@ -19,6 +21,54 @@ const landingUrl = ref('');
 const templateUrl = ref('');
 const qrImageUrl = ref('');
 const qrSize = ref(176);
+const qrX = ref(62);
+const qrY = ref(1010);
+const inviteX = ref(286);
+const inviteY = ref(1100);
+const inviteWidth = ref(350);
+const inviteFontSize = ref(26);
+const previewRef = ref<HTMLDivElement>();
+let drag: { kind: 'qr' | 'invite'; pointer: number; x: number; y: number; clientX: number; clientY: number; width: number; height: number } | undefined;
+function boxStyle(kind: 'qr' | 'invite') {
+  const qr = kind === 'qr';
+  return {
+    left: ((qr ? qrX.value : inviteX.value) / 720 * 100) + '%',
+    top: ((qr ? qrY.value : inviteY.value) / 1280 * 100) + '%',
+    width: ((qr ? qrSize.value : inviteWidth.value) / 720 * 100) + '%',
+    height: ((qr ? qrSize.value : inviteFontSize.value + 12) / 1280 * 100) + '%',
+  };
+}
+function moveElement(kind: 'qr' | 'invite', x: number, y: number) {
+  const qr = kind === 'qr';
+  const pos = clampPosterPosition(x, y, qr ? qrSize.value : inviteWidth.value, qr ? qrSize.value : inviteFontSize.value + 12);
+  if (qr) { qrX.value = pos.x; qrY.value = pos.y; }
+  else { inviteX.value = pos.x; inviteY.value = pos.y; }
+}
+function startDrag(event: PointerEvent, kind: 'qr' | 'invite') {
+  if (!canEdit.value || !templateUrl.value || event.button !== 0) return;
+  const rect = previewRef.value?.getBoundingClientRect();
+  if (!rect) return;
+  event.preventDefault();
+  drag = { kind, pointer: event.pointerId, x: kind === 'qr' ? qrX.value : inviteX.value, y: kind === 'qr' ? qrY.value : inviteY.value,
+    clientX: event.clientX, clientY: event.clientY, width: rect.width, height: rect.height };
+  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+}
+function moveDrag(event: PointerEvent) {
+  if (!drag || drag.pointer !== event.pointerId || !canEdit.value) return;
+  const qr = drag.kind === 'qr';
+  const pos = dragPosterPosition(drag.x, drag.y, event.clientX - drag.clientX, event.clientY - drag.clientY,
+    drag.width, drag.height, qr ? qrSize.value : inviteWidth.value, qr ? qrSize.value : inviteFontSize.value + 12);
+  moveElement(drag.kind, pos.x, pos.y);
+}
+function stopDrag() { drag = undefined; }
+function nudge(event: KeyboardEvent, kind: 'qr' | 'invite') {
+  if (!canEdit.value) return;
+  const delta = ({ ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] } as Record<string, number[]>)[event.key];
+  if (!delta) return;
+  event.preventDefault();
+  const step = event.shiftKey ? 10 : 1;
+  moveElement(kind, (kind === 'qr' ? qrX.value : inviteX.value) + delta[0]! * step, (kind === 'qr' ? qrY.value : inviteY.value) + delta[1]! * step);
+}
 const loading = ref(true);
 const saving = ref(false);
 const uploading = ref(false);
@@ -80,6 +130,9 @@ async function loadConfig() {
     landingUrl.value = cfg.landingUrl || '';
     qrImageUrl.value = cfg.qrImageUrl || '';
     qrSize.value = cfg.qrSize || 176;
+    qrX.value = cfg.qrX ?? 62; qrY.value = cfg.qrY ?? 1010;
+    inviteX.value = cfg.inviteX ?? 286; inviteY.value = cfg.inviteY ?? 1100;
+    inviteWidth.value = cfg.inviteWidth ?? 350; inviteFontSize.value = cfg.inviteFontSize ?? 26;
   } catch { loadError.value = true; }
   finally { loading.value = false; }
   await nextTick();
@@ -92,6 +145,7 @@ async function saveConfig() {
   try {
     await savePosterConfigApi({
       templateUrl: templateUrl.value, headline: headline.value, subtitle: subtitle.value,
+      qrX: qrX.value, qrY: qrY.value, inviteX: inviteX.value, inviteY: inviteY.value, inviteWidth: inviteWidth.value, inviteFontSize: inviteFontSize.value,
       cta: cta.value, landingUrl: landingUrl.value.trim(), qrImageUrl: qrImageUrl.value, qrSize: qrSize.value,
     });
     message.success('海报配置已发布，代理重新打开页面即可使用');
@@ -137,24 +191,22 @@ async function render() {
     const scale = Math.max(720 / background.naturalWidth, 1280 / background.naturalHeight);
     const w = background.naturalWidth * scale, h = background.naturalHeight * scale;
     ctx.drawImage(background, (720-w)/2, (1280-h)/2, w, h);
-    ctx.fillStyle = 'rgba(255,255,255,0.94)';
-    ctx.beginPath(); ctx.roundRect(34, 916, 652, 330, 28); ctx.fill();
     ctx.fillStyle = '#1f2937'; ctx.font = '700 32px sans-serif';
     text(ctx, headline.value, 62, 963, 596);
     ctx.fillStyle = '#667085'; ctx.font = '18px sans-serif';
     text(ctx, subtitle.value, 62, 998, 596);
     const size = qrSize.value;
-    ctx.fillStyle = '#fff'; ctx.fillRect(62, 1010, size, size);
+    ctx.fillStyle = '#fff'; ctx.fillRect(qrX.value, qrY.value, size, size);
     const qrScale = Math.min(size / qr.naturalWidth, size / qr.naturalHeight);
     const qw = qr.naturalWidth * qrScale, qh = qr.naturalHeight * qrScale;
-    ctx.drawImage(qr, 62+(size-qw)/2, 1010+(size-qh)/2, qw, qh);
-    const x = 62 + size + 24, available = 658-x;
-    ctx.fillStyle = '#111827'; ctx.font = '600 21px sans-serif';
-    text(ctx, '新用户专属邀请码', x, 1070, available);
-    ctx.font = '700 26px sans-serif';
-    text(ctx, inviteCode.value.trim() || '邀请码', x, 1120, available);
+    ctx.drawImage(qr, qrX.value+(size-qw)/2, qrY.value+(size-qh)/2, qw, qh);
+    ctx.fillStyle = '#111827';
+    ctx.textBaseline = 'top';
+    ctx.font = '700 ' + inviteFontSize.value + 'px sans-serif';
+    text(ctx, inviteCode.value.trim() || '邀请码', inviteX.value, inviteY.value + 6, inviteWidth.value);
+    ctx.textBaseline = 'alphabetic';
     ctx.font = '600 20px sans-serif';
-    text(ctx, cta.value, x, 1180, available);
+    text(ctx, cta.value, 286, 1180, 372);
     if (disposed || version !== renderVersion) return;
     visible.width = 720; visible.height = 1280;
     visible.getContext('2d')?.drawImage(canvas, 0, 0);
@@ -174,7 +226,11 @@ function downloadPoster() {
   } catch { message.error('海报导出失败，请重新加载图片'); }
 }
 
-watch([headline, subtitle, cta, inviteCode, landingUrl, qrImageUrl, templateUrl, qrSize], () => void render());
+watch([headline, subtitle, cta, inviteCode, landingUrl, qrImageUrl, templateUrl, qrSize, qrX, qrY, inviteX, inviteY, inviteWidth, inviteFontSize], () => void render());
+watch([qrSize, inviteWidth, inviteFontSize], () => {
+  moveElement('qr', qrX.value, qrY.value);
+  moveElement('invite', inviteX.value, inviteY.value);
+});
 watch(() => props.agentCode, code => { if (code) inviteCode.value = code; });
 onMounted(async () => { await nextTick(); await loadConfig(); });
 onBeforeUnmount(() => {
@@ -198,7 +254,17 @@ onBeforeUnmount(() => {
     <Alert v-if="renderError" type="error" show-icon :message="renderError" />
     <div class="poster-composer-layout">
       <div class="poster-preview-shell">
-        <canvas ref="canvasRef" class="poster-canvas" width="720" height="1280"></canvas>
+        <div ref="previewRef" class="poster-stage">
+          <canvas ref="canvasRef" class="poster-canvas" width="720" height="1280"></canvas>
+          <template v-if="canEdit && templateUrl">
+            <button v-for="kind in (['qr', 'invite'] as const)" :key="kind" type="button" class="poster-drag-target" :data-element="kind" :style="boxStyle(kind)"
+              :aria-label="kind === 'qr' ? '拖动二维码，方向键微调' : '拖动邀请码，方向键微调'"
+              @pointerdown="startDrag($event, kind)" @pointermove="moveDrag" @pointerup="stopDrag" @pointercancel="stopDrag" @lostpointercapture="stopDrag" @keydown="nudge($event, kind)">
+              <span>{{ kind === 'qr' ? '二维码 · 拖动' : '邀请码 · 拖动' }}</span>
+            </button>
+          </template>
+        </div>
+        <Typography.Text v-if="canEdit" type="secondary">直接拖动蓝色框调整位置；方向键微调，Shift + 方向键移动 10px。蓝色框不会出现在下载的海报中。</Typography.Text>
         <Typography.Text type="secondary">二维码由管理端统一设置，填写邀请码不会改变二维码</Typography.Text>
       </div>
       <Form layout="vertical" class="poster-form">
@@ -216,6 +282,10 @@ onBeforeUnmount(() => {
             </Space>
           </Form.Item>
           <Form.Item label="固定二维码链接（未上传二维码图片时使用）"><Input v-model:value="landingUrl" placeholder="https://..." :maxlength="2048" /></Form.Item>
+          <Form.Item label="二维码位置（X / Y）"><Space><InputNumber v-model:value="qrX" :min="0" :max="720 - qrSize" :precision="0" /><InputNumber v-model:value="qrY" :min="0" :max="1280 - qrSize" :precision="0" /></Space></Form.Item>
+          <Form.Item label="邀请码位置（X / Y）"><Space><InputNumber v-model:value="inviteX" :min="0" :max="720 - inviteWidth" :precision="0" /><InputNumber v-model:value="inviteY" :min="0" :max="1268 - inviteFontSize" :precision="0" /></Space></Form.Item>
+          <Form.Item label="邀请码字号"><Slider v-model:value="inviteFontSize" :min="16" :max="64" /></Form.Item>
+          <Form.Item label="邀请码区域宽度"><Slider v-model:value="inviteWidth" :min="120" :max="600" /></Form.Item>
           <Form.Item label="二维码尺寸"><Slider v-model:value="qrSize" :min="132" :max="220" :step="4" /></Form.Item>
         </template>
         <Form.Item :label="canEdit ? '预览邀请码（不保存）' : '邀请码'"><Input v-model:value="inviteCode" :maxlength="32" placeholder="请输入邀请码" /></Form.Item>
@@ -243,12 +313,16 @@ onBeforeUnmount(() => {
   gap: 8px;
   align-items: center;
 }
+.poster-stage { position: relative; width: min(100%, 390px); }
+.poster-drag-target { position: absolute; z-index: 1; border: 2px dashed #2563eb; background: transparent; cursor: grab; touch-action: none; padding: 0; }
+.poster-drag-target:active { cursor: grabbing; }
+.poster-drag-target:focus-visible { outline: 3px solid #f59e0b; }
+.poster-drag-target span { position: absolute; left: 0; top: 0; color: white; background: #2563eb; font-size: 11px; white-space: nowrap; pointer-events: none; }
 .poster-canvas {
   display: block;
   width: min(100%, 390px);
   height: auto;
-  border: 1px solid hsl(var(--border));
-  border-radius: 12px;
+  outline: 1px solid hsl(var(--border));
   box-shadow: 0 16px 36px rgb(15 23 42 / 15%);
 }
 .poster-form {
