@@ -13,7 +13,7 @@ import (
 )
 
 const distributionPosterKey = "distribution_poster"
-const defaultPosterLandingURL = "https://xinzhili.cn/app"
+const defaultPosterLandingURL = "https://xn--9iq9az5uo8fz16d.com/app"
 
 type posterConfig struct {
 	TemplateURL    string `json:"templateUrl"`

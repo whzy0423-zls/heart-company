@@ -14,7 +14,7 @@ const access = useAccessStore();
 const canEdit = computed(() => !!props.editable && access.accessCodes.includes('Customer:App:Write'));
 const canvasRef = ref<HTMLCanvasElement>();
 const inviteCode = ref(props.agentCode || '');
-const defaultLandingUrl = 'https://xinzhili.cn/app';
+const defaultLandingUrl = 'https://xn--9iq9az5uo8fz16d.com/app';
 const landingUrl = ref(defaultLandingUrl);
 const templateUrl = ref('');
 const qrImageUrl = ref('');
@@ -279,7 +279,7 @@ onBeforeUnmount(() => {
           <Form.Item label="海报模板（上传后立即预览）">
             <Upload accept="image/png,image/jpeg,image/webp" :show-upload-list="false" :disabled="uploading || saving" :before-upload="file => upload(file, 'template')"><Button :loading="uploading">上传海报模板</Button></Upload>
           </Form.Item>
-          <Form.Item label="官网 App 下载页（二维码自动生成）"><Input v-model:value="landingUrl" placeholder="https://xinzhili.cn/app" :maxlength="2048" /></Form.Item>
+          <Form.Item label="官网 App 下载页（二维码自动生成）"><Input v-model:value="landingUrl" placeholder="https://xn--9iq9az5uo8fz16d.com/app" :maxlength="2048" /></Form.Item>
           <Form.Item label="二维码位置（X / Y）"><Space><InputNumber v-model:value="qrX" :min="0" :max="720 - qrSize" :precision="0" /><InputNumber v-model:value="qrY" :min="0" :max="1280 - qrSize" :precision="0" /></Space></Form.Item>
           <Form.Item label="邀请码位置（X / Y）"><Space><InputNumber v-model:value="inviteX" :min="0" :max="720 - inviteWidth" :precision="0" /><InputNumber v-model:value="inviteY" :min="0" :max="1268 - inviteFontSize" :precision="0" /></Space></Form.Item>
           <Form.Item label="邀请码字号"><Slider v-model:value="inviteFontSize" :min="16" :max="64" /></Form.Item>
