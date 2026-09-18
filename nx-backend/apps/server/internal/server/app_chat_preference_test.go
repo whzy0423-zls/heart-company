@@ -185,7 +185,7 @@ func TestAppChatPreferenceWriteFailureDoesNotCallModel(t *testing.T) {
 	}
 }
 
-func TestAppChatGenerationFailureKeepsDurablePreference(t *testing.T) {
+func TestAppChatGenerationFailureKeepsDurablePreferenceAndReturnsError(t *testing.T) {
 	preferences := newFakeAppChatPreferenceStore()
 	generator := &controlledAppChatStreamingGenerator{
 		generateStream: func(context.Context, rag.GenerateInput, rag.StreamEmitter) (string, error) {
@@ -204,8 +204,8 @@ func TestAppChatGenerationFailureKeepsDurablePreference(t *testing.T) {
 	if len(stored) != 1 || stored[0].Instruction != "回答简短，避免长篇大论" {
 		t.Fatalf("durable setting was lost after generation failure: %+v", stored)
 	}
-	if !strings.Contains(body, "event: done\n") || strings.Contains(body, "已经记住") {
-		t.Fatalf("fallback answer must not undo or falsely promise the setting: %q", body)
+	if !strings.Contains(body, "event: error\n") || !strings.Contains(body, "回答生成失败，请重试") || strings.Contains(body, "event: done\n") {
+		t.Fatalf("generation failure must be explicit and terminal without a fallback answer: %q", body)
 	}
 }
 

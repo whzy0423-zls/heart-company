@@ -29,6 +29,7 @@ import {
 
 import {
   getSkillLibraryManagementApi,
+  importSkillBookApi,
   publishSkillLibrarySkillApi,
   unpublishSkillLibrarySkillApi,
   enableSkillLibrarySkillApi,
@@ -42,6 +43,36 @@ type EditorKind = 'category' | 'library' | 'skill';
 
 const access = useAccessStore();
 const canEdit = computed(() => access.accessCodes.includes('App:SkillLibrary:Edit'));
+const importOpen = ref(false);
+const importing = ref(false);
+const bookFile = ref<File>();
+const bookFileInput = ref<HTMLInputElement>();
+const bookForm = reactive({ name: '', summary: '', categoryId: undefined as number | undefined });
+function selectBook(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0];
+  bookFile.value = file;
+  if (file && !bookForm.name.trim()) bookForm.name = file.name.replace(/\.[^.]+$/, '');
+}
+async function importBook() {
+  if (!bookFile.value || !bookForm.name.trim() || !bookForm.categoryId) {
+    message.warning('请选择书籍、填写名称并选择分类');
+    return;
+  }
+  if (bookFile.value.size > 200 * 1024 * 1024) {
+    message.warning('文件大小请控制在 200 MB 以内');
+    return;
+  }
+  importing.value = true;
+  try {
+    const result = await importSkillBookApi({ file: bookFile.value, name: bookForm.name.trim(), summary: bookForm.summary.trim(), categoryId: bookForm.categoryId });
+    message.success(`已提取 ${result.characters} 字并生成技能草稿，请检查名称与分类后点击发布，手机刷新技能库即可看到`);
+    importOpen.value = false;
+    bookFile.value = undefined;
+    if (bookFileInput.value) bookFileInput.value.value = '';
+    Object.assign(bookForm, { name: '', summary: '', categoryId: undefined });
+    await load();
+  } finally { importing.value = false; }
+}
 const loading = ref(false);
 const saving = ref(false);
 const error = ref('');
@@ -294,7 +325,7 @@ onMounted(load);
       <template #action><Button size="small" @click="load">重试</Button></template>
     </Alert>
 
-    <div class="mb-4 grid gap-3 md:grid-cols-3">
+    <div class="mb-4 grid gap-3 md:grid-cols-4">
       <div class="rounded-md border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
         <div class="text-sm text-gray-500">当前技能库</div>
         <div class="mt-1 text-lg font-semibold">{{ libraries[0]?.name || '学习成长类书籍' }}</div>
@@ -306,6 +337,12 @@ onMounted(load);
       <div class="rounded-md border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
         <div class="text-sm text-gray-500">技能分类</div>
         <div class="mt-1 text-lg font-semibold text-blue-600">{{ categories.length }}</div>
+      </div>
+      <div class="rounded-md border border-emerald-100 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-950/30">
+        <div class="text-sm text-emerald-700 dark:text-emerald-300">技能版本和书籍数据</div>
+        <div class="mt-1 text-xs leading-5 text-gray-600 dark:text-gray-300">
+          已发布技能会携带对应规则与知识数据，App 走新技能库接口刷新生效。
+        </div>
       </div>
     </div>
 
@@ -328,6 +365,7 @@ onMounted(load);
               :options="categoryOptions"
               placeholder="全部分类"
             />
+            <Button v-if="canEdit" type="primary" @click="importOpen = true"><IconifyIcon icon="lucide:upload" />导入书籍</Button>
             <Button @click="load"><IconifyIcon icon="lucide:refresh-cw" />刷新</Button>
           </div>
           <Table
@@ -477,6 +515,18 @@ onMounted(load);
           show-icon
           type="info"
         />
+      </Form>
+    </Modal>
+    <Modal v-model:open="importOpen" title="导入书籍为独立技能" ok-text="提取正文并生成草稿" :confirm-loading="importing" :mask-closable="!importing" :closable="!importing" @ok="importBook">
+      <Alert class="mb-4" type="info" show-icon message="提取真实正文建立独立知识库；检查后发布到手机。名称随时可在技能管理中修改。" />
+      <Form layout="vertical">
+        <Form.Item label="书籍文件" required>
+          <input ref="bookFileInput" type="file" accept=".txt,.md,.markdown,.docx,.epub,.pdf" @change="selectBook" />
+          <div class="mt-2 text-xs text-gray-500">支持 UTF-8 TXT / Markdown、DOCX、EPUB、文字型 PDF，最大 200 MB。扫描版请先 OCR；导入不等同于 AI 蒸馏或内容审核。</div>
+        </Form.Item>
+        <Form.Item label="手机显示名称" required><Input v-model:value="bookForm.name" :maxlength="100" /></Form.Item>
+        <Form.Item label="所属分类" required><Select v-model:value="bookForm.categoryId" :options="categoryOptions" /></Form.Item>
+        <Form.Item label="技能简介"><Input.TextArea v-model:value="bookForm.summary" :maxlength="500" :rows="3" /></Form.Item>
       </Form>
     </Modal>
   </Page>

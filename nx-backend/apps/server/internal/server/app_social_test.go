@@ -44,6 +44,23 @@ func TestInviteReadRouteIsHandledSeparatelyFromRotate(t *testing.T) {
 	}
 }
 
+func TestBlocksGetRouteReturnsManageableBlacklist(t *testing.T) {
+	raw, err := os.ReadFile("app_social.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	for _, expected := range []string{
+		`path == "blocks" && r.Method == http.MethodGet`,
+		`ListBlockedUsers`,
+		`map[string]any{"items": items}`,
+	} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("blacklist management route is missing %q", expected)
+		}
+	}
+}
+
 func TestAppSocialRouterRequiresAuthenticationContext(t *testing.T) {
 	server := &Server{}
 	req := httptest.NewRequest(http.MethodGet, "/api/app/friends", nil)

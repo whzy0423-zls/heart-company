@@ -1238,6 +1238,31 @@ func TestAskStreamReturnsErrorWithoutFallbackAfterPartialOutput(t *testing.T) {
 	}
 }
 
+func TestAskStreamStrictGeneratorErrorsDoesNotEmitTruncatedFallback(t *testing.T) {
+	wantErr := errors.New("generator unavailable")
+	service := NewService([]Document{
+		{
+			ID:      "recovery-journal",
+			Title:   "康复日志",
+			Content: strings.Repeat("这是一段需要完整表达的内容。", 20),
+			Tags:    []string{"康复", "日志"},
+		},
+	}, WithGenerator(&fakeGenerator{err: wantErr}), WithStrictGeneratorErrors())
+
+	var chunks []string
+	_, err := service.AskStream(context.Background(), AskInput{Question: "康复日志怎么写？"}, func(delta string) error {
+		chunks = append(chunks, delta)
+		return nil
+	})
+
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("AskStream() error = %v, want %v", err, wantErr)
+	}
+	if len(chunks) != 0 {
+		t.Fatalf("strict stream emitted fallback chunks: %#v", chunks)
+	}
+}
+
 func TestAskStreamEmitsGeneratedChunksAndReturnsMetadata(t *testing.T) {
 	generator := &fakeGenerator{answer: "第一段，第二段。"}
 	service := NewService([]Document{{ID: "type-1", Title: "1号", Content: "1号孩子重视原则和秩序。"}}, WithGenerator(generator))

@@ -17,7 +17,7 @@ export default function Layout() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const location = useLocation()
   const key = location.pathname
-  const isAppPage = location.pathname.replace(/\/+$/, '') === '/app'
+  const isAppPage = ['/app', '/register', '/invite'].includes(location.pathname.replace(/\/+$/, ''))
   const closeDrawer = useCallback(() => setDrawerOpen(false), [])
 
   // 全局动效（挂载一次）

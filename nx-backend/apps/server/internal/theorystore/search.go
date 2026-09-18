@@ -106,6 +106,31 @@ func (s *Store) SearchActiveChunks(parent context.Context, query string, topK in
 // explicit release. It deliberately has no active-library fallback so callers
 // cannot cross a skill version's knowledge boundary.
 func (s *Store) SearchReleaseChunks(parent context.Context, releaseID int64, query string, topK int, minScore float64) ([]rag.Document, error) {
+	return s.searchReleaseChunks(parent, releaseID, query, nil, topK, minScore)
+}
+
+// SearchEnneagramReleaseChunks restricts the frozen scene snapshot to explicitly selected types.
+func (s *Store) SearchEnneagramReleaseChunks(parent context.Context, releaseID int64, query string, keys []string, topK int, minScore float64) ([]rag.Document, error) {
+	if len(keys) == 0 {
+		keys = []string{"enneagram-core"}
+	}
+	// Reserve context for the core and each selected participant instead of letting one type crowd out the other.
+	perLibrary := topK / len(keys)
+	if perLibrary < 1 {
+		perLibrary = 1
+	}
+	var documents []rag.Document
+	for _, key := range keys {
+		matches, err := s.searchReleaseChunks(parent, releaseID, query, []string{key}, perLibrary, 0)
+		if err != nil {
+			return nil, err
+		}
+		documents = append(documents, matches...)
+	}
+	return documents, nil
+}
+
+func (s *Store) searchReleaseChunks(parent context.Context, releaseID int64, query string, keys []string, topK int, minScore float64) ([]rag.Document, error) {
 	if err := s.available(); err != nil {
 		return nil, err
 	}
@@ -125,6 +150,13 @@ func (s *Store) SearchReleaseChunks(parent context.Context, releaseID int64, que
 	ctx, cancel := storeContext(parent)
 	defer cancel()
 
+	filter := ""
+	args := []any{releaseID}
+	if keys != nil {
+		raw, _ := json.Marshal(keys)
+		filter = " AND chunk.tags ?| ARRAY(SELECT jsonb_array_elements_text($2::jsonb)) "
+		args = append(args, string(raw))
+	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT chunk.id, chunk.title, chunk.content, chunk.keywords, chunk.tags
 		FROM theory_release_cards mapping
@@ -132,8 +164,8 @@ func (s *Store) SearchReleaseChunks(parent context.Context, releaseID int64, que
 		JOIN theory_chunks chunk ON chunk.id = mapping.chunk_id
 		WHERE mapping.release_id = $1
 		  AND release.status IN ('ready','active','retired')
-		  AND chunk.status = 'enabled'
-		ORDER BY chunk.id`, releaseID)
+		  AND chunk.status = 'enabled' `+filter+`
+		ORDER BY chunk.id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search theory release chunks: %w", err)
 	}

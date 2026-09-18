@@ -40,6 +40,7 @@ func (s *Server) appRegisterWithPassword(w http.ResponseWriter, r *http.Request)
 	account := strings.TrimSpace(body.Account)
 	phone := strings.TrimSpace(body.Phone)
 	code := strings.TrimSpace(body.Code)
+	agentCode := strings.TrimSpace(body.AgentCode)
 	deviceInfo := strings.TrimSpace(body.DeviceInfo)
 
 	if err := appuser.ValidateAccount(account); err != nil {
@@ -75,6 +76,17 @@ func (s *Server) appRegisterWithPassword(w http.ResponseWriter, r *http.Request)
 		httpx.Fail(w, http.StatusServiceUnavailable, "认证服务不可用")
 		return
 	}
+	if agentCode != "" {
+		valid, err := validateDistributionAgentCode(r.Context(), s.db, agentCode)
+		if err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "邀请码校验失败")
+			return
+		}
+		if !valid {
+			httpx.Fail(w, http.StatusBadRequest, "邀请码不存在或已失效")
+			return
+		}
+	}
 
 	user, err := s.appUsers.RegisterWithPassword(r.Context(), appuser.RegisterWithPasswordInput{
 		Nickname:    nickname,
@@ -82,14 +94,13 @@ func (s *Server) appRegisterWithPassword(w http.ResponseWriter, r *http.Request)
 		Password:    body.Password,
 		Phone:       phone,
 		SMSCodeHash: appuser.HashToken(code),
+		AgentCode:   agentCode,
 	})
 	if err != nil {
 		status, message := appPasswordRegistrationErrorResponse(err)
 		httpx.Fail(w, status, message)
 		return
 	}
-
-	bindDistributionAgent(r.Context(), s.db, user.ID, body.AgentCode)
 
 	if err := s.writeAppSession(w, r, user, deviceInfo); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "注册已成功，请使用账号密码登录")

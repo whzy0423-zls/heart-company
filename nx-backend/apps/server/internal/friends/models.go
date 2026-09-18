@@ -46,6 +46,12 @@ type Friend struct {
 	CreatedAt    string `json:"createdAt"`
 }
 
+type BlockedUser struct {
+	Profile
+	Reason    string `json:"reason"`
+	BlockedAt string `json:"blockedAt"`
+}
+
 type FriendRequest struct {
 	ID          int64    `json:"id"`
 	RequesterID int64    `json:"requesterId"`

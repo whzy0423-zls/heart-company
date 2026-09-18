@@ -307,7 +307,7 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 				Tier:                input.Tier,
 				RuntimeInstructions: input.RuntimeInstructions,
 			}, trackedEmit)
-			if err != nil && streamStarted {
+			if err != nil && (streamStarted || s.strictGeneratorErrors) {
 				return Answer{}, err
 			}
 			if err == nil && strings.TrimSpace(generated) != "" {
@@ -367,7 +367,7 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 			Tier:                input.Tier,
 			RuntimeInstructions: input.RuntimeInstructions,
 		}, trackedEmit)
-		if err != nil && streamStarted {
+		if err != nil && (streamStarted || s.strictGeneratorErrors) {
 			return Answer{}, err
 		}
 		if err == nil && strings.TrimSpace(generated) != "" {

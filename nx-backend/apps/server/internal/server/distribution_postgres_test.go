@@ -340,6 +340,9 @@ func TestDistributionPostgresSuccessfulPayoutRequiresProof(t *testing.T) {
 	s := &Server{db: db}
 	distributionRequest(s.adminDistributionSettlementCreate, "/", `{"agentId":10,"start":"2026-09-01","end":"2026-09-30"}`)
 	distributionRequest(s.adminDistributionSettlementAction, "/api/admin/distribution/settlements/1/approve", `{}`)
+	if again := distributionRequest(s.adminDistributionSettlementAction, "/api/admin/distribution/settlements/1/approve", `{}`); again.Code != 409 {
+		t.Fatal("duplicate approval accepted")
+	}
 	noProof := distributionRequest(s.adminDistributionSettlementAction, "/api/admin/distribution/settlements/1/paid", `{}`)
 	if noProof.Code != 400 {
 		t.Fatal("payout proof must be required")
@@ -358,5 +361,257 @@ func TestDistributionPostgresSuccessfulPayoutRequiresProof(t *testing.T) {
 	replay := distributionRequest(s.adminDistributionSettlementAction, "/api/admin/distribution/settlements/1/paid", `{"paymentReference":"test-bank-003"}`)
 	if replay.Code != 409 {
 		t.Fatal("duplicate payout accepted")
+	}
+}
+
+func TestDistributionPostgresAppOverviewMetrics(t *testing.T) {
+	db := distributionDatabase(t)
+	seedDistributionCommission(t, db)
+	s := &Server{db: db}
+	request := func() map[string]any {
+		req := httptest.NewRequest(http.MethodGet, "/api/app/distribution/overview", nil)
+		req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 100}))
+		w := httptest.NewRecorder()
+		s.appDistributionOverview(w, req)
+		if w.Code != 200 {
+			t.Fatalf("overview %d %s", w.Code, w.Body.String())
+		}
+		var out struct {
+			Data map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.Data
+	}
+	data := request()
+	for key, want := range map[string]float64{"todayInvites": 1, "monthInvites": 1, "directUsers": 1, "teamUserCount": 3, "commissionAmount": 1000, "pendingCommission": 1000, "settleableCommission": 1000, "settledCommission": 0} {
+		if data[key] != want {
+			t.Errorf("%s=%v want %v", key, data[key], want)
+		}
+	}
+	created := distributionRequest(s.adminDistributionSettlementCreate, "/", `{"agentId":10,"start":"2026-09-01","end":"2026-09-30"}`)
+	if created.Code != 200 {
+		t.Fatal(created.Body.String())
+	}
+	if got := request()["settleableCommission"]; got != float64(0) {
+		t.Errorf("reserved amount remains available: %v", got)
+	}
+}
+
+func TestDistributionPostgresAnalyticsCountsEachOrderOnce(t *testing.T) {
+	db := distributionDatabase(t)
+	tx, _ := db.Begin()
+	if err := generateDistributionCommissionsTx(context.Background(), tx, 1, 400, 10000); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{db: db}
+	w := httptest.NewRecorder()
+	s.adminDistributionAnalytics(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	if w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	var out struct {
+		Data struct {
+			Summary distributionAnalyticsSummary     `json:"summary"`
+			Trend   []distributionAnalyticsTrendItem `json:"trend"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Data.Summary.TotalOrderAmount != 10000 || out.Data.Summary.TotalCommissionAmount != 3000 {
+		t.Errorf("summary %+v", out.Data.Summary)
+	}
+	var sum int64
+	for _, day := range out.Data.Trend {
+		sum += day.OrderAmount
+	}
+	if sum != 10000 {
+		t.Errorf("trend duplicates order: %d", sum)
+	}
+	start, end := distributionAnalyticsRange(nil)
+	current, err := s.currentDistributionAgent(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scoped, err := s.scopedDistributionAnalyticsSummary(context.Background(), current, start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scoped.TotalOrderAmount != 10000 {
+		t.Errorf("scoped duplicates order: %d", scoped.TotalOrderAmount)
+	}
+	trend, err := s.scopedDistributionTrend(context.Background(), current, start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum = 0
+	for _, day := range trend {
+		sum += day.OrderAmount
+	}
+	if sum != 10000 {
+		t.Errorf("scoped trend duplicates order: %d", sum)
+	}
+}
+
+func TestDistributionPostgresAgentScopeAndChildPermissions(t *testing.T) {
+	db := distributionDatabase(t)
+	if _, err := db.Exec(`INSERT INTO app_users VALUES(500),(600); INSERT INTO distribution_agents(id,app_user_id,agent_code,level,root_agent_id,agent_path) VALUES(50,500,'OTHER',1,50,'/50/'); INSERT INTO distribution_user_relations(app_user_id,direct_agent_id) VALUES(600,50)`); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{db: db}
+	call := func(userID int64, h http.HandlerFunc, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+		req = req.WithContext(withUser(req.Context(), auth.UserInfo{ID: userID}))
+		w := httptest.NewRecorder()
+		h(w, req)
+		return w
+	}
+	for _, test := range []struct {
+		user int64
+		body string
+		want int
+	}{
+		{100, `{"appUserId":600}`, 403}, {300, `{"appUserId":400}`, 403}, {400, `{"appUserId":600}`, 403},
+	} {
+		if got := call(test.user, s.agentDistributionCreateChild, test.body); got.Code != test.want {
+			t.Fatalf("user=%d status=%d %s", test.user, got.Code, got.Body.String())
+		}
+	}
+	out := call(100, s.agentDistributionAgents, "")
+	if out.Code != 200 || strings.Contains(out.Body.String(), `"agentCode":"OTHER"`) || !strings.Contains(out.Body.String(), `"agentCode":"A20"`) {
+		t.Fatalf("scope %s", out.Body.String())
+	}
+	if _, err := db.Exec(`UPDATE distribution_agents SET status='paused' WHERE id=10`); err != nil {
+		t.Fatal(err)
+	}
+	if got := call(100, s.agentDistributionAgents, ""); got.Code != 403 {
+		t.Fatalf("paused agent status=%d", got.Code)
+	}
+}
+
+func TestDistributionPostgresPostRegistrationBindIsDisabled(t *testing.T) {
+	db := distributionDatabase(t)
+	s := &Server{db: db}
+	req := httptest.NewRequest(http.MethodPost, "/api/app/distribution/bind", strings.NewReader(`{"agentCode":"A20"}`))
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 100}))
+	w := httptest.NewRecorder()
+	s.appDistributionBind(w, req)
+	if w.Code != 403 {
+		t.Fatalf("post-registration binding status=%d %s", w.Code, w.Body.String())
+	}
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM distribution_user_relations WHERE app_user_id=100`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("relation changed count=%d err=%v", n, err)
+	}
+}
+
+func TestDistributionPostgresSMSInviteOnlyBindsNewAccounts(t *testing.T) {
+	db := distributionDatabase(t)
+	if _, err := db.Exec(`ALTER TABLE app_users ADD COLUMN phone text UNIQUE; CREATE SEQUENCE sms_fixture_user_id START 1000; ALTER TABLE app_users ALTER COLUMN id SET DEFAULT nextval('sms_fixture_user_id'); UPDATE app_users SET phone='existing' WHERE id=100`); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := createSMSUserWithDistributionInvite(ctx, db, "existing", "A20"); err != nil {
+		t.Fatal(err)
+	}
+	if err := createSMSUserWithDistributionInvite(ctx, db, "new", "A20"); err != nil {
+		t.Fatal(err)
+	}
+	if err := createSMSUserWithDistributionInvite(ctx, db, "new", "A30"); err != nil {
+		t.Fatal(err)
+	}
+	var existing, agent int64
+	if err := db.QueryRow(`SELECT count(*) FROM distribution_user_relations WHERE app_user_id=100`).Scan(&existing); err != nil {
+		t.Fatal(err)
+	}
+	if existing != 0 {
+		t.Fatal("existing SMS login created relation")
+	}
+	if err := db.QueryRow(`SELECT r.direct_agent_id FROM distribution_user_relations r JOIN app_users u ON u.id=r.app_user_id WHERE u.phone='new'`).Scan(&agent); err != nil {
+		t.Fatal(err)
+	}
+	if agent != 20 {
+		t.Fatalf("first registration relation overwritten: %d", agent)
+	}
+	if err := createSMSUserWithDistributionInvite(ctx, db, "invalid", "NOT_FOUND"); err == nil {
+		t.Fatal("invalid code accepted")
+	}
+}
+
+func TestDistributionAgentCannotUseAdminPermissions(t *testing.T) {
+	s := &Server{}
+	user := auth.UserInfo{ID: 100, TokenKind: auth.TokenKindBackend, Roles: []string{"agent"}}
+	for _, code := range []string{"Customer:App:Write", "Customer:App:List", "Customer:AppOrders:List", "System:User:Write"} {
+		allowed, err := s.hasAnyPermission(context.Background(), user, code)
+		if err != nil || allowed {
+			t.Errorf("agent granted %s: %t %v", code, allowed, err)
+		}
+	}
+	allowed, err := s.hasAnyPermission(context.Background(), user, "Agent:Distribution:View")
+	if err != nil || !allowed {
+		t.Fatal("agent lost own view permission")
+	}
+}
+
+func TestDistributionPostgresPaidOrderAndRefundLifecycle(t *testing.T) {
+	db := distributionDatabase(t)
+	_, err := db.Exec(`ALTER TABLE app_users ADD COLUMN member_level text NOT NULL DEFAULT 'free', ADD COLUMN member_started_at timestamptz, ADD COLUMN member_expires_at timestamptz, ADD COLUMN update_time timestamptz;
+ ALTER TABLE app_orders ADD COLUMN app_user_id bigint, ADD COLUMN product_id text, ADD COLUMN status text, ADD COLUMN duration_days int, ADD COLUMN activation_at timestamptz, ADD COLUMN membership_expires_at timestamptz, ADD COLUMN amount bigint, ADD COLUMN paid_at timestamptz, ADD COLUMN provider_trade_no text, ADD COLUMN provider_status text, ADD COLUMN transaction_id text, ADD COLUMN member_level_before text, ADD COLUMN member_started_at_before timestamptz, ADD COLUMN member_expires_at_before timestamptz, ADD COLUMN payment_error text, ADD COLUMN update_time timestamptz, ADD COLUMN refunded_at timestamptz, ADD COLUMN refund_reason text;
+ UPDATE app_orders SET app_user_id=400,product_id='vip_month',status='pending',duration_days=30,amount=10000 WHERE id=1;`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := settleAppOrderTx(ctx, tx, appOrderSettlementInput{OrderID: 1})
+		if err != nil {
+			tx.Rollback()
+			t.Fatal(err)
+		}
+		if err = tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		if result.AlreadyGranted != (i == 1) {
+			t.Fatalf("payment replay=%t", result.AlreadyGranted)
+		}
+	}
+	var count, amount int64
+	if err = db.QueryRow(`SELECT count(*),sum(commission_amount) FROM distribution_commission_records WHERE status='pending'`).Scan(&count, &amount); err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 || amount != 3000 {
+		t.Fatalf("paid commission count=%d amount=%d", count, amount)
+	}
+	for i := 0; i < 2; i++ {
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := refundAppOrderTx(ctx, tx, appOrderRefundInput{OrderID: 1, Reason: "isolated test refund"})
+		if err != nil {
+			tx.Rollback()
+			t.Fatal(err)
+		}
+		if err = tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		if result.AlreadyRefunded != (i == 1) {
+			t.Fatalf("refund replay=%t", result.AlreadyRefunded)
+		}
+	}
+	if err = db.QueryRow(`SELECT count(*) FROM distribution_commission_records WHERE status='reversed'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("refund reversed %d of 3 records", count)
 	}
 }

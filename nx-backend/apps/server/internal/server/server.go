@@ -967,6 +967,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/distribution/users", s.method(http.MethodGet, s.requireAppAuth(s.appDistributionUsers)))
 	s.mux.HandleFunc("/api/app/distribution/agents", s.method(http.MethodGet, s.requireAppAuth(s.appDistributionAgents)))
 	s.mux.HandleFunc("/api/app/distribution/orders", s.method(http.MethodGet, s.requireAppAuth(s.appDistributionOrders)))
+	s.mux.HandleFunc("/api/agent/distribution/profile", s.method(http.MethodGet, s.requireAuth(s.agentDistributionProfile)))
+	s.mux.HandleFunc("/api/agent/distribution/analytics", s.method(http.MethodGet, s.requireAuth(s.agentDistributionAnalytics)))
+	s.mux.HandleFunc("/api/agent/distribution/agents", s.requireMethodPermission(map[string]string{http.MethodGet: "Agent:Distribution:View", http.MethodPost: "Agent:Distribution:Write"}, s.agentDistributionAgentsRouter))
 	s.mux.HandleFunc("/api/app/auth/send-sms", s.method(http.MethodPost, s.appSendSMS))
 	s.mux.HandleFunc("/api/app/auth/sms", s.method(http.MethodPost, s.appSendSMS))
 	s.mux.HandleFunc("/api/app/auth/sms/send", s.method(http.MethodPost, s.appSendSMS))
@@ -1208,6 +1211,7 @@ func (s *Server) routes() {
 	}, s.system.HandleUserByID))
 	s.mux.HandleFunc("/api/admin/distribution/agents", s.requireMethodPermission(map[string]string{http.MethodGet: "Customer:App:List", http.MethodPost: "Customer:App:Write"}, s.adminDistributionAgentsRouter))
 	s.mux.HandleFunc("/api/admin/distribution/agents/", s.requireMethodPermission(map[string]string{http.MethodPut: "Customer:App:Write"}, s.adminDistributionAgentStatus))
+	s.mux.HandleFunc("/api/admin/distribution/analytics", s.method(http.MethodGet, s.requirePermission("Customer:App:List", s.adminDistributionAnalytics)))
 	s.mux.HandleFunc("/api/admin/distribution/commissions/", s.requireMethodPermission(map[string]string{http.MethodPost: "Customer:App:Write"}, s.adminDistributionCommissionReverse))
 	s.mux.HandleFunc("/api/admin/distribution/commissions", s.method(http.MethodGet, s.requirePermission("Customer:App:List", s.adminDistributionCommissions)))
 	s.mux.HandleFunc("/api/admin/distribution/users", s.method(http.MethodGet, s.requirePermission("Customer:App:List", s.adminDistributionUsers)))
@@ -1289,6 +1293,26 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
+		if agentUser, agentOK, agentErr := s.tryAppAgentBackendLogin(r.Context(), body.Username, body.Password); agentErr != nil {
+			httpx.Fail(w, http.StatusInternalServerError, agentErr.Error())
+			return
+		} else if agentOK {
+			token, err := auth.Sign(agentUser, s.env.JWTSecret)
+			if err != nil {
+				httpx.Fail(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			httpx.OK(w, map[string]any{
+				"accessToken": token,
+				"homePath":    agentUser.HomePath,
+				"id":          agentUser.ID,
+				"realName":    agentUser.RealName,
+				"roles":       agentUser.Roles,
+				"userId":      agentUser.UserID,
+				"username":    agentUser.Username,
+			})
+			return
+		}
 		httpx.Fail(w, http.StatusForbidden, "Username or password is incorrect.")
 		return
 	}
@@ -1329,6 +1353,79 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	httpx.OK(w, payload)
 }
 
+func (s *Server) tryAppAgentBackendLogin(ctx context.Context, username, password string) (auth.UserInfo, bool, error) {
+	if s == nil || s.appUsers == nil || s.db == nil {
+		return auth.UserInfo{}, false, nil
+	}
+	appUser, err := s.appUsers.AuthenticateWithPassword(ctx, username, password)
+	if err != nil {
+		if errors.Is(err, appuser.ErrInvalidCredentials) || errors.Is(err, appuser.ErrUserDisabled) {
+			return auth.UserInfo{}, false, nil
+		}
+		return auth.UserInfo{}, false, err
+	}
+	var agentID int64
+	var level int
+	var status string
+	if err := s.db.QueryRowContext(ctx, `SELECT id,level,status FROM distribution_agents WHERE app_user_id=$1`, appUser.ID).Scan(&agentID, &level, &status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return auth.UserInfo{}, false, nil
+		}
+		return auth.UserInfo{}, false, err
+	}
+	if status != "active" {
+		return auth.UserInfo{}, false, nil
+	}
+	return auth.UserInfo{
+		Avatar:    appUser.Avatar,
+		HomePath:  "/app/distribution",
+		ID:        appUser.ID,
+		Phone:     appUser.Phone,
+		RealName:  firstNonEmpty(appUser.Nickname, appUser.Account, appUser.Phone),
+		Roles:     []string{"agent"},
+		TokenKind: auth.TokenKindBackend,
+		UserID:    fmt.Sprintf("app-%d", appUser.ID),
+		Username:  firstNonEmpty(appUser.Account, appUser.Phone),
+		Remark:    fmt.Sprintf("agent:%d:level:%d", agentID, level),
+	}, true, nil
+}
+
+func isAgentBackendUser(user auth.UserInfo) bool {
+	return user.TokenKind == auth.TokenKindBackend && hasRole(user.Roles, "agent")
+}
+
+func agentAccessCodes(user auth.UserInfo) []string {
+	codes := []string{"Agent:Distribution:View"}
+	if isAgentBackendUser(user) {
+		codes = append(codes, "Agent:Distribution:Write")
+	}
+	return codes
+}
+
+func (s *Server) CurrentAppAgentProfile(ctx context.Context, appUserID int64) (auth.UserInfo, error) {
+	if s == nil || s.db == nil || appUserID <= 0 {
+		return auth.UserInfo{}, sql.ErrNoRows
+	}
+	var user auth.UserInfo
+	var level int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT u.id,COALESCE(u.phone,''),COALESCE(u.account,''),COALESCE(u.nickname,''),COALESCE(u.avatar,''),a.level
+		FROM app_users u
+		JOIN distribution_agents a ON a.app_user_id=u.id
+		WHERE u.id=$1 AND u.status='active' AND a.status='active'`, appUserID).Scan(&user.ID, &user.Phone, &user.Username, &user.RealName, &user.Avatar, &level); err != nil {
+		return auth.UserInfo{}, err
+	}
+	user.HomePath = "/app/distribution"
+	user.Roles = []string{"agent"}
+	user.TokenKind = auth.TokenKindBackend
+	user.UserID = fmt.Sprintf("app-%d", user.ID)
+	user.Remark = fmt.Sprintf("agent-level:%d", level)
+	if strings.TrimSpace(user.RealName) == "" {
+		user.RealName = firstNonEmpty(user.Username, user.Phone, user.UserID)
+	}
+	return user, nil
+}
+
 func (s *Server) allowLoginAttempt(username, ip string, now time.Time) bool {
 	if s == nil || s.loginLimiter == nil {
 		return true
@@ -1358,6 +1455,15 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) userInfo(w http.ResponseWriter, r *http.Request) {
 	user := userFromRequest(r)
+	if isAgentBackendUser(user) {
+		profile, err := s.CurrentAppAgentProfile(r.Context(), user.ID)
+		if err != nil {
+			httpx.Fail(w, http.StatusUnauthorized, "Unauthorized Exception")
+			return
+		}
+		httpx.OK(w, profile)
+		return
+	}
 	profile, err := s.system.CurrentUserProfile(r.Context(), user.ID, user.HomePath)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
@@ -1383,6 +1489,10 @@ func (s *Server) updateUserProfile(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) codes(w http.ResponseWriter, r *http.Request) {
 	user := userFromRequest(r)
+	if isAgentBackendUser(user) {
+		httpx.OK(w, agentAccessCodes(user))
+		return
+	}
 	codes, err := s.system.AuthCodesForUser(r.Context(), user.ID, user.Roles)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
@@ -1393,12 +1503,50 @@ func (s *Server) codes(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) menus(w http.ResponseWriter, r *http.Request) {
 	user := userFromRequest(r)
+	if isAgentBackendUser(user) {
+		httpx.OK(w, agentBackendMenus())
+		return
+	}
 	menus, err := s.system.MenusForUser(r.Context(), user.ID, user.Roles)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	httpx.OK(w, menus)
+}
+
+func agentBackendMenus() []system.MenuItem {
+	return []system.MenuItem{
+		{
+			ID:     -1000,
+			Name:   "AppManage",
+			Path:   "/app",
+			Status: 1,
+			Type:   "catalog",
+			Meta: map[string]any{
+				"authority": []string{"agent", "Agent:Distribution:View"},
+				"icon":      "lucide:smartphone",
+				"title":     "App 管理",
+			},
+			Children: []system.MenuItem{
+				{
+					ID:        -1001,
+					PID:       -1000,
+					Name:      "AppDistributionManagement",
+					Path:      "/app/distribution",
+					Component: "/app/distribution-management",
+					AuthCode:  "Agent:Distribution:View",
+					Status:    1,
+					Type:      "menu",
+					Meta: map[string]any{
+						"authority": []string{"agent", "Agent:Distribution:View", "Agent:Distribution:Write"},
+						"icon":      "lucide:share-2",
+						"title":     "代理管理",
+					},
+				},
+			},
+		},
+	}
 }
 
 func (s *Server) upload(w http.ResponseWriter, r *http.Request) {
@@ -3572,6 +3720,22 @@ func (s *Server) hasAnyPermission(ctx context.Context, user auth.UserInfo, codes
 	if hasRole(user.Roles, "admin") {
 		return true, nil
 	}
+	if isAgentBackendUser(user) {
+		granted := agentAccessCodes(user)
+		if len(codes) == 0 {
+			return len(granted) > 0, nil
+		}
+		allowed := make(map[string]struct{}, len(granted))
+		for _, item := range granted {
+			allowed[item] = struct{}{}
+		}
+		for _, code := range codes {
+			if _, ok := allowed[code]; ok {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
 	granted, err := s.system.AuthCodesForUser(ctx, user.ID, user.Roles)
 	if err != nil {
 		return false, err
@@ -3618,6 +3782,14 @@ func (s *Server) authorizeAuthorization(w http.ResponseWriter, r *http.Request, 
 	if s.db == nil {
 		httpx.Fail(w, http.StatusUnauthorized, "Unauthorized Exception")
 		return auth.UserInfo{}, false
+	}
+	if isAgentBackendUser(tokenUser) {
+		profile, err := s.CurrentAppAgentProfile(r.Context(), tokenUser.ID)
+		if err != nil {
+			httpx.Fail(w, http.StatusUnauthorized, "Unauthorized Exception")
+			return auth.UserInfo{}, false
+		}
+		return profile, true
 	}
 	currentVersion, verr := s.system.TokenVersion(r.Context(), tokenUser.ID)
 	if verr != nil || tokenUser.TokenVersion == 0 || tokenUser.TokenVersion != currentVersion {

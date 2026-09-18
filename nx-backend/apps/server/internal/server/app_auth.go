@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -165,6 +166,14 @@ func (s *Server) appVerifySMS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := createSMSUserWithDistributionInvite(r.Context(), s.db, phone, body.AgentCode); err != nil {
+		if err == sql.ErrNoRows {
+			httpx.Fail(w, http.StatusBadRequest, "邀请码不存在或已失效，请检查后重试")
+		} else {
+			httpx.Fail(w, http.StatusInternalServerError, "注册邀请关系暂时处理失败，请稍后重试")
+		}
+		return
+	}
 	user, err := s.appUsers.FindOrCreateByPhone(r.Context(), phone)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "login failed")
@@ -174,9 +183,7 @@ func (s *Server) appVerifySMS(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusForbidden, "账号已被禁用")
 		return
 	}
-	if strings.TrimSpace(body.AgentCode) != "" {
-		_, _ = s.db.ExecContext(r.Context(), `INSERT INTO distribution_user_relations(app_user_id,direct_agent_id) SELECT $1,id FROM distribution_agents WHERE lower(agent_code)=lower($2) AND status='active' ON CONFLICT(app_user_id) DO NOTHING`, user.ID, strings.TrimSpace(body.AgentCode))
-	}
+
 	if err := s.writeAppSession(w, r, user, body.DeviceInfo); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "token error")
 		return

@@ -32,6 +32,7 @@ var phoneIdentifierPattern = regexp.MustCompile(`^1[3-9][0-9]{9}$`)
 const passwordAuthenticationDummyHash = "$2b$10$sQ/LjuVpMbqmFYb/Ukb0.ebUav7SmTzniaVsy0sNW/ZmwD5HU.hPq"
 
 type RegisterWithPasswordInput struct {
+	AgentCode   string
 	Nickname    string
 	Account     string
 	Password    string
@@ -396,6 +397,21 @@ func (s *Store) RegisterWithPassword(ctx context.Context, in RegisterWithPasswor
 	}
 	if err != nil {
 		return User{}, fmt.Errorf("write appuser registration: %w", mapRegisterWithPasswordError(err))
+	}
+
+	// Bind only genuinely new accounts, in the same transaction as registration.
+	// Adding credentials to an existing SMS account must not change attribution.
+	if !existingUser && strings.TrimSpace(in.AgentCode) != "" {
+		var agentID int64
+		if err := tx.QueryRowContext(ctx, `SELECT id FROM distribution_agents WHERE lower(agent_code)=lower($1) AND status='active' FOR SHARE`, strings.TrimSpace(in.AgentCode)).Scan(&agentID); err != nil {
+			return User{}, fmt.Errorf("registration invite: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO distribution_user_relations(app_user_id,direct_agent_id) VALUES($1,$2)`, userID, agentID); err != nil {
+			return User{}, fmt.Errorf("registration relation: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO distribution_invite_events(agent_id,app_user_id,agent_code,event_type) VALUES($1,$2,$3,'register')`, agentID, userID, strings.TrimSpace(in.AgentCode)); err != nil {
+			return User{}, fmt.Errorf("registration invite event: %w", err)
+		}
 	}
 
 	result, err := tx.ExecContext(ctx, `

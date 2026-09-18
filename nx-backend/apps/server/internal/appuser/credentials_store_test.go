@@ -1183,3 +1183,35 @@ CREATE TABLE app_user_markers (
   marker      TEXT NOT NULL
 );
 `
+
+func TestRegisterWithPasswordInviteOnlyForNewAccounts(t *testing.T) {
+	database := openRegisterWithPasswordFixture(t)
+	_, err := database.Exec(`CREATE TABLE distribution_agents(id bigint primary key,agent_code text,status text);
+ CREATE TABLE distribution_user_relations(app_user_id bigint unique,direct_agent_id bigint);
+ CREATE TABLE distribution_invite_events(agent_id bigint,app_user_id bigint,agent_code text,event_type text);
+ INSERT INTO distribution_agents VALUES(10,'A10','active')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	store := NewStore(database)
+	for i, phone := range []string{"13800000211", "13800000212"} {
+		if i == 1 {
+			if _, err := store.FindOrCreateByPhone(ctx, phone); err != nil {
+				t.Fatal(err)
+			}
+		}
+		insertRegisterSMSCode(t, database, phone, "invite-code", time.Now().Add(time.Hour), false, time.Now())
+		user, err := store.RegisterWithPassword(ctx, RegisterWithPasswordInput{Phone: phone, Account: fmt.Sprintf("invite_%d", i), Password: "secret123", Nickname: "用户", SMSCodeHash: "invite-code", AgentCode: "A10"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var count int
+		if err := database.QueryRow(`SELECT count(*) FROM distribution_user_relations WHERE app_user_id=$1`, user.ID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1-i {
+			t.Fatalf("existing=%t relation count=%d", i == 1, count)
+		}
+	}
+}

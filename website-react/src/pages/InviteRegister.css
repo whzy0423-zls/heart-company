@@ -1,0 +1,25 @@
+.invite-register { max-width: 620px; padding-block: 48px 80px; }
+.invite-register header { margin-bottom: 24px; }
+.invite-register h1 { font-size: clamp(28px, 6vw, 42px); margin: 8px 0; }
+.invite-register p, .invite-register small { color: var(--ink-2); }
+.invite-register__card { display: grid; gap: 18px; background: #fff; padding: clamp(20px, 5vw, 36px); border: 1px solid #dfe3e8; border-radius: 24px; box-shadow: var(--shadow-sm); }
+.invite-register__card fieldset { border: 0; display: grid; gap: 8px; min-width: 0; }
+.invite-register label { font-weight: 600; }
+.invite-register fieldset > label:not(:first-child) { margin-top: 12px; }
+.invite-register input:not([type=checkbox]) { box-sizing: border-box; width: 100%; min-width: 0; min-height: 48px; border: 1px solid #aeb7c3; border-radius: 10px; padding: 10px 12px; color: #18212d; background: #fff; font: inherit; font-size: 16px; }
+.invite-register :is(input,button,a):focus-visible { outline: 3px solid #1267c4; outline-offset: 3px; }
+.invite-register input:disabled { background: #f1f3f5; }
+.invite-register small { font-size: 13px; }
+.invite-register__invitation { background: #edf4fc; padding: 16px; border-radius: 14px; display: grid; gap: 8px; }
+.invite-register__invitation p, .invite-register__footnote { font-size: 13px; }
+.invite-register__code { display: flex; gap: 10px; }
+.invite-register__code input { flex: 1; }
+.invite-register button { cursor: pointer; font: inherit; }
+.invite-register__code button { border: 1px solid #1267c4; border-radius: 10px; background: #fff; color: #145aab; padding: 10px 14px; flex-shrink: 0; }
+.invite-register .invite-register__consent { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; font-weight: 400; }
+.invite-register__consent input { width: 22px; height: 22px; margin-top: 3px; flex-shrink: 0; accent-color: #1267c4; }
+.invite-register a:not(.invite-register__primary) { color: #145aab; text-decoration: underline; }
+.invite-register__primary { display: block; text-align: center; border: 0; border-radius: 12px; color: #fff; background: #145aab; min-height: 50px; padding: 12px 18px; font-weight: 600; }
+.invite-register button:disabled { opacity: .65; cursor: default; }
+.invite-register .invite-register__error { background: #fff0ee; color: #a32421; border-radius: 10px; padding: 12px; overflow-wrap: anywhere; }
+@media(max-width: 360px) { .invite-register__code { flex-direction: column; } }

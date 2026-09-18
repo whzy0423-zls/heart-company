@@ -21,6 +21,7 @@ func TestRegisterSkillLibraryAdminRoutesUsesViewAndEditPermissions(t *testing.T)
 
 	tests := []struct{ method, path, want string }{
 		{http.MethodGet, "/api/skill-library-management", "App:SkillLibrary:View"},
+		{http.MethodPost, "/api/skill-library-management/books/import", "App:SkillLibrary:Edit"},
 		{http.MethodPatch, "/api/skill-library-management/library/3", "App:SkillLibrary:Edit"},
 		{http.MethodPatch, "/api/skill-library-management/categories/7", "App:SkillLibrary:Edit"},
 		{http.MethodPatch, "/api/skill-library-management/skills/9", "App:SkillLibrary:Edit"},

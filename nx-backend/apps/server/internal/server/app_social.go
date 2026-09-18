@@ -127,6 +127,13 @@ func (s *Server) appSocialRouter(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		httpx.OK(w, map[string]any{"visibility": visibility, "version": version})
+	case path == "blocks" && r.Method == http.MethodGet:
+		items, err := s.friends.ListBlockedUsers(r.Context(), user.ID)
+		if err != nil {
+			mapFriendError(w, err)
+			return
+		}
+		httpx.OK(w, map[string]any{"items": items})
 	case path == "blocks" && r.Method == http.MethodPost:
 		var body struct {
 			UserID int64  `json:"userId"`

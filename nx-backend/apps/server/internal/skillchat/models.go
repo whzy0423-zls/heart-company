@@ -41,6 +41,7 @@ type Session struct {
 }
 
 type SessionSourceMetadata struct {
+	RetrievalBackend  string   `json:"-"`
 	ReviewPolicy      string   `json:"reviewPolicy,omitempty"`
 	ReviewDecisionRef string   `json:"reviewDecisionRef,omitempty"`
 	ReviewDecision    string   `json:"reviewDecision,omitempty"`
@@ -53,6 +54,11 @@ func sanitizeSessionSourceMetadata(raw []byte) SessionSourceMetadata {
 	var metadata SessionSourceMetadata
 	if len(raw) > 0 {
 		_ = json.Unmarshal(raw, &metadata)
+		var routing struct {
+			RetrievalBackend string `json:"retrievalBackend"`
+		}
+		_ = json.Unmarshal(raw, &routing)
+		metadata.RetrievalBackend = routing.RetrievalBackend
 	}
 	if metadata.RiskNotices == nil {
 		metadata.RiskNotices = []string{}

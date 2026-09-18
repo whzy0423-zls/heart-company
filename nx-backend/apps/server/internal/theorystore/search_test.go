@@ -102,7 +102,15 @@ func (theoryReleaseSearchConn) QueryContext(_ context.Context, query string, arg
 	if strings.Contains(query, "LIMIT") {
 		return nil, errors.New("release query must score the complete immutable release")
 	}
-	if len(args) != 1 || args[0].Value != int64(71) {
+	if len(args) == 2 {
+		if !strings.Contains(query, "chunk.tags ?| ARRAY(SELECT jsonb_array_elements_text($2::jsonb))") {
+			return nil, errors.New("missing type boundary")
+		}
+		if args[1].Value != `["enneagram-core"]` && args[1].Value != `["enneagram-type-06"]` {
+			return nil, errors.New("unexpected type scope")
+		}
+	}
+	if (len(args) != 1 && len(args) != 2) || args[0].Value != int64(71) {
 		return nil, errors.New("release id must be the only SQL argument")
 	}
 	return &theorySearchRows{values: [][]driver.Value{
@@ -160,4 +168,15 @@ func (r *theorySearchRows) Next(dest []driver.Value) error {
 	copy(dest, r.values[r.index])
 	r.index++
 	return nil
+}
+
+func TestSceneSnapshotSearchSeparatesCoreAndSelectedType(t *testing.T) {
+	database := openTheoryReleaseSearchTestDB(t)
+	docs, err := NewStore(database).SearchEnneagramReleaseChunks(context.Background(), 71, "冲突时如何表达需要", []string{"enneagram-core", "enneagram-type-06"}, 6, 0.2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 2 {
+		t.Fatalf("expected one separately scoped query per library: %v", docs)
+	}
 }

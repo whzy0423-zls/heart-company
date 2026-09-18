@@ -308,6 +308,44 @@ func (s *Store) ListFriends(ctx context.Context, userID int64) ([]Friend, error)
 	return items, rows.Err()
 }
 
+func (s *Store) ListBlockedUsers(ctx context.Context, userID int64) ([]BlockedUser, error) {
+	if err := s.requireDB(); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT u.id, COALESCE(u.user_code,''), u.nickname, u.avatar,
+		       u.personality_visibility, u.personality_visibility_version,
+		       COALESCE(b.reason,''), b.created_at
+		FROM user_blocks b
+		JOIN app_users u ON u.id=b.blocked_id
+		WHERE b.blocker_id=$1 AND b.status='active'
+		ORDER BY b.created_at DESC, b.id DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []BlockedUser{}
+	for rows.Next() {
+		var item BlockedUser
+		var blockedAt time.Time
+		if err := rows.Scan(
+			&item.ID,
+			&item.UserCode,
+			&item.Nickname,
+			&item.Avatar,
+			&item.PersonalityVisibility,
+			&item.PersonalityVisibilityVersion,
+			&item.Reason,
+			&blockedAt,
+		); err != nil {
+			return nil, err
+		}
+		item.BlockedAt = formatTime(blockedAt)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (s *Store) Report(ctx context.Context, reporterID, reportedID int64, reason, details string) (int64, error) {
 	if err := s.requireDB(); err != nil {
 		return 0, err

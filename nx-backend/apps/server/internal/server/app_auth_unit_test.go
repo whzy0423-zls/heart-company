@@ -560,6 +560,34 @@ func TestAppPasswordRegistrationValidationRejectsBeforeStore(t *testing.T) {
 	}
 }
 
+func TestAppPasswordRegistrationRejectsInvalidAgentCodeBeforeStore(t *testing.T) {
+	registerAppAuthUnitTestDriver()
+	db, err := sql.Open(appAuthUnitTestDriverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	server := &Server{
+		db:                    db,
+		appUsers:              appuser.NewStore(db),
+		smsVerifyPhoneLimiter: newStrRateLimiter(100, time.Minute),
+		smsVerifyIPLimiter:    newStrRateLimiter(100, time.Minute),
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/app/auth/register", strings.NewReader(`{"nickname":"心之力用户","account":"xinuser","password":"secret1","phone":"13800000000","code":"123456","agentCode":"NO_AGENT"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	server.appRegisterWithPassword(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "邀请码不存在或已失效") {
+		t.Fatalf("expected invalid invite message, got body=%s", rec.Body.String())
+	}
+}
+
 func TestAppPasswordHandlersRejectTrailingJSON(t *testing.T) {
 	requests := []struct {
 		name string

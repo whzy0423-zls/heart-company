@@ -84,6 +84,7 @@ type skillLibraryMetadataUpdate struct {
 }
 
 func registerSkillLibraryAdminRoutes(mux *http.ServeMux, requirePermission func(string, http.HandlerFunc) http.HandlerFunc, s *Server) {
+	mux.HandleFunc("/api/skill-library-management/books/import", requirePermission("App:SkillLibrary:Edit", s.importSkillBook))
 	mux.HandleFunc("/api/skill-library-management", requirePermission("App:SkillLibrary:View", s.skillLibraryAdminRouter))
 	mux.HandleFunc("/api/skill-library-management/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch && r.Method != http.MethodPost {

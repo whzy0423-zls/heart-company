@@ -17,7 +17,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -mod=readonly -trimpath -ldflags="-s -w" -
 # ---- runtime stage ----
 FROM alpine:3.20 AS production
 
-RUN apk add --no-cache ca-certificates tzdata ffmpeg && \
+RUN apk add --no-cache ca-certificates tzdata ffmpeg poppler-utils && \
     addgroup -S app && adduser -S app -G app
 
 WORKDIR /app

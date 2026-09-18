@@ -33,6 +33,8 @@ describe('growth skill library management contract', () => {
       '下架',
       '启用',
       '停用',
+      '技能版本和书籍数据',
+      'App 走新技能库接口刷新生效',
     ]) {
       expect(source).toContain(expected);
     }

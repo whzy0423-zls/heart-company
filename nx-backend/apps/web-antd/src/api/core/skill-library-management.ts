@@ -117,3 +117,11 @@ export function enableSkillLibrarySkillApi(id: number) {
 export function disableSkillLibrarySkillApi(id: number) {
   return skillLifecycleApi(id, 'disable');
 }
+
+export function importSkillBookApi(input: { file: File; name: string; summary: string; categoryId: number }) {
+  return requestClient.upload<{ id: number; key: string; name: string; characters: number; status: string }>(
+    '/skill-library-management/books/import',
+    { ...input, categoryId: String(input.categoryId) },
+    { timeout: 120_000 },
+  );
+}

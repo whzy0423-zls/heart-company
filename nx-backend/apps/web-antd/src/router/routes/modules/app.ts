@@ -19,6 +19,8 @@ const routes: RouteRecordRaw[] = [
         'App:PlanManagement:View',
         'Website:AppReleases:List',
         'Website:Write',
+        'Agent:Distribution:View',
+        'agent',
       ],
       icon: 'lucide:smartphone',
       order: 11,
@@ -62,7 +64,12 @@ const routes: RouteRecordRaw[] = [
       { component: () => import('#/views/app/distribution-settlements.vue'), meta: { authority: ['Customer:App:List'], icon: 'lucide:wallet-cards', title: '分销结算' }, name: 'AppDistributionSettlements', path: 'distribution-settlements' },
       {
         component: () => import('#/views/app/distribution-management.vue'),
-        meta: { authority: ['Customer:App:List'], icon: 'lucide:share-2', title: '代理管理' },
+        meta: {
+          authority: ['Customer:App:List', 'Agent:Distribution:View', 'Agent:Distribution:Write', 'agent'],
+          hideInMenu: true,
+          icon: 'lucide:share-2',
+          title: '代理管理',
+        },
         name: 'AppDistributionManagement',
         path: 'distribution',
       },
