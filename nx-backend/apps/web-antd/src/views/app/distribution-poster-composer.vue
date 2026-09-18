@@ -27,6 +27,7 @@ const inviteX = ref(286);
 const inviteY = ref(1100);
 const inviteWidth = ref(350);
 const inviteFontSize = ref(26);
+const MIN_QR_SIZE = 100;
 const previewRef = ref<HTMLDivElement>();
 let drag: { kind: 'qr' | 'invite'; pointer: number; x: number; y: number; clientX: number; clientY: number; width: number; height: number } | undefined;
 function boxStyle(kind: 'qr' | 'invite') {
@@ -99,7 +100,7 @@ function applyTemplate(template: PosterTemplate) {
   templateUrl.value = template.templateUrl || '';
   landingUrl.value = template.landingUrl || defaultLandingUrl;
   qrImageUrl.value = '';
-  qrSize.value = template.qrSize || 176; qrX.value = template.qrX ?? 62; qrY.value = template.qrY ?? 1010;
+  qrSize.value = Math.min(220, Math.max(MIN_QR_SIZE, template.qrSize || 176)); qrX.value = template.qrX ?? 62; qrY.value = template.qrY ?? 1010;
   inviteX.value = template.inviteX ?? 286; inviteY.value = template.inviteY ?? 1100;
   inviteWidth.value = template.inviteWidth ?? 350; inviteFontSize.value = template.inviteFontSize ?? 26;
 }
@@ -207,8 +208,9 @@ async function render() {
     return;
   }
   rendering.value = true;
+  let background: HTMLImageElement | undefined;
   try {
-    const background = await loadImage(templateUrl.value);
+    background = await loadImage(templateUrl.value);
     // Agents always receive a QR code for their own landing URL and invite code.
     // A legacy uploaded QR image remains available only for administrator previews.
     let qrSource = '';
@@ -223,7 +225,7 @@ async function render() {
       image.onload = () => resolve(image);
       image.onerror = () => reject(new Error('二维码生成失败'));
       image.src = qrSource;
-    }) : qrImageUrl.value ? await loadImage(qrSource) : undefined;
+    }) : qrImageUrl.value ? await loadImage(qrImageUrl.value) : undefined;
     const canvas = document.createElement('canvas');
     canvas.width = 720; canvas.height = 1280;
     const ctx = canvas.getContext('2d');
@@ -252,7 +254,20 @@ async function render() {
     visible.getContext('2d')?.drawImage(canvas, 0, 0);
     ready.value = true;
   } catch (error) {
-    if (version === renderVersion) renderError.value = error instanceof Error ? error.message : '海报预览生成失败';
+    if (version === renderVersion) {
+      renderError.value = error instanceof Error ? error.message : '海报预览生成失败';
+      // Keep the published template visible even if QR generation fails.
+      if (background && canvasRef.value) {
+        const ctx = canvasRef.value.getContext('2d');
+        if (ctx) {
+          const scale = Math.max(720 / background.naturalWidth, 1280 / background.naturalHeight);
+          const w = background.naturalWidth * scale, h = background.naturalHeight * scale;
+          canvasRef.value.width = 720; canvasRef.value.height = 1280;
+          ctx.clearRect(0, 0, 720, 1280);
+          ctx.drawImage(background, (720 - w) / 2, (1280 - h) / 2, w, h);
+        }
+      }
+    }
   } finally { if (version === renderVersion) rendering.value = false; }
 }
 
@@ -327,7 +342,7 @@ onBeforeUnmount(() => {
           <Form.Item label="邀请码位置（X / Y）"><Space><InputNumber v-model:value="inviteX" :min="0" :max="720 - inviteWidth" :precision="0" /><InputNumber v-model:value="inviteY" :min="0" :max="1268 - inviteFontSize" :precision="0" /></Space></Form.Item>
           <Form.Item label="邀请码字号"><Slider v-model:value="inviteFontSize" :min="16" :max="64" /></Form.Item>
           <Form.Item label="邀请码区域宽度"><Slider v-model:value="inviteWidth" :min="120" :max="600" /></Form.Item>
-          <Form.Item label="二维码尺寸"><Slider v-model:value="qrSize" :min="132" :max="220" :step="4" /></Form.Item>
+          <Form.Item label="二维码尺寸"><Slider v-model:value="qrSize" :min="MIN_QR_SIZE" :max="220" :step="4" /></Form.Item>
         </template>
         <Form.Item :label="canEdit ? '预览邀请码（不保存）' : '邀请码'"><Input v-model:value="inviteCode" :maxlength="32" placeholder="请输入邀请码" /></Form.Item>
         <Typography.Paragraph type="secondary">{{ canEdit ? '保存并发布后，代理端二维码会自动拼接代理号并指向官网 App 下载页。' : '只需填写邀请码，再下载分享海报；二维码会自动带上该邀请码。' }}</Typography.Paragraph>

@@ -130,8 +130,8 @@ func validatePosterConfig(cfg posterConfig) error {
 		if template.TemplateURL == "" {
 			return errors.New("请先上传海报模板")
 		}
-		if template.QRSize < 132 || template.QRSize > 220 {
-			return errors.New("二维码尺寸应为 132–220")
+		if template.QRSize < 100 || template.QRSize > 220 {
+			return errors.New("二维码尺寸应为 100–220")
 		}
 		if template.QRX < 0 || template.QRY < 0 || template.QRX+template.QRSize > 720 || template.QRY+template.QRSize > 1280 {
 			return errors.New("二维码位置超出海报范围")
