@@ -47,10 +47,12 @@
     "dayjs": "catalog:",
     "echarts": "catalog:",
     "pinia": "catalog:",
+    "qrcode": "catalog:",
     "vue": "catalog:",
     "vue-router": "catalog:"
   },
   "devDependencies": {
+    "@types/qrcode": "catalog:",
     "playwright": "catalog:"
   }
 }

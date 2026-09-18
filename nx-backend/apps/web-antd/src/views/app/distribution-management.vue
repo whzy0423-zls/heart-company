@@ -43,6 +43,7 @@ import * as echarts from 'echarts/core';
 import { CanvasRenderer } from 'echarts/renderers';
 
 import { getAppCustomerListApi } from '#/api';
+import DistributionPosterComposer from './distribution-poster-composer.vue';
 import {
   createAgentDistributionChildApi,
   createDistributionAgentApi,
@@ -594,6 +595,11 @@ onBeforeUnmount(() => {
           </Typography.Text>
         </Space>
       </Card>
+
+      <DistributionPosterComposer
+        v-if="isAgentBackoffice"
+        :agent-code="currentAgent?.agentCode"
+      />
 
       <Card :bordered="false" class="analytics-card">
         <template #title>经营数据分析</template>

@@ -240,6 +240,28 @@ describe('distribution management page', () => {
     }
   });
 
+  it('provides a browser-local poster composer for agent sharing', () => {
+    const posterSource = readFileSync(
+      resolve('apps/web-antd/src/views/app/distribution-poster-composer.vue'),
+      'utf8',
+    );
+    for (const expected of [
+      '上传海报模板',
+      '生成并下载 PNG',
+      'headline',
+      'subtitle',
+      'inviteCode',
+      'landingUrl',
+      'QRCode.toDataURL',
+      'canvas.toDataURL',
+      'URL.createObjectURL',
+      'register?agentCode=',
+    ]) {
+      expect(posterSource).toContain(expected);
+    }
+    expect(source).toContain('<DistributionPosterComposer');
+  });
+
   it('formats distribution detail timestamps as year-month-day hour-minute-second', () => {
     for (const expected of [
       'formatDateTime',
