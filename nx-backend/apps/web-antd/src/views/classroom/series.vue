@@ -1,5 +1,9 @@
 <script setup lang="ts">
-import type { ClassroomSeries } from '#/api/core/classroom';
+import type {
+  ClassroomFeedType,
+  ClassroomReviewStatus,
+  ClassroomSeries,
+} from '#/api/core/classroom';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useAccessStore } from '@vben/stores';
 import {
@@ -36,11 +40,17 @@ const props = withDefaults(
     canPrice?: boolean;
     canPublish?: boolean;
     canWrite?: boolean;
+    feedType?: ClassroomFeedType;
+    reviewStatus?: ClassroomReviewStatus;
+    teacherKey?: string;
   }>(),
   {
     canPrice: undefined,
     canPublish: undefined,
     canWrite: undefined,
+    feedType: undefined,
+    reviewStatus: undefined,
+    teacherKey: undefined,
   },
 );
 const accessStore = useAccessStore();
@@ -81,7 +91,15 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    rows.value = (await getClassroomSeriesApi({ page: 1, pageSize: 50 })).items;
+    rows.value = (
+      await getClassroomSeriesApi({
+        page: 1,
+        pageSize: 50,
+        feedType: props.feedType,
+        reviewStatus: props.reviewStatus,
+        teacherKey: props.teacherKey || undefined,
+      })
+    ).items;
   } catch {
     error.value = '课程系列加载失败，请重试。';
   } finally {
@@ -225,6 +243,10 @@ function confirmAction(
   });
 }
 onMounted(load);
+watch(
+  () => [props.feedType, props.reviewStatus, props.teacherKey],
+  () => load(),
+);
 </script>
 <template>
   <div class="classroom-series-page">

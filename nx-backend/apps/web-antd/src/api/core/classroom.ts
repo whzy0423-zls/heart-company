@@ -15,6 +15,13 @@ export type ClassroomContentStatus =
   | 'published'
   | 'ready';
 export type ClassroomContentType = 'audio' | 'video';
+export type ClassroomFeedType = 'course' | 'daily';
+export type ClassroomReviewStatus =
+  | 'draft'
+  | 'offline'
+  | 'pending_review'
+  | 'published'
+  | 'rejected';
 export type ClassroomCoverAspectRatio = '1:1' | '16:9' | '9:16';
 export type ClassroomCoverSource =
   | 'audio-default'
@@ -60,10 +67,13 @@ export interface ClassroomSeries {
   coverUrl: string;
   createdAt: string;
   id: number;
+  feedType?: ClassroomFeedType;
   manualCoverObjectKey: string;
   playbackBlocked: boolean;
   priceCents: number;
   publishedAt?: string;
+  reviewReason?: string;
+  reviewStatus?: ClassroomReviewStatus;
   sortOrder: number;
   status: ClassroomSeriesStatus;
   summary: string;
@@ -83,6 +93,7 @@ export interface ClassroomContent {
   createdAt: string;
   description: string;
   durationSeconds: number;
+  feedType?: ClassroomFeedType;
   effectiveAccessLevel: Exclude<ClassroomAccessLevel, 'inherit'>;
   effectivePriceCents: number;
   episodeNo: number;
@@ -95,6 +106,9 @@ export interface ClassroomContent {
   purchaseTarget?: 'content' | 'series';
   recordedAt?: string;
   seriesId?: number;
+  replacesContentId?: number;
+  reviewReason?: string;
+  reviewStatus?: ClassroomReviewStatus;
   showAsStandalone: boolean;
   sortOrder: number;
   status: ClassroomContentStatus;
@@ -271,9 +285,12 @@ function classroomRequest<T>(request: Promise<T>): Promise<T> {
 
 export function getClassroomSeriesApi(params?: {
   accessLevel?: ClassroomAccessLevel;
+  feedType?: ClassroomFeedType;
   page?: number;
   pageSize?: number;
+  reviewStatus?: ClassroomReviewStatus;
   status?: ClassroomSeriesStatus;
+  teacherKey?: string;
 }) {
   return classroomRequest(
     requestClient.get<ClassroomPage<ClassroomSeries>>(
@@ -397,11 +414,14 @@ export function setClassroomSeriesCoverSettingsApi(
 
 export function getClassroomContentsApi(params?: {
   contentType?: ClassroomContentType;
+  feedType?: ClassroomFeedType;
   page?: number;
   pageSize?: number;
+  reviewStatus?: ClassroomReviewStatus;
   seriesId?: number;
   standaloneOnly?: boolean;
   status?: ClassroomContentStatus;
+  teacherKey?: string;
 }) {
   return classroomRequest(
     requestClient.get<ClassroomPage<ClassroomContent>>(

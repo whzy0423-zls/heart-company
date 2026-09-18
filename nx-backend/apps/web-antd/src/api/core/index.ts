@@ -30,6 +30,7 @@ export * from './video';
 export * from './voice';
 export * from './xinzhili-model-config';
 export * from './theory-library';
+export * from './teacher';
 export * from './enneagram-library';
 export * from './story-skill';
 export * from './story-generation-config';

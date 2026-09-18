@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ClassroomContent, ClassroomSeries } from '#/api/core/classroom';
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { Page } from '@vben/common-ui';
 import {
   Alert,
@@ -8,6 +8,8 @@ import {
   Card,
   Empty,
   Modal,
+  Input,
+  Select,
   Space,
   Table,
   Tabs,
@@ -62,11 +64,25 @@ const coverEditing = ref<ClassroomContent>();
 const actionLoadingId = ref<number>();
 const batchPublishing = ref(false);
 const selectedContentIds = ref<number[]>([]);
+const classroomFilters = reactive({
+  teacherKey: '',
+  feedType: undefined as 'course' | 'daily' | undefined,
+  reviewStatus: undefined as
+    | 'draft'
+    | 'pending_review'
+    | 'rejected'
+    | 'published'
+    | 'offline'
+    | undefined,
+});
 const columns = [
   { dataIndex: 'title', title: '课件' },
+  { dataIndex: 'teacherName', title: '老师' },
+  { dataIndex: 'feedType', title: '内容类型' },
   { dataIndex: 'contentType', title: '类型' },
   { dataIndex: 'effectiveAccessLevel', title: '权限' },
   { dataIndex: 'status', title: '状态' },
+  { dataIndex: 'reviewStatus', title: '审核状态' },
   { key: 'action', title: '操作' },
 ];
 const allTabs = [
@@ -111,8 +127,19 @@ async function load() {
   error.value = '';
   try {
     const [c, s] = await Promise.all([
-      getClassroomContentsApi({ page: 1, pageSize: 50 }),
-      getClassroomSeriesApi({ page: 1, pageSize: 50 }),
+      getClassroomContentsApi({
+        page: 1,
+        pageSize: 50,
+        teacherKey: classroomFilters.teacherKey || undefined,
+        feedType: classroomFilters.feedType,
+        reviewStatus: classroomFilters.reviewStatus,
+      }),
+      getClassroomSeriesApi({
+        page: 1,
+        pageSize: 50,
+        teacherKey: classroomFilters.teacherKey || undefined,
+        reviewStatus: classroomFilters.reviewStatus,
+      }),
     ]);
     contents.value = c.items;
     series.value = s.items;
@@ -256,7 +283,34 @@ onMounted(load);
         <div class="toolbar">
           <span class="section-help"
             >管理视频课件、音频课件，可按系列内容或独立内容展示；发布前请确认媒体已就绪。</span
-          ><Space
+          ><Space wrap
+            ><Input
+              v-model:value="classroomFilters.teacherKey"
+              allow-clear
+              placeholder="老师筛选"
+              @press-enter="load"
+            /><Select
+              v-model:value="classroomFilters.feedType"
+              allow-clear
+              placeholder="内容类型"
+              :options="[
+                { label: '正式课程', value: 'course' },
+                { label: '日常动态', value: 'daily' },
+              ]"
+              @change="load"
+            /><Select
+              v-model:value="classroomFilters.reviewStatus"
+              allow-clear
+              placeholder="审核状态"
+              :options="[
+                { label: '草稿', value: 'draft' },
+                { label: '待审核', value: 'pending_review' },
+                { label: '已退回', value: 'rejected' },
+                { label: '已发布', value: 'published' },
+                { label: '已下架', value: 'offline' },
+              ]"
+              @change="load"
+            /><Button @click="load">筛选</Button
             ><Button v-if="canWrite" type="primary" @click="openCreate"
               >新建课件</Button
             ><Button v-if="canUpload" @click="openUploads">上传媒体</Button
@@ -285,6 +339,9 @@ onMounted(load);
           :scroll="{ x: 900 }"
         >
           <template #bodyCell="{ column, record }">
+            <template v-if="column.dataIndex === 'feedType'">{{
+              record.feedType === 'daily' ? '日常动态' : '正式课程'
+            }}</template>
             <template v-if="column.dataIndex === 'contentType'">{{
               record.contentType === 'video' ? '视频课件' : '音频课件'
             }}</template>
@@ -303,6 +360,15 @@ onMounted(load);
               >{{ statusText[record.status] || record.status
               }}<span v-if="record.playbackBlocked"> · 播放已阻断</span></Tag
             >
+            <Tag v-else-if="column.dataIndex === 'reviewStatus'" :color="record.reviewStatus === 'published' ? 'success' : record.reviewStatus === 'rejected' ? 'warning' : 'processing'">{{
+              record.reviewStatus === 'pending_review'
+                ? '待审核'
+                : record.reviewStatus === 'rejected'
+                  ? '已退回'
+                  : record.reviewStatus === 'published'
+                    ? '已发布'
+                    : record.reviewStatus || '草稿'
+            }}</Tag>
             <Space v-else-if="column.key === 'action'">
               <Button
                 v-if="canPublish && record.status !== 'published'"
@@ -384,6 +450,9 @@ onMounted(load);
         :can-price="canPrice"
         :can-publish="canPublish"
         :can-write="canWrite"
+        :feed-type="classroomFilters.feedType"
+        :review-status="classroomFilters.reviewStatus"
+        :teacher-key="classroomFilters.teacherKey"
       />
       <UploadTasks
         v-else-if="activeTab === 'uploads' && canUpload"
