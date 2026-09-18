@@ -1714,6 +1714,11 @@ img[data-zoom] { cursor: zoom-in; }
 .app-download__ios-status { min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 9px 12px; border: 1px solid rgba(18,21,27,.09); border-radius: 8px; color: var(--muted); background: rgba(255,255,255,.56); font-size: 13px; text-align: center; }
 .app-download__ios-status strong { min-width: 34px; padding: 2px 6px; border-radius: 5px; color: #fff; background: var(--ink); font-size: 11px; line-height: 1.6; }
 .app-download__action-placeholder { min-height: 44px; display: grid; place-items: center; padding: 10px; color: var(--muted); text-align: center; }
+.app-download__invite-code { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border: 1px solid rgba(43,127,255,.18); border-radius: 12px; background: rgba(43,127,255,.06); }
+.app-download__invite-code div { display: grid; gap: 3px; min-width: 0; }
+.app-download__invite-code span { color: var(--muted); font-size: 12px; }
+.app-download__invite-code strong { overflow-wrap: anywhere; font-size: 18px; letter-spacing: .04em; color: var(--ink); }
+.app-download__invite-code button { flex: 0 0 auto; border: 1px solid rgba(43,127,255,.28); border-radius: 8px; padding: 7px 10px; color: var(--ink); background: #fff; cursor: pointer; }
 .app-download__qr-space { text-align: center; color: var(--muted); font-size: 13px; }
 .app-download__qr-space--reserved { min-height: 260px; }
 .app-download__qr-frame { width: min(224px, 100%); aspect-ratio: 1; height: auto; box-sizing: border-box; display: grid; place-items: center; margin: 0 auto 10px; padding: 10px; overflow: hidden; border: 1px solid rgba(43,127,255,.08); border-radius: 16px; background: #fff; box-shadow: var(--shadow-sm); animation: app-download-qr-breathe 3.2s ease-in-out infinite; }

@@ -13,6 +13,7 @@ import (
 )
 
 const distributionPosterKey = "distribution_poster"
+const defaultPosterLandingURL = "https://xinzhili.cn/app"
 
 type posterConfig struct {
 	TemplateURL    string `json:"templateUrl"`
@@ -31,7 +32,7 @@ type posterConfig struct {
 }
 
 func defaultPosterConfig() posterConfig {
-	return posterConfig{QRSize: 176, QRX: 62, QRY: 1010, InviteX: 286, InviteY: 1100, InviteWidth: 350, InviteFontSize: 26}
+	return posterConfig{LandingURL: defaultPosterLandingURL, QRSize: 176, QRX: 62, QRY: 1010, InviteX: 286, InviteY: 1100, InviteWidth: 350, InviteFontSize: 26}
 }
 
 func validPosterImage(value string) bool {

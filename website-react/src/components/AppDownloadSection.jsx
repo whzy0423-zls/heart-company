@@ -13,6 +13,10 @@ export default function AppDownloadSection({
   showDetailsLink = false,
   showInstallSummary = true,
 }) {
+  const inviteCode = typeof window === 'undefined'
+    ? ''
+    : (new URLSearchParams(window.location.search).get('agentCode') || '').trim()
+  const [copiedInvite, setCopiedInvite] = useState(false)
   const [device] = useState(() => detectAppDownloadDevice())
   const [release, setRelease] = useState(null)
   const [requestError, setRequestError] = useState(null)
@@ -86,6 +90,23 @@ export default function AppDownloadSection({
   }, [viewModel.qrPayload, viewModel.showQRCode])
 
   const retry = () => setRequestRevision((revision) => revision + 1)
+  const copyInviteCode = async () => {
+    if (!inviteCode) return
+    try {
+      await navigator.clipboard.writeText(inviteCode)
+    } catch {
+      const input = document.createElement('textarea')
+      input.value = inviteCode
+      input.style.position = 'fixed'
+      input.style.opacity = '0'
+      document.body.appendChild(input)
+      input.select()
+      document.execCommand('copy')
+      input.remove()
+    }
+    setCopiedInvite(true)
+    window.setTimeout(() => setCopiedInvite(false), 1800)
+  }
   const qrSpaceClassName = viewModel.showQRCode
     ? 'app-download__qr-space app-download__qr-space--reserved'
     : 'app-download__qr-space'
@@ -190,6 +211,18 @@ export default function AppDownloadSection({
               ) : (
                 <div className="app-download__action-placeholder">
                   {viewModel.statusMessage}
+                </div>
+              )}
+
+              {inviteCode && (
+                <div className="app-download__invite-code" aria-label="代理邀请码">
+                  <div>
+                    <span>邀请码</span>
+                    <strong>{inviteCode}</strong>
+                  </div>
+                  <button type="button" onClick={copyInviteCode}>
+                    {copiedInvite ? '已复制' : '复制邀请码'}
+                  </button>
                 </div>
               )}
 

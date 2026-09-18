@@ -14,7 +14,8 @@ const access = useAccessStore();
 const canEdit = computed(() => !!props.editable && access.accessCodes.includes('Customer:App:Write'));
 const canvasRef = ref<HTMLCanvasElement>();
 const inviteCode = ref(props.agentCode || '');
-const landingUrl = ref('');
+const defaultLandingUrl = 'https://xinzhili.cn/app';
+const landingUrl = ref(defaultLandingUrl);
 const templateUrl = ref('');
 const qrImageUrl = ref('');
 const qrSize = ref(176);
@@ -77,6 +78,15 @@ let renderVersion = 0;
 let disposed = false;
 const imageCache = new Map<string, Promise<HTMLImageElement>>();
 const objectURLs = new Set<string>();
+const dynamicLandingUrl = computed(() => {
+  const base = landingUrl.value.trim() || defaultLandingUrl;
+  if (canEdit.value || !inviteCode.value.trim()) return base;
+  try {
+    const url = new URL(base);
+    url.searchParams.set('agentCode', inviteCode.value.trim());
+    return url.toString();
+  } catch { return base; }
+});
 
 async function loadImage(source: string) {
   if (!imageCache.has(source)) {
@@ -121,8 +131,10 @@ async function loadConfig() {
   try {
     const cfg = await getPosterConfigApi();
     templateUrl.value = cfg.templateUrl || '';
-    landingUrl.value = cfg.landingUrl || '';
-    qrImageUrl.value = cfg.qrImageUrl || '';
+    landingUrl.value = cfg.landingUrl || defaultLandingUrl;
+    // QR codes are generated from the official download URL. Keep the legacy
+    // field in the API contract, but do not render or publish uploaded QR data.
+    qrImageUrl.value = '';
     qrSize.value = cfg.qrSize || 176;
     qrX.value = cfg.qrX ?? 62; qrY.value = cfg.qrY ?? 1010;
     inviteX.value = cfg.inviteX ?? 286; inviteY.value = cfg.inviteY ?? 1100;
@@ -139,7 +151,7 @@ async function saveConfig() {
   try {
     await savePosterConfigApi({
       qrX: qrX.value, qrY: qrY.value, inviteX: inviteX.value, inviteY: inviteY.value, inviteWidth: inviteWidth.value, inviteFontSize: inviteFontSize.value,
-      templateUrl: templateUrl.value, landingUrl: landingUrl.value.trim(), qrImageUrl: qrImageUrl.value, qrSize: qrSize.value,
+      templateUrl: templateUrl.value, landingUrl: landingUrl.value.trim() || defaultLandingUrl, qrImageUrl: '', qrSize: qrSize.value,
     });
     message.success('海报配置已发布，代理重新打开页面即可使用');
   } catch { message.error('保存失败，请检查模板和二维码设置'); }
@@ -164,12 +176,14 @@ async function render() {
   rendering.value = true;
   try {
     const background = await loadImage(templateUrl.value);
-    let qrSource = qrImageUrl.value;
-    if (!qrSource && landingUrl.value.trim()) {
-      const url = new URL(landingUrl.value.trim());
+    // Agents always receive a QR code for their own landing URL and invite code.
+    // A legacy uploaded QR image remains available only for administrator previews.
+    let qrSource = '';
+    if (!qrSource && dynamicLandingUrl.value.trim()) {
+      const url = new URL(dynamicLandingUrl.value.trim());
       if (!['http:', 'https:'].includes(url.protocol)) throw new Error('请输入有效的二维码链接');
       // The administrator owns the QR destination; invitation text never changes it.
-      qrSource = await QRCode.toDataURL(landingUrl.value.trim(), { margin: 4, width: 660, errorCorrectionLevel: 'M' });
+      qrSource = await QRCode.toDataURL(dynamicLandingUrl.value.trim(), { margin: 4, width: 660, errorCorrectionLevel: 'M' });
     }
     const qr = qrSource && !qrImageUrl.value ? await new Promise<HTMLImageElement>((resolve, reject) => {
       const image = new Image();
@@ -243,7 +257,7 @@ onBeforeUnmount(() => {
       </Space>
     </template>
     <Alert v-if="loadError" type="error" show-icon message="海报配置加载失败，请重新加载" />
-    <Alert v-else-if="!templateUrl || (!landingUrl && !qrImageUrl)" type="info" show-icon :message="canEdit ? '请上传模板并设置固定二维码，保存后代理即可使用' : '管理员尚未发布海报，请稍后重试'" />
+    <Alert v-else-if="!templateUrl || (!landingUrl && !qrImageUrl)" type="info" show-icon :message="canEdit ? '请上传模板并设置官网二维码地址，保存后代理即可使用' : '管理员尚未发布海报，请稍后重试'" />
     <Alert v-if="renderError" type="error" show-icon :message="renderError" />
     <div class="poster-composer-layout">
       <div class="poster-preview-shell">
@@ -265,13 +279,7 @@ onBeforeUnmount(() => {
           <Form.Item label="海报模板（上传后立即预览）">
             <Upload accept="image/png,image/jpeg,image/webp" :show-upload-list="false" :disabled="uploading || saving" :before-upload="file => upload(file, 'template')"><Button :loading="uploading">上传海报模板</Button></Upload>
           </Form.Item>
-          <Form.Item label="二维码（上传图片或填写链接二选一）">
-            <Space>
-              <Upload accept="image/png,image/jpeg,image/webp" :show-upload-list="false" :disabled="uploading || saving" :before-upload="file => upload(file, 'qr')"><Button>上传二维码</Button></Upload>
-              <Button v-if="qrImageUrl" @click="qrImageUrl = ''">移除二维码图片</Button>
-            </Space>
-          </Form.Item>
-          <Form.Item label="固定二维码链接（未上传二维码图片时使用）"><Input v-model:value="landingUrl" placeholder="https://..." :maxlength="2048" /></Form.Item>
+          <Form.Item label="官网 App 下载页（二维码自动生成）"><Input v-model:value="landingUrl" placeholder="https://xinzhili.cn/app" :maxlength="2048" /></Form.Item>
           <Form.Item label="二维码位置（X / Y）"><Space><InputNumber v-model:value="qrX" :min="0" :max="720 - qrSize" :precision="0" /><InputNumber v-model:value="qrY" :min="0" :max="1280 - qrSize" :precision="0" /></Space></Form.Item>
           <Form.Item label="邀请码位置（X / Y）"><Space><InputNumber v-model:value="inviteX" :min="0" :max="720 - inviteWidth" :precision="0" /><InputNumber v-model:value="inviteY" :min="0" :max="1268 - inviteFontSize" :precision="0" /></Space></Form.Item>
           <Form.Item label="邀请码字号"><Slider v-model:value="inviteFontSize" :min="16" :max="64" /></Form.Item>
@@ -279,7 +287,7 @@ onBeforeUnmount(() => {
           <Form.Item label="二维码尺寸"><Slider v-model:value="qrSize" :min="132" :max="220" :step="4" /></Form.Item>
         </template>
         <Form.Item :label="canEdit ? '预览邀请码（不保存）' : '邀请码'"><Input v-model:value="inviteCode" :maxlength="32" placeholder="请输入邀请码" /></Form.Item>
-        <Typography.Paragraph type="secondary">{{ canEdit ? '保存并发布后，模板、文字和二维码统一供代理使用。' : '只需填写邀请码，再下载分享海报。' }}</Typography.Paragraph>
+        <Typography.Paragraph type="secondary">{{ canEdit ? '保存并发布后，代理端二维码会自动拼接代理号并指向官网 App 下载页。' : '只需填写邀请码，再下载分享海报；二维码会自动带上该邀请码。' }}</Typography.Paragraph>
       </Form>
     </div>
   </Card>
