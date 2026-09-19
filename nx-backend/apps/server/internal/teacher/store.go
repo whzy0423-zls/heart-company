@@ -249,7 +249,7 @@ func (s *Store) ListPublishedVideos(ctx context.Context, key string) ([]ContentD
 	rows, err := s.db.QueryContext(ctx, `SELECT id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at
 		FROM classroom_contents
 		WHERE teacher_key=$1 AND feed_type IN ('course','daily') AND review_status='published' AND status='published'
-		ORDER BY sort_order,COALESCE(published_at,created_at) DESC,id DESC`, strings.TrimSpace(key))
+		ORDER BY COALESCE(published_at,created_at) DESC,id DESC`, strings.TrimSpace(key))
 	if err != nil {
 		return nil, err
 	}

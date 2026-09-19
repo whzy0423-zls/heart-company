@@ -54,7 +54,7 @@ func (c *teacherVideoTestConn) QueryContext(_ context.Context, query string, _ [
 		if !strings.Contains(query, "feed_type IN ('course','daily')") ||
 			!strings.Contains(query, "review_status='published'") ||
 			!strings.Contains(query, "status='published'") ||
-			!strings.Contains(query, "ORDER BY sort_order,COALESCE(published_at,created_at) DESC,id DESC") {
+			!strings.Contains(query, "ORDER BY COALESCE(published_at,created_at) DESC,id DESC") {
 			return nil, errors.New("teacher video query does not enforce visibility and ordering")
 		}
 		columns := strings.Split("id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at", ",")

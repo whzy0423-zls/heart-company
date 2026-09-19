@@ -52,6 +52,7 @@ type classroomPublicContent struct {
 	TeacherName      string                     `json:"teacherName,omitempty"`
 	ContentType      classroom.ContentType      `json:"contentType"`
 	DurationSeconds  int                        `json:"durationSeconds"`
+	PublishedAt      *time.Time                 `json:"publishedAt,omitempty"`
 	AccessLevel      classroom.AccessLevel      `json:"accessLevel"`
 	EffectiveAccess  classroom.AccessLevel      `json:"effectiveAccess"`
 	PriceCents       int                        `json:"priceCents"`
@@ -864,7 +865,7 @@ func contentViewResolved(c classroom.Content, parent *classroom.Series, a classr
 		price = parent.PriceCents
 	}
 	blocked := c.PlaybackBlocked || (parent != nil && parent.PlaybackBlocked)
-	v := classroomPublicContent{ID: c.ID, SeriesID: c.SeriesID, Title: c.Title, Description: c.Description, CoverURL: c.CoverURL, CoverAspectRatio: ratio, TeacherName: c.TeacherNameSnapshot, ContentType: c.ContentType, DurationSeconds: c.DurationSeconds, AccessLevel: c.AccessLevel, EffectiveAccess: a, PriceCents: price, CanPlay: ok && !blocked, PurchaseState: pstate, PlaybackBlocked: blocked}
+	v := classroomPublicContent{ID: c.ID, SeriesID: c.SeriesID, Title: c.Title, Description: c.Description, CoverURL: c.CoverURL, CoverAspectRatio: ratio, TeacherName: c.TeacherNameSnapshot, ContentType: c.ContentType, DurationSeconds: c.DurationSeconds, PublishedAt: c.PublishedAt, AccessLevel: c.AccessLevel, EffectiveAccess: a, PriceCents: price, CanPlay: ok && !blocked, PurchaseState: pstate, PlaybackBlocked: blocked}
 	if len(signedCover) > 0 {
 		v.signedCover = signedCover[0]
 	}

@@ -78,6 +78,10 @@ func (s *Server) appTeacherVideoList(w http.ResponseWriter, r *http.Request, key
 			httpx.Fail(w, http.StatusInternalServerError, "list teacher videos failed")
 			return
 		}
+		if item.PublishedAt == nil {
+			publishedAt := draft.CreatedAt
+			item.PublishedAt = &publishedAt
+		}
 		items = append(items, item)
 	}
 	httpx.OK(w, map[string]any{"items": items})
