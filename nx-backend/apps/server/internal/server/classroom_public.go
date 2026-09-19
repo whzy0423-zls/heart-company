@@ -169,6 +169,9 @@ func registerClassroomPublicRoutes(mux *http.ServeMux, s *Server) {
 	mux.HandleFunc("/api/public/classroom/recent", s.method(http.MethodGet, s.classroomRecentPublic))
 	mux.HandleFunc("/api/public/classroom/series/", s.method(http.MethodGet, s.classroomSeriesDetailPublic))
 	mux.HandleFunc("/api/public/classroom/content/", s.classroomContentPublicRouter)
+	// App clients use their own JWT namespace. Keep this alias authenticated
+	// and pass the App user id into the same access-aware public service.
+	mux.HandleFunc("/api/app/classroom/content/", s.requireAppAuth(s.classroomAppContentRouter))
 	mux.HandleFunc("/api/miniapp/classroom/content/", s.classroomMiniappContentRouter)
 }
 
@@ -492,6 +495,98 @@ func (s *Server) classroomContentPublic(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	httpx.OK(w, d)
+}
+
+func (s *Server) classroomAppContent(w http.ResponseWriter, r *http.Request) {
+	if s.classroomPublic == nil {
+		failClassroomInternal(w, "get_app_content", errors.New("classroom service unavailable"))
+		return
+	}
+	id, idErr := classroomID(r.URL.Path, "/api/app/classroom/content/", "")
+	if idErr != nil {
+		httpx.Fail(w, http.StatusBadRequest, idErr.Error())
+		return
+	}
+	u, ok := appUserFromContext(r)
+	if !ok || u.ID <= 0 {
+		httpx.Fail(w, http.StatusUnauthorized, "Unauthorized Exception")
+		return
+	}
+	d, err := s.classroomPublic.GetContent(r.Context(), id, u.ID)
+	if err != nil {
+		if errors.Is(err, classroom.ErrNotFound) {
+			httpx.Fail(w, http.StatusNotFound, "Not Found")
+		} else {
+			failClassroomInternal(w, "get_app_content", err)
+		}
+		return
+	}
+	if d.signedCover {
+		w.Header().Set("Cache-Control", "private, no-store")
+	} else if setClassroomCache(w, r, d) {
+		return
+	}
+	httpx.OK(w, d)
+}
+
+func (s *Server) classroomAppContentRouter(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	if strings.HasSuffix(path, "/play") {
+		s.classroomAppPlayback(w, r)
+		return
+	}
+	if r.Method != http.MethodGet {
+		httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+		return
+	}
+	s.classroomAppContent(w, r)
+}
+
+func (s *Server) classroomAppPlayback(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if s.classroomPublic == nil {
+		failClassroomInternal(w, "app_playback", errors.New("classroom service unavailable"))
+		return
+	}
+	if r.Method != http.MethodPost {
+		httpx.Fail(w, http.StatusMethodNotAllowed, "Method Not Allowed")
+		return
+	}
+	id, idErr := classroomID(r.URL.Path, "/api/app/classroom/content/", "/play")
+	if idErr != nil {
+		httpx.Fail(w, http.StatusBadRequest, idErr.Error())
+		return
+	}
+	u, ok := appUserFromContext(r)
+	if !ok || u.ID <= 0 {
+		httpx.Fail(w, http.StatusUnauthorized, "Unauthorized Exception")
+		return
+	}
+	src, err := s.classroomPublic.Playback(r.Context(), u.ID, id)
+	if err != nil {
+		if errors.Is(err, errClassroomPlaybackBlocked) {
+			httpx.Fail(w, http.StatusLocked, "Playback Blocked")
+		} else if errors.Is(err, classroom.ErrNotFound) {
+			httpx.Fail(w, http.StatusNotFound, "Not Found")
+		} else {
+			failClassroomInternal(w, "app_playback_authorize", err)
+		}
+		return
+	}
+	if src.Content.PlaybackBlocked || (src.Series != nil && src.Series.PlaybackBlocked) {
+		httpx.Fail(w, http.StatusLocked, "Playback Blocked")
+		return
+	}
+	if s.classroomPlaybackSigner == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "Playback unavailable")
+		return
+	}
+	url, err := s.classroomPlaybackSigner.PresignGetURL(r.Context(), src.Media.ObjectKey, 5*time.Minute)
+	if err != nil {
+		failClassroomInternal(w, "app_playback_sign", err)
+		return
+	}
+	httpx.OK(w, map[string]any{"url": url, "expiresIn": 300, "contentType": src.Content.ContentType})
 }
 func (s *Server) classroomAnonymousTicket(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")

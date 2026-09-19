@@ -15,6 +15,8 @@ type CoverAspectRatio string
 type MediaStatus string
 type UploadStatus string
 type EntitlementSource string
+type FeedType string
+type ReviewStatus string
 
 const (
 	SeriesDraft     SeriesStatus = "draft"
@@ -61,6 +63,15 @@ const (
 
 	EntitlementPurchase EntitlementSource = "purchase"
 	EntitlementManual   EntitlementSource = "manual"
+
+	FeedCourse FeedType = "course"
+	FeedDaily  FeedType = "daily"
+
+	ReviewDraft     ReviewStatus = "draft"
+	ReviewPending   ReviewStatus = "pending_review"
+	ReviewRejected  ReviewStatus = "rejected"
+	ReviewPublished ReviewStatus = "published"
+	ReviewOffline   ReviewStatus = "offline"
 )
 
 var (
@@ -84,6 +95,11 @@ type Series struct {
 	AccessLevel          AccessLevel
 	PriceCents           int
 	PublishedAt          *time.Time
+	ReviewStatus         ReviewStatus
+	ReviewReason         string
+	ReviewedBy           *int64
+	ReviewedAt           *time.Time
+	ReplacesSeriesID     *int64
 	CreatedBy            *int64
 	UpdatedBy            *int64
 	CreatedAt            time.Time
@@ -140,6 +156,12 @@ type Content struct {
 	AccessLevel          AccessLevel
 	PriceCents           int
 	PublishedAt          *time.Time
+	FeedType             FeedType
+	ReviewStatus         ReviewStatus
+	ReviewReason         string
+	ReviewedBy           *int64
+	ReviewedAt           *time.Time
+	ReplacesContentID    *int64
 	CreatedBy            *int64
 	UpdatedBy            *int64
 	CreatedAt            time.Time

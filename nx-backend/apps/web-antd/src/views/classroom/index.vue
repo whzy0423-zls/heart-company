@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ClassroomContent, ClassroomSeries } from '#/api/core/classroom';
+import type { TeacherProfile } from '#/api/core/teacher';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { Page } from '@vben/common-ui';
 import {
@@ -26,6 +27,7 @@ import {
   publishClassroomContentApi,
   setClassroomContentPlaybackBlockedApi,
 } from '#/api/core/classroom';
+import { getTeachersApi } from '#/api/core/teacher';
 import ContentCoverEditor from './components/content-cover-editor.vue';
 import ContentEditor from './components/content-editor.vue';
 import SeriesView from './series.vue';
@@ -51,6 +53,7 @@ const loading = ref(false);
 const error = ref('');
 const contents = ref<ClassroomContent[]>([]);
 const series = ref<ClassroomSeries[]>([]);
+const teachers = ref<TeacherProfile[]>([]);
 const editorOpen = ref(false);
 const editing = ref<ClassroomContent>();
 const createEditorGeneration = ref(0);
@@ -87,7 +90,7 @@ const columns = [
 ];
 const allTabs = [
   { key: 'contents', label: '课件管理' },
-  { key: 'series', label: '课程系列' },
+  { key: 'series', label: '老师视频系列' },
   { key: 'uploads', label: '上传任务' },
 ];
 const tabs = computed(() => {
@@ -126,7 +129,7 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const [c, s] = await Promise.all([
+    const [c, s, t] = await Promise.all([
       getClassroomContentsApi({
         page: 1,
         pageSize: 50,
@@ -140,9 +143,11 @@ async function load() {
         teacherKey: classroomFilters.teacherKey || undefined,
         reviewStatus: classroomFilters.reviewStatus,
       }),
+      getTeachersApi({ enabled: true, page: 1, pageSize: 200 }),
     ]);
     contents.value = c.items;
     series.value = s.items;
+    teachers.value = t.items;
     selectedContentIds.value = [];
   } catch {
     error.value = '课件加载失败，请重试。';
@@ -188,7 +193,7 @@ function confirmLifecycle(
     const guard = publishGuard(record);
     if (!guard.allowed) {
       message.info(guard.reason);
-      if (guard.label === '先发布所属系列') activeTab.value = 'series';
+      if (guard.label === '先发布所属老师视频系列') activeTab.value = 'series';
       return;
     }
   }
@@ -376,12 +381,12 @@ onMounted(load);
                 :disabled="
                   !publishGuard(record as ClassroomContent).allowed &&
                   publishGuard(record as ClassroomContent).label !==
-                    '先发布所属系列'
+                    '先发布所属老师视频系列'
                 "
                 :title="publishGuard(record as ClassroomContent).reason"
                 @click="
                   publishGuard(record as ClassroomContent).label ===
-                  '先发布所属系列'
+                  '先发布所属老师视频系列'
                     ? (activeTab = 'series')
                     : confirmLifecycle(
                         record as ClassroomContent,
@@ -453,6 +458,7 @@ onMounted(load);
         :feed-type="classroomFilters.feedType"
         :review-status="classroomFilters.reviewStatus"
         :teacher-key="classroomFilters.teacherKey"
+        :teachers="teachers"
       />
       <UploadTasks
         v-else-if="activeTab === 'uploads' && canUpload"
@@ -471,6 +477,7 @@ onMounted(load);
         :key="editorInstanceKey"
         :content="editing"
         :series="series"
+        :teachers="teachers"
         :can-price="canPrice"
         :can-write="canWrite"
         @cancel="closeEditor"

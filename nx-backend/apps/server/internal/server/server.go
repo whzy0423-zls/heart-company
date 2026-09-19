@@ -69,6 +69,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/sms"
 	"nine-xing/nx-backend/apps/server/internal/storage"
 	"nine-xing/nx-backend/apps/server/internal/system"
+	"nine-xing/nx-backend/apps/server/internal/teacher"
 	"nine-xing/nx-backend/apps/server/internal/theorystore"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 	"nine-xing/nx-backend/apps/server/internal/userpreference"
@@ -167,6 +168,7 @@ type Server struct {
 	maintenanceCancel          context.CancelFunc
 
 	appUsers                       *appuser.Store
+	teachers                       *teacher.Store
 	friends                        *friends.Store
 	directMessages                 *directmessage.Store
 	directMedia                    *directmedia.Store
@@ -397,6 +399,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.miniapp = miniapp.NewStore(database)
 	s.miniappAdmin = miniapp.NewAdminStore(database)
 	s.classroomAdmin = newClassroomAdminStore(database)
+	s.teachers = teacher.NewStore(database)
 	if database != nil {
 		s.classroomPublic = newClassroomPublicDBWithCovers(database, s.classroomPlaybackSigner, s.classroomCoverTTL())
 		s.classroomProgress = newClassroomProgressDBWithCovers(database, s.classroomPlaybackSigner, s.classroomCoverTTL())
@@ -991,6 +994,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/auth/logout", s.method(http.MethodPost, s.appLogout))
 	s.mux.HandleFunc("/api/app/user/info", s.method(http.MethodGet, s.requireAppAuth(s.appUserInfo)))
 	s.mux.HandleFunc("/api/app/me", s.method(http.MethodGet, s.requireAppAuth(s.appUserInfo)))
+	s.mux.HandleFunc("/api/app/teachers", s.method(http.MethodGet, s.requireAppAuth(s.appTeacherCollection)))
+	s.mux.HandleFunc("/api/app/teachers/", s.requireAppAuth(s.appTeacherRouter))
+	s.mux.HandleFunc("/api/app/teacher/me", s.requireAppAuth(s.appTeacherMe))
+	// Profile is kept as a separate resource for the teacher workspace client.
+	// appTeacherMe also serves the legacy /teacher/me PUT endpoint.
+	s.mux.HandleFunc("/api/app/teacher/me/profile", s.requireAppAuth(s.appTeacherMe))
+	s.mux.HandleFunc("/api/app/teacher/me/content", s.requireAppAuth(s.appTeacherContentMe))
+	s.mux.HandleFunc("/api/app/teacher/me/content/", s.requireAppAuth(s.appTeacherContentMe))
 	s.mux.HandleFunc("/api/app/profile", s.requireAppAuth(s.appProfileUpdate))
 	s.mux.HandleFunc("/api/app/profile/avatar", s.method(http.MethodPost, s.requireAppAuth(s.appProfileAvatarUpload)))
 	// Avatar URLs are rendered by Image.network on both Web and Android, so
@@ -1238,6 +1249,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app-memories/", s.method(http.MethodPut, s.requirePermission("Customer:AppMemory:Write", s.adminAppMemoryStatus)))
 	s.mux.HandleFunc("/api/app-users/insights", s.method(http.MethodGet, s.requirePermission("Customer:UserInsights:List", s.appUsers.HandleAppUserInsights)))
 	s.mux.HandleFunc("/api/app-users/", s.adminAppUserByID)
+	s.mux.HandleFunc("/api/admin/teachers", s.requireAnyPermission([]string{"Miniapp:Teacher:Manage", "Miniapp:Classroom:Write"}, s.adminTeacherCollection))
+	s.mux.HandleFunc("/api/admin/teachers/", s.requireAnyPermission([]string{"Miniapp:Teacher:Manage", "Miniapp:Classroom:Write"}, s.adminTeacherRouter))
+	s.mux.HandleFunc("/api/admin/teacher-reviews", s.requireAnyPermission([]string{"Miniapp:Teacher:Manage", "Miniapp:Classroom:Write"}, s.adminTeacherReviews))
+	s.mux.HandleFunc("/api/admin/teacher-reviews/", s.requireAnyPermission([]string{"Miniapp:Teacher:Manage", "Miniapp:Classroom:Write"}, s.adminTeacherReviewAction))
 	s.mux.HandleFunc("/api/system/role/list", s.method(http.MethodGet, s.requirePermission("System:Role:List", s.system.HandleRoles)))
 	s.mux.HandleFunc("/api/system/role", s.requireMethodPermission(map[string]string{
 		http.MethodDelete: "System:Role:Delete",

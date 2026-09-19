@@ -4129,6 +4129,66 @@ CREATE TABLE IF NOT EXISTS request_rate_limits (
 CREATE INDEX IF NOT EXISTS idx_request_rate_limits_expires ON request_rate_limits(expires_at);
 
 -- ============ 老师课堂（系列、音视频课件、上传、权益与学习进度）=====
+-- 老师主档与 App 角色绑定。课堂内容继续使用 teacher_key 快照，不建立 teacher_id 外键。
+CREATE TABLE IF NOT EXISTS teacher_profiles (
+  id BIGSERIAL PRIMARY KEY,
+  teacher_key TEXT NOT NULL UNIQUE CHECK (teacher_key ~ '^[a-z0-9][a-z0-9_-]{1,63}$'),
+  name TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  avatar TEXT NOT NULL DEFAULT '',
+  cover TEXT NOT NULL DEFAULT '',
+  short_intro TEXT NOT NULL DEFAULT '',
+  detail_intro TEXT NOT NULL DEFAULT '',
+  expertise JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(expertise) = 'array'),
+  intro_video_url TEXT NOT NULL DEFAULT '',
+  customer_service JSONB NOT NULL DEFAULT '{}'::jsonb,
+  offline_service JSONB NOT NULL DEFAULT '{}'::jsonb,
+  show_on_home BOOLEAN NOT NULL DEFAULT false,
+  show_in_drawer BOOLEAN NOT NULL DEFAULT false,
+  sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0),
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS app_user_roles (
+  app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('teacher','agent')),
+  teacher_key TEXT REFERENCES teacher_profiles(teacher_key) ON DELETE RESTRICT,
+  agent_id BIGINT,
+  enabled BOOLEAN NOT NULL DEFAULT true,
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (app_user_id, role),
+  CHECK ((role = 'teacher' AND teacher_key IS NOT NULL) OR (role = 'agent'))
+);
+CREATE INDEX IF NOT EXISTS idx_app_user_roles_teacher_key ON app_user_roles(teacher_key, enabled);
+
+CREATE TABLE IF NOT EXISTS teacher_profile_drafts (
+  id BIGSERIAL PRIMARY KEY,
+  teacher_key TEXT NOT NULL REFERENCES teacher_profiles(teacher_key) ON DELETE CASCADE,
+  app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  payload JSONB NOT NULL,
+  review_status TEXT NOT NULL DEFAULT 'draft' CHECK (review_status IN ('draft','pending_review','rejected','published','offline')),
+  review_reason TEXT NOT NULL DEFAULT '',
+  reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_teacher_profile_drafts_owner ON teacher_profile_drafts(teacher_key, app_user_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS teacher_review_events (
+  id BIGSERIAL PRIMARY KEY,
+  content_id BIGINT NOT NULL,
+  review_status TEXT NOT NULL CHECK (review_status IN ('draft','pending_review','rejected','published','offline')),
+  reason TEXT NOT NULL DEFAULT '',
+  actor_id BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_teacher_review_events_content ON teacher_review_events(content_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS classroom_series (
   id BIGSERIAL PRIMARY KEY,
   title TEXT NOT NULL,
@@ -4154,6 +4214,11 @@ CREATE TABLE IF NOT EXISTS classroom_series (
 
 ALTER TABLE classroom_series ADD COLUMN IF NOT EXISTS manual_cover_object_key TEXT NOT NULL DEFAULT '';
 ALTER TABLE classroom_series ADD COLUMN IF NOT EXISTS cover_aspect_ratio TEXT NOT NULL DEFAULT '16:9' CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'));
+ALTER TABLE classroom_series ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'draft';
+ALTER TABLE classroom_series ADD COLUMN IF NOT EXISTS review_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE classroom_series ADD COLUMN IF NOT EXISTS reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE classroom_series ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+ALTER TABLE classroom_series ADD COLUMN IF NOT EXISTS replaces_series_id BIGINT REFERENCES classroom_series(id) ON DELETE SET NULL;
 ALTER TABLE classroom_series DROP CONSTRAINT IF EXISTS classroom_series_cover_aspect_ratio_check;
 ALTER TABLE classroom_series ADD CONSTRAINT classroom_series_cover_aspect_ratio_check CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'));
 
@@ -4192,6 +4257,16 @@ CREATE TABLE IF NOT EXISTS classroom_contents (
 
 ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS manual_cover_object_key TEXT NOT NULL DEFAULT '';
 ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS cover_aspect_ratio TEXT NOT NULL DEFAULT '16:9' CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'));
+ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS feed_type TEXT NOT NULL DEFAULT 'course';
+ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT 'draft';
+ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS review_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS replaces_content_id BIGINT REFERENCES classroom_contents(id) ON DELETE SET NULL;
+ALTER TABLE classroom_contents DROP CONSTRAINT IF EXISTS classroom_contents_feed_type_check;
+ALTER TABLE classroom_contents ADD CONSTRAINT classroom_contents_feed_type_check CHECK (feed_type IN ('course','daily'));
+ALTER TABLE classroom_contents DROP CONSTRAINT IF EXISTS classroom_contents_review_status_check;
+ALTER TABLE classroom_contents ADD CONSTRAINT classroom_contents_review_status_check CHECK (review_status IN ('draft','pending_review','rejected','published','offline'));
 ALTER TABLE classroom_contents DROP CONSTRAINT IF EXISTS classroom_contents_cover_aspect_ratio_check;
 ALTER TABLE classroom_contents ADD CONSTRAINT classroom_contents_cover_aspect_ratio_check CHECK (cover_aspect_ratio IN ('16:9','9:16','1:1'));
 ALTER TABLE classroom_contents DROP CONSTRAINT IF EXISTS classroom_contents_status_check;

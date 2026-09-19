@@ -113,7 +113,7 @@ describe('classroom management permission integration', () => {
     const { default: SeriesView } = await import('./series.vue');
     const wrapper = mountVueComponent(SeriesView);
     await flushVuePromises();
-    expect(wrapper.text()).toContain('新建系列');
+    expect(wrapper.text()).toContain('新建视频系列');
     wrapper.unmount();
   });
 });

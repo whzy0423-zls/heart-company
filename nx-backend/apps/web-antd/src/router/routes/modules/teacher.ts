@@ -6,7 +6,7 @@ const routes: RouteRecordRaw[] = [
   {
     component: BasicLayout,
     meta: {
-      authority: ['Teacher:List', 'Miniapp:Teacher:Manage'],
+      authority: ['Teacher:List', 'Miniapp:Teacher:Manage', 'Miniapp:Classroom:Write'],
       icon: 'lucide:graduation-cap',
       order: 7,
       title: '老师管理',

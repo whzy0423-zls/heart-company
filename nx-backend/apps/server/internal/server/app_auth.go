@@ -194,6 +194,7 @@ func (s *Server) writeAppSession(w http.ResponseWriter, r *http.Request, user ap
 	if s == nil || s.appUsers == nil {
 		return fmt.Errorf("app user store unavailable")
 	}
+	s.enrichAppUserRoles(r.Context(), &user)
 	accessToken, err := s.issueAppAccessToken(user)
 	if err != nil {
 		return fmt.Errorf("issue app access token: %w", err)
@@ -299,7 +300,21 @@ func (s *Server) appUserInfo(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusNotFound, "user not found")
 		return
 	}
+	s.enrichAppUserRoles(r.Context(), &user)
 	httpx.OK(w, user)
+}
+
+func (s *Server) enrichAppUserRoles(ctx context.Context, user *appuser.User) {
+	if s == nil || s.teachers == nil || user == nil || user.ID <= 0 {
+		return
+	}
+	roles, err := s.teachers.Roles(ctx, user.ID)
+	if err != nil {
+		return
+	}
+	user.Roles = roles.Roles()
+	user.TeacherKey = roles.TeacherKey
+	user.AgentID = roles.AgentID
 }
 
 // --- helpers ---
@@ -398,6 +413,11 @@ func (s *Server) requireAppAuthWithFailure(next http.HandlerFunc, writeUnauthori
 			Phone:    appUser.Phone,
 			RealName: appUser.Nickname,
 			Roles:    []string{"app_user"},
+		}
+		if s.teachers != nil {
+			if roles, roleErr := s.teachers.Roles(r.Context(), appUser.ID); roleErr == nil {
+				user.Roles = append(user.Roles, roles.Roles()...)
+			}
 		}
 		ctx := r.Context()
 		ctx = contextWithAppUser(ctx, user)

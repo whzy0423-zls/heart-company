@@ -4,6 +4,7 @@ import type {
   ClassroomReviewStatus,
   ClassroomSeries,
 } from '#/api/core/classroom';
+import type { TeacherProfile } from '#/api/core/teacher';
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useAccessStore } from '@vben/stores';
 import {
@@ -43,6 +44,7 @@ const props = withDefaults(
     feedType?: ClassroomFeedType;
     reviewStatus?: ClassroomReviewStatus;
     teacherKey?: string;
+    teachers?: TeacherProfile[];
   }>(),
   {
     canPrice: undefined,
@@ -62,6 +64,19 @@ const canPublish = computed(
   () => props.canPublish ?? permissions.value.canPublish,
 );
 const canPrice = computed(() => props.canPrice ?? permissions.value.canPrice);
+const teacherOptions = computed(() => {
+  const options = (props.teachers ?? []).map((teacher) => ({
+    label: `${teacher.name}${teacher.title ? ` · ${teacher.title}` : ''}`,
+    value: teacher.key,
+  }));
+  if (form.teacherKey && !options.some((item) => item.value === form.teacherKey)) {
+    options.unshift({
+      label: `${form.teacherName || form.teacherKey}（当前资料）`,
+      value: form.teacherKey,
+    });
+  }
+  return options;
+});
 const loading = ref(false);
 const error = ref('');
 const rows = ref<ClassroomSeries[]>([]);
@@ -81,6 +96,12 @@ const form = reactive({
   accessLevel: 'public' as 'public' | 'login' | 'member' | 'paid',
   priceCents: 0,
 });
+function selectTeacher(value: unknown) {
+  const key = typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+  const teacher = (props.teachers ?? []).find((item) => item.key === key);
+  form.teacherKey = key;
+  form.teacherName = teacher?.name ?? '';
+}
 const columns = [
   { dataIndex: 'title', title: '系列名称' },
   { dataIndex: 'teacherName', title: '老师' },
@@ -101,7 +122,7 @@ async function load() {
       })
     ).items;
   } catch {
-    error.value = '课程系列加载失败，请重试。';
+    error.value = '老师视频系列加载失败，请重试。';
   } finally {
     loading.value = false;
   }
@@ -197,11 +218,11 @@ function confirmAction(
   Modal.confirm({
     title:
       action === 'delete'
-        ? '删除课程系列？'
+        ? '删除老师视频系列？'
         : action === 'offline'
-          ? '下线课程系列？'
+          ? '下线老师视频系列？'
           : action === 'publish'
-            ? '发布课程系列？'
+          ? '发布老师视频系列？'
             : action === 'block'
               ? '阻断系列播放？'
               : '恢复系列播放？',
@@ -250,16 +271,16 @@ watch(
 </script>
 <template>
   <div class="classroom-series-page">
-    <Card title="课程系列" :loading="loading">
+    <Card title="老师视频系列" :loading="loading">
       <template #extra
         ><Button v-if="canWrite" type="primary" @click="openEditor()"
-          >新建系列</Button
+          >新建视频系列</Button
         ></template
       >
       <Alert v-if="error" type="error" :message="error" show-icon
         ><template #action><Button @click="load">重试</Button></template></Alert
       >
-      <Empty v-else-if="!loading && !rows.length" description="暂无课程系列" />
+      <Empty v-else-if="!loading && !rows.length" description="暂无老师视频系列" />
       <Table
         v-else
         :columns="columns"
@@ -320,8 +341,8 @@ watch(
     </Card>
     <Modal
       v-model:open="editorOpen"
-      title="课程系列"
-      ok-text="保存系列"
+      title="老师视频系列"
+      ok-text="保存视频系列"
       :confirm-loading="saving"
       :ok-button-props="{ disabled: !canWrite && !canPrice }"
       @ok="save"
@@ -332,11 +353,14 @@ watch(
             v-model:value="form.title"
             :disabled="!canWrite"
             placeholder="请输入系列名称" /></Form.Item
-        ><Form.Item label="老师"
-          ><Input
-            v-model:value="form.teacherName"
+        ><Form.Item label="关联老师"
+          ><Select
+            :value="form.teacherKey"
             :disabled="!canWrite"
-            placeholder="请输入老师" /></Form.Item
+            allow-clear
+            :options="teacherOptions"
+            placeholder="可选：从老师管理中选择"
+            @update:value="selectTeacher" /></Form.Item
         ><Form.Item label="权限"
           ><Select
             v-model:value="form.accessLevel"
@@ -366,7 +390,7 @@ watch(
         :disabled="!canWrite"
         @saved="replacePersistedSeries"
       />
-      <Alert v-else type="info" show-icon message="请先保存系列，再管理封面" />
+      <Alert v-else type="info" show-icon message="请先保存视频系列，再管理封面" />
     </Modal>
     <Modal v-model:open="coverEditorOpen" title="系列封面管理" :footer="null">
       <SeriesCoverEditor

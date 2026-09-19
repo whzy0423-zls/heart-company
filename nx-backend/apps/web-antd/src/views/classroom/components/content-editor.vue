@@ -4,6 +4,7 @@ import type {
   ClassroomContentCreatePayload,
   ClassroomSeries,
 } from '#/api/core/classroom';
+import type { TeacherProfile } from '#/api/core/teacher';
 
 import { computed, reactive, ref, watch } from 'vue';
 import {
@@ -35,6 +36,7 @@ const props = defineProps<{
   canWrite?: boolean;
   content?: ClassroomContent;
   series: ClassroomSeries[];
+  teachers?: TeacherProfile[];
 }>();
 const emit = defineEmits<{
   change: [value: ClassroomContentCreatePayload];
@@ -61,6 +63,25 @@ const metadataEditable = computed(
   () => Boolean(props.canWrite) && isDraftContent.value,
 );
 const priceEditable = computed(() => Boolean(props.canPrice));
+const teacherOptions = computed(() => {
+  const options = (props.teachers ?? []).map((teacher) => ({
+    label: `${teacher.name}${teacher.title ? ` · ${teacher.title}` : ''}`,
+    value: teacher.key,
+  }));
+  if (form.teacherKey && !options.some((item) => item.value === form.teacherKey)) {
+    options.unshift({
+      label: `${form.teacherName || form.teacherKey}（当前资料）`,
+      value: form.teacherKey,
+    });
+  }
+  return options;
+});
+function selectTeacher(value: unknown) {
+  const key = typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+  const teacher = (props.teachers ?? []).find((item) => item.key === key);
+  form.teacherKey = key;
+  form.teacherName = teacher?.name ?? '';
+}
 
 watch(
   () => props.content,
@@ -216,17 +237,17 @@ watch(
         ><Radio.Button value="audio">音频课件</Radio.Button>
       </Radio.Group>
     </Form.Item>
-    <Form.Item label="所属系列">
+    <Form.Item label="所属老师视频系列">
       <Select
         v-model:value="form.seriesId"
         :disabled="!metadataEditable"
         allow-clear
         :placeholder="
           series.length
-            ? '可选：选择已有课程系列'
-            : '暂无课程系列，可直接保存为独立课件'
+            ? '可选：选择已有老师视频系列'
+            : '暂无老师视频系列，可直接保存为独立课件'
         "
-        not-found-content="暂无课程系列，可直接保存为独立课件"
+        not-found-content="暂无老师视频系列，可直接保存为独立课件"
         :options="series.map((item) => ({ label: item.title, value: item.id }))"
       />
       <span class="field-hint">不加入系列，课件会独立展示；以后也可以再编辑归入系列。</span>
@@ -238,7 +259,7 @@ watch(
         >同时在独立内容入口展示</Checkbox
       >
       <span class="field-hint"
-        >关闭时仅作为系列内容展示；独立课件无需开启此项。</span
+        >关闭时仅作为视频系列内容展示；独立课件无需开启此项。</span
       >
     </Form.Item>
     <Form.Item label="访问权限">
@@ -294,9 +315,17 @@ watch(
     <p v-else-if="form.showAsStandalone && form.seriesId" class="policy-hint">
       独立入口会展示购买策略：继承系列时购买系列；单课付费时购买本课。
     </p>
-    <Form.Item label="老师名称"
-      ><Input v-model:value="form.teacherName" :disabled="!metadataEditable"
-     placeholder="请输入老师名称"/></Form.Item>
+    <Form.Item label="关联老师">
+      <Select
+        :value="form.teacherKey"
+        :disabled="!metadataEditable"
+        allow-clear
+        :options="teacherOptions"
+        placeholder="可选：从老师管理中选择"
+        @update:value="selectTeacher"
+      />
+      <span class="field-hint">选择后会自动绑定老师标识；未选择时课件仍可作为通用课堂内容保存。</span>
+    </Form.Item>
     <Form.Item label="简介"
       ><Input.TextArea
         v-model:value="form.description"

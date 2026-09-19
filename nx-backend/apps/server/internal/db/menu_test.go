@@ -449,3 +449,24 @@ func TestDefaultMenusIncludeTeacherClassroomPermissions(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultMenusIncludeTeacherManagement(t *testing.T) {
+	var foundCatalog, foundManagement bool
+	for _, menu := range defaultMenus {
+		switch menu.Name {
+		case "MiniappTeacher":
+			foundCatalog = true
+			if menu.PID != 0 || menu.Path != "/teachers" || menu.Type != "catalog" || menu.Title != "老师管理" {
+				t.Fatalf("unexpected teacher catalog: %+v", menu)
+			}
+		case "MiniappTeacherManagement":
+			foundManagement = true
+			if menu.PID != 1408 || menu.Path != "/teachers" || menu.Component != "/teacher/index" || menu.AuthCode != "Miniapp:Teacher:Manage" || menu.Type != "menu" {
+				t.Fatalf("unexpected teacher management menu: %+v", menu)
+			}
+		}
+	}
+	if !foundCatalog || !foundManagement {
+		t.Fatalf("expected teacher management catalog and menu, got catalog=%v management=%v", foundCatalog, foundManagement)
+	}
+}

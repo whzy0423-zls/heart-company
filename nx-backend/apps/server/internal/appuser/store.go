@@ -13,20 +13,23 @@ import (
 )
 
 type User struct {
-	ID              int64  `json:"id"`
-	Phone           string `json:"phone"`
-	Account         string `json:"account,omitempty"`
-	Nickname        string `json:"nickname"`
-	Avatar          string `json:"avatar"`
-	Status          string `json:"status"`
-	MemberLevel     string `json:"memberLevel"`
-	MemberStartedAt string `json:"memberStartedAt"`
-	MemberExpiresAt string `json:"memberExpiresAt"`
-	RemainingDays   int    `json:"remainingDays"`
-	RegisterSource  string `json:"registerSource"`
-	LastLoginAt     string `json:"lastLoginAt"`
-	CreateTime      string `json:"createTime"`
-	UpdateTime      string `json:"updateTime"`
+	ID              int64    `json:"id"`
+	Phone           string   `json:"phone"`
+	Account         string   `json:"account,omitempty"`
+	Nickname        string   `json:"nickname"`
+	Avatar          string   `json:"avatar"`
+	Status          string   `json:"status"`
+	MemberLevel     string   `json:"memberLevel"`
+	MemberStartedAt string   `json:"memberStartedAt"`
+	MemberExpiresAt string   `json:"memberExpiresAt"`
+	RemainingDays   int      `json:"remainingDays"`
+	RegisterSource  string   `json:"registerSource"`
+	LastLoginAt     string   `json:"lastLoginAt"`
+	CreateTime      string   `json:"createTime"`
+	UpdateTime      string   `json:"updateTime"`
+	Roles           []string `json:"roles,omitempty"`
+	TeacherKey      string   `json:"teacherKey,omitempty"`
+	AgentID         int64    `json:"agentId,omitempty"`
 }
 
 type UpdateAdminFieldsInput struct {

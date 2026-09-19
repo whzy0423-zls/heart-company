@@ -68,7 +68,7 @@ describe('classroom series cover API contract', () => {
   it('embeds series cover management in the series edit modal', () => {
     const source = read('views/classroom/series.vue');
     expect(source).toContain('SeriesCoverEditor');
-    expect(source).toContain('请先保存系列，再管理封面');
+    expect(source).toContain('请先保存视频系列，再管理封面');
     expect(source).toContain('@saved="replacePersistedSeries"');
   });
 

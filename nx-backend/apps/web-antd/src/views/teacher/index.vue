@@ -7,6 +7,7 @@ import type {
   TeacherReviewItem,
   TeacherReviewStatus,
 } from '#/api/core/teacher';
+import type { AppCustomer } from '#/api/core/app-customer';
 
 import { computed, onMounted, reactive, ref } from 'vue';
 
@@ -28,6 +29,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Typography,
   Textarea,
   message,
 } from 'ant-design-vue';
@@ -44,6 +46,7 @@ import {
   updateTeacherApi,
 } from '#/api/core/teacher';
 import ImagePathInput from '../site-config/components/image-path-input.vue';
+import { getAppCustomerListApi } from '#/api';
 
 type TeacherDraft = TeacherProfile & { appUserIdInput?: number };
 
@@ -52,7 +55,10 @@ const canManage = computed(() =>
   accessStore.accessCodes.includes('Miniapp:Teacher:Manage'),
 );
 const canWrite = computed(
-  () => canManage.value || accessStore.accessCodes.includes('Teacher:Write'),
+  () =>
+    canManage.value ||
+    accessStore.accessCodes.includes('Miniapp:Classroom:Write') ||
+    accessStore.accessCodes.includes('Teacher:Write'),
 );
 const canReview = computed(
   () => canManage.value || accessStore.accessCodes.includes('Teacher:Review'),
@@ -75,6 +81,10 @@ const editingKey = ref<string>();
 const bindingKey = ref<string>();
 const rejectTarget = ref<TeacherReviewItem>();
 const reviewReason = ref('');
+const bindingUserId = ref<number>();
+const bindingUserOptions = ref<AppCustomer[]>([]);
+const bindingUserSearching = ref(false);
+let bindingSearchRequestId = 0;
 const query = reactive({ page: 1, pageSize: 20, keyword: '', enabled: undefined as string | undefined });
 const reviewQuery = reactive({ page: 1, pageSize: 20, teacherKey: undefined as string | undefined, feedType: undefined as TeacherFeedType | undefined, reviewStatus: 'pending_review' as TeacherReviewStatus | undefined });
 
@@ -236,17 +246,42 @@ async function saveProfile() {
 }
 function openBinding(record: TeacherProfile) {
   bindingKey.value = record.key;
-  form.appUserIdInput = record.appUserId;
+  bindingUserId.value = record.appUserId;
+  bindingUserOptions.value = [];
   bindingModalOpen.value = true;
+  void searchBindingUsers();
+}
+function bindingUserLabel(user: AppCustomer) {
+  const nickname = user.nickname || '未填写昵称';
+  const phone = user.phone || '未绑定手机号';
+  const account = user.account ? ` / ${user.account}` : '';
+  return `#${user.id}｜${nickname}｜${phone}${account}`;
+}
+async function searchBindingUsers(keyword = '') {
+  const requestId = ++bindingSearchRequestId;
+  bindingUserSearching.value = true;
+  try {
+    const result = await getAppCustomerListApi({
+      keyword: keyword || undefined,
+      page: 1,
+      pageSize: 20,
+      status: 'active',
+    });
+    if (requestId === bindingSearchRequestId) bindingUserOptions.value = result.items;
+  } catch {
+    message.error('App 用户查询失败');
+  } finally {
+    if (requestId === bindingSearchRequestId) bindingUserSearching.value = false;
+  }
 }
 async function saveBinding() {
-  if (!bindingKey.value || !form.appUserIdInput) {
-    message.warning('请输入 App 用户 ID');
+  if (!bindingKey.value || !bindingUserId.value) {
+    message.warning('请先搜索并选择 App 用户');
     return;
   }
   saving.value = true;
   try {
-    await bindTeacherUserApi(bindingKey.value, { appUserId: form.appUserIdInput, enabled: true });
+    await bindTeacherUserApi(bindingKey.value, { appUserId: bindingUserId.value, enabled: true });
     message.success('已绑定 App 用户为老师');
     bindingModalOpen.value = false;
     await loadTeachers();
@@ -345,9 +380,31 @@ onMounted(load);
     </Card>
 
     <Modal v-model:open="profileModalOpen" :confirm-loading="saving" :title="editingKey ? '编辑老师资料' : '新增老师'" width="min(860px, calc(100vw - 32px))" @ok="saveProfile">
-      <Form layout="vertical"><Row :gutter="16"><Col :md="12" :xs="24"><Form.Item label="老师标识"><Input v-model:value="form.key" :disabled="!!editingKey" placeholder="例如 han" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="姓名"><Input v-model:value="form.name" placeholder="请输入老师姓名" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="身份"><Input v-model:value="form.title" placeholder="例如 九型导师" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="排序"><InputNumber v-model:value="form.sortOrder" :min="0" style="width: 100%" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="头像"><ImagePathInput v-model:value="form.avatar" dir="teacher-avatars" empty-text="未设置头像" upload-text="上传头像" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="封面"><ImagePathInput v-model:value="form.cover" dir="teacher-covers" empty-text="未设置封面" upload-text="上传封面" /></Form.Item></Col><Col :xs="24"><Form.Item label="列表简介"><Input v-model:value="form.shortIntro" /></Form.Item></Col><Col :xs="24"><Form.Item label="详细介绍"><Textarea v-model:value="form.bio" :rows="4" /></Form.Item></Col><Col :xs="24"><Form.Item label="擅长标签（逗号分隔）"><Input :value="form.tags.join('、')" @update:value="(value: string) => { form.tags = splitTags(value); }" /></Form.Item></Col><Col :md="8" :xs="24"><Form.Item label="首页展示"><Switch v-model:checked="form.showOnHome" /></Form.Item></Col><Col :md="8" :xs="24"><Form.Item label="侧边栏展示"><Switch v-model:checked="form.showInDrawer" /></Form.Item></Col><Col :md="8" :xs="24"><Form.Item label="启用老师"><Switch v-model:checked="form.enabled" /></Form.Item></Col><Col :xs="24"><Form.Item label="客服配置"><Input v-model:value="form.customerServiceConfig!.wechat" placeholder="客服微信号" /><Textarea v-model:value="form.customerServiceConfig!.description" :rows="2" placeholder="客服说明" /></Form.Item></Col><Col :xs="24"><Form.Item label="线下服务"><Input v-model:value="form.offlineServiceConfig!.city" placeholder="服务城市" /><Textarea v-model:value="form.offlineServiceConfig!.description" :rows="2" placeholder="线下服务/合作说明" /></Form.Item></Col></Row><Alert type="info" show-icon message="管理员修改优先" description="老师端草稿不会覆盖管理员维护的正式资料，所有修改会记录操作日志。" /></Form>
+      <Form layout="vertical"><Row :gutter="16"><Col :md="12" :xs="24"><Form.Item label="老师标识"><Input v-model:value="form.key" :disabled="!!editingKey" placeholder="例如 han" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="姓名"><Input v-model:value="form.name" placeholder="请输入老师姓名" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="身份"><Input v-model:value="form.title" placeholder="例如 九型导师" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="排序"><InputNumber v-model:value="form.sortOrder" :min="0" style="width: 100%" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="头像"><ImagePathInput v-model:value="form.avatar" dir="teacher-avatars" empty-text="未设置头像" upload-text="上传头像" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="封面"><ImagePathInput v-model:value="form.cover" dir="teacher-covers" empty-text="未设置封面" upload-text="上传封面" /></Form.Item></Col><Col :xs="24"><Form.Item label="列表简介"><Input v-model:value="form.shortIntro" /></Form.Item></Col><Col :xs="24"><Form.Item label="详细介绍"><Textarea v-model:value="form.bio" :rows="4" /></Form.Item></Col><Col :xs="24"><Form.Item label="介绍视频"><Input v-model:value="form.introVideoUrl" placeholder="视频地址（可选）" /></Form.Item></Col><Col :xs="24"><Form.Item label="擅长标签（逗号分隔）"><Input :value="form.tags.join('、')" @update:value="(value: string) => { form.tags = splitTags(value); }" /></Form.Item></Col><Col :md="8" :xs="24"><Form.Item label="首页展示"><Switch v-model:checked="form.showOnHome" /></Form.Item></Col><Col :md="8" :xs="24"><Form.Item label="侧边栏展示"><Switch v-model:checked="form.showInDrawer" /></Form.Item></Col><Col :md="8" :xs="24"><Form.Item label="启用老师"><Switch v-model:checked="form.enabled" /></Form.Item></Col><Col :xs="24"><Form.Item label="客服配置"><Input v-model:value="form.customerServiceConfig!.wechat" placeholder="客服微信号" /><Input v-model:value="form.customerServiceConfig!.workTime" class="nested-field" placeholder="客服工作时间（可选）" /><Textarea v-model:value="form.customerServiceConfig!.description" :rows="2" placeholder="客服说明" /><ImagePathInput v-model:value="form.customerServiceConfig!.qrCode" dir="teacher-contact" variant="input" empty-text="未设置客服二维码" upload-text="上传客服二维码" /></Form.Item></Col><Col :xs="24"><Form.Item label="线下服务"><Switch v-model:checked="form.offlineServiceConfig!.enabled" /><Input v-model:value="form.offlineServiceConfig!.city" class="nested-field" placeholder="服务城市" /><Input :value="(form.offlineServiceConfig!.types ?? []).join('、')" class="nested-field" placeholder="服务类型（逗号分隔）" @update:value="(value: string) => { form.offlineServiceConfig!.types = splitTags(value); }" /><Textarea v-model:value="form.offlineServiceConfig!.description" :rows="2" placeholder="线下服务/合作说明" /></Form.Item></Col></Row><Alert type="info" show-icon message="管理员修改优先" description="老师端草稿不会覆盖管理员维护的正式资料，所有修改会记录操作日志。" /></Form>
     </Modal>
-    <Modal v-model:open="bindingModalOpen" :confirm-loading="saving" title="绑定 App 用户为老师" @ok="saveBinding"><Form layout="vertical"><Form.Item label="App 用户 ID"><InputNumber v-model:value="form.appUserIdInput" :min="1" style="width: 100%" /></Form.Item><Alert type="info" show-icon message="老师和代理身份独立" description="绑定老师不会修改该用户已有的代理身份或佣金配置。" /></Form></Modal>
+    <Modal v-model:open="bindingModalOpen" :confirm-loading="saving" title="绑定 App 用户为老师" @ok="saveBinding">
+      <Form layout="vertical">
+        <Form.Item label="搜索并选择 App 用户" required>
+          <Select
+            v-model:value="bindingUserId"
+            show-search
+            allow-clear
+            :filter-option="false"
+            :loading="bindingUserSearching"
+            placeholder="输入手机号、昵称或账号搜索"
+            style="width: 100%"
+            @focus="searchBindingUsers()"
+            @search="searchBindingUsers"
+          >
+            <Select.Option v-for="user in bindingUserOptions" :key="user.id" :value="user.id">
+              {{ bindingUserLabel(user) }}
+            </Select.Option>
+          </Select>
+          <Typography.Text type="secondary">只能从当前 App 用户中选择，避免手填 ID 出错。</Typography.Text>
+        </Form.Item>
+        <Alert type="info" show-icon message="老师和代理身份独立" description="绑定老师不会修改该用户已有的代理身份或佣金配置。" />
+      </Form>
+    </Modal>
     <Modal v-model:open="rejectModalOpen" title="退回内容" ok-text="确认退回" @ok="rejectReview"><Form layout="vertical"><Form.Item label="退回原因" required><Textarea v-model:value="reviewReason" :rows="4" placeholder="请填写退回原因，老师将依据原因修改后重新提交" /></Form.Item></Form></Modal>
   </Page>
 </template>
@@ -355,5 +412,14 @@ onMounted(load);
 <style scoped>
 .teacher-page { min-height: 100%; }
 .teacher-shell { min-height: 520px; }
-.toolbar { margin: 16px 0; }
+.toolbar {
+  align-items: center;
+  display: flex !important;
+  flex-wrap: wrap;
+  margin: 16px 0 20px;
+  row-gap: 12px;
+  width: 100%;
+}
+.nested-field { margin-top: 8px; }
+:deep(.ant-table-wrapper) { margin-top: 12px !important; }
 </style>

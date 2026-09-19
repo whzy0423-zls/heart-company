@@ -602,7 +602,7 @@ func (s *Server) classroomSeriesCreate(w http.ResponseWriter, r *http.Request) {
 		writeClassroomAdminError(w, err)
 		return
 	}
-	if err := s.recordClassroomAudit(r, "create", "classroom_series", created.ID, nil, created, "创建课程系列"); err != nil {
+	if err := s.recordClassroomAudit(r, "create", "classroom_series", created.ID, nil, created, "创建老师视频系列"); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "record classroom audit failed")
 		return
 	}
@@ -688,7 +688,7 @@ func (s *Server) classroomSeriesItem(w http.ResponseWriter, r *http.Request) {
 		next.PublishedAt = current.PublishedAt
 		next.CreatedBy = current.CreatedBy
 		next.CreatedAt = current.CreatedAt
-		s.updateSeries(w, r, current, next, in.ExpectedUpdatedAt, "update", "更新课程系列")
+		s.updateSeries(w, r, current, next, in.ExpectedUpdatedAt, "update", "更新老师视频系列")
 		return
 	}
 	if action == "" && r.Method == http.MethodDelete {
@@ -701,7 +701,7 @@ func (s *Server) classroomSeriesItem(w http.ResponseWriter, r *http.Request) {
 			writeClassroomAdminError(w, err)
 			return
 		}
-		if err := s.recordClassroomAudit(r, "delete", "classroom_series", id, current, nil, classroomAuditSummary("删除课程系列", r.URL.Query().Get("reason"))); err != nil {
+		if err := s.recordClassroomAudit(r, "delete", "classroom_series", id, current, nil, classroomAuditSummary("删除老师视频系列", r.URL.Query().Get("reason"))); err != nil {
 			httpx.Fail(w, 500, "record classroom audit failed")
 			return
 		}
@@ -734,7 +734,7 @@ func (s *Server) classroomSeriesCoverSettings(w http.ResponseWriter, r *http.Req
 		writeClassroomAdminError(w, err)
 		return
 	}
-	if err := s.recordClassroomAudit(r, "update_cover_settings", "classroom_series", before.ID, before, updated, "更新课程系列封面比例"); err != nil {
+	if err := s.recordClassroomAudit(r, "update_cover_settings", "classroom_series", before.ID, before, updated, "更新老师视频系列封面比例"); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "record classroom audit failed")
 		return
 	}
@@ -784,9 +784,9 @@ func (s *Server) classroomSeriesCover(w http.ResponseWriter, r *http.Request, be
 		writeClassroomAdminError(w, err)
 		return
 	}
-	action, summary := "update_cover", "更新课程系列封面"
+	action, summary := "update_cover", "更新老师视频系列封面"
 	if r.Method == http.MethodDelete {
-		action, summary = "delete_cover", "删除课程系列封面"
+		action, summary = "delete_cover", "删除老师视频系列封面"
 	}
 	if err := s.recordClassroomAudit(r, action, "classroom_series", before.ID, before, updated, summary); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "record classroom audit failed")
@@ -818,10 +818,10 @@ func (s *Server) mutateSeries(w http.ResponseWriter, r *http.Request, current cl
 		next.Status = classroom.SeriesPublished
 		now := time.Now()
 		next.PublishedAt = &now
-		reason = classroomAuditSummary("发布课程系列", actionBody.Reason)
+		reason = classroomAuditSummary("发布老师视频系列", actionBody.Reason)
 	case "offline":
 		next.Status = classroom.SeriesOffline
-		reason = classroomAuditSummary("下线课程系列", actionBody.Reason)
+		reason = classroomAuditSummary("下线老师视频系列", actionBody.Reason)
 	case "price":
 		var in priceInput
 		in = priceInput{AccessLevel: actionBody.AccessLevel, PriceCents: actionBody.PriceCents, ExpectedUpdatedAt: expected}
@@ -830,10 +830,10 @@ func (s *Server) mutateSeries(w http.ResponseWriter, r *http.Request, current cl
 		}
 		next.AccessLevel = in.AccessLevel
 		next.PriceCents = in.PriceCents
-		reason = classroomAuditSummary("调整课程系列价格", actionBody.Reason)
+		reason = classroomAuditSummary("调整老师视频系列价格", actionBody.Reason)
 	case "playback-blocked":
 		next.PlaybackBlocked = actionBody.Blocked
-		reason = classroomAuditSummary("调整课程系列停播状态", actionBody.Reason)
+		reason = classroomAuditSummary("调整老师视频系列停播状态", actionBody.Reason)
 	default:
 		httpx.Fail(w, 404, "Not Found")
 		return

@@ -42,7 +42,7 @@ describe('teacher classroom admin UI contract', () => {
     const index = read('views/classroom/index.vue');
     expect(route).toContain("authority: ['Miniapp:Classroom:List']");
     expect(route).toContain("path: '/classroom'");
-    for (const label of ['课件管理', '课程系列', '上传任务']) {
+    for (const label of ['课件管理', '老师视频系列', '上传任务']) {
       expect(index).toContain(label);
     }
   });
@@ -104,7 +104,7 @@ describe('teacher classroom admin UI contract', () => {
   it('explains that an empty series list still allows standalone content', () => {
     const editor = read('views/classroom/components/content-editor.vue');
     const index = read('views/classroom/index.vue');
-    expect(editor).toContain('暂无课程系列，可直接保存为独立课件');
+    expect(editor).toContain('暂无老师视频系列，可直接保存为独立课件');
     expect(editor).toContain('不加入系列，课件会独立展示');
     expect(index).toContain("editing ? '编辑课件' : '新建课件'");
   });
@@ -114,7 +114,7 @@ describe('teacher classroom admin UI contract', () => {
     expect(series).toContain('createClassroomSeriesApi');
     expect(series).toContain('updateClassroomSeriesApi');
     expect(series).toContain('setClassroomSeriesPriceApi');
-    expect(series).toContain('保存系列');
+    expect(series).toContain('保存视频系列');
   });
 
   it('keeps the standalone series route on one native root for transitions', () => {
@@ -269,8 +269,8 @@ describe('teacher classroom admin UI contract', () => {
       ] as any),
     ).toEqual({
       allowed: false,
-      label: '先发布所属系列',
-      reason: '请先到“课程系列”发布《韩老师测试课程》',
+      label: '先发布所属老师视频系列',
+      reason: '请先到“老师视频系列”发布《韩老师测试课程》',
     });
     expect(
       contentPublishGuard(content, [
@@ -324,7 +324,7 @@ describe('teacher classroom admin UI contract', () => {
 
   it('shows the parent-series action instead of sending an invalid publish request', () => {
     const source = read('views/classroom/index.vue');
-    expect(source).toContain('先发布所属系列');
+    expect(source).toContain('先发布所属老师视频系列');
     expect(source).toContain("activeTab = 'series'");
     expect(source).not.toContain('throw cause');
   });

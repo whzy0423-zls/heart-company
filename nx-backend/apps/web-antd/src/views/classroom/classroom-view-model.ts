@@ -30,13 +30,13 @@ export function contentPublishGuard(
     return {
       allowed: false,
       label: '系列数据未加载',
-      reason: '请刷新课程系列数据后再发布',
+      reason: '请刷新老师视频系列数据后再发布',
     };
   if (parent.status !== 'published')
     return {
       allowed: false,
-      label: '先发布所属系列',
-      reason: `请先到“课程系列”发布《${parent.title}》`,
+      label: '先发布所属老师视频系列',
+      reason: `请先到“老师视频系列”发布《${parent.title}》`,
     };
   return republishing
     ? { allowed: true, label: '重新发布', reason: '重新发布已下线课件' }

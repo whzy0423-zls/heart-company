@@ -24,6 +24,32 @@ describe('teacher admin management contract', () => {
     }
   });
 
+  it('exposes the create action for every supported teacher write permission', () => {
+    const source = read('views/teacher/index.vue');
+    expect(source).toContain("accessStore.accessCodes.includes('Miniapp:Teacher:Manage')");
+    expect(source).toContain("accessStore.accessCodes.includes('Miniapp:Classroom:Write')");
+    expect(source).toContain("accessStore.accessCodes.includes('Teacher:Write')");
+    expect(source).toContain('v-if="canWrite" type="primary" @click="openCreate"');
+  });
+
+  it('uses remote App-user search when binding a teacher account', () => {
+    const source = read('views/teacher/index.vue');
+    expect(source).toContain("getAppCustomerListApi({");
+    expect(source).toContain('show-search');
+    expect(source).toContain(':filter-option="false"');
+    expect(source).toContain('@search="searchBindingUsers"');
+    expect(source).toContain('输入手机号、昵称或账号搜索');
+  });
+
+  it('keeps the profile toolbar in its own full-width row above the table', () => {
+    const source = read('views/teacher/index.vue');
+    expect(source).toContain('.toolbar {');
+    expect(source).toContain('display: flex');
+    expect(source).toContain('width: 100%;');
+    expect(source).toContain('row-gap: 12px;');
+    expect(source).toContain('margin-top: 12px !important;');
+  });
+
   it('keeps review actions and required rejection reason visible', () => {
     const source = read('views/teacher/index.vue');
     for (const token of ['审核队列', '通过', '退回', '退回原因', '下架']) {
