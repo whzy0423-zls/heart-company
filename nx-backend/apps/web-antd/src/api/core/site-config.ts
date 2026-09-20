@@ -80,6 +80,7 @@ export interface MiniappLearnHero {
 
 export interface MiniappLearnClassroom {
   ctaText: string;
+  enabled: boolean;
   emptyActionText: string;
   emptyDescription: string;
   emptyTitle: string;

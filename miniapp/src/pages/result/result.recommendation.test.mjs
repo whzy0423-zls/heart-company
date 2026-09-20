@@ -101,10 +101,14 @@ const normalizeClassroomContent = (item = {}) => ({ ...item, id: String(item.id 
 const classroomContentRoute = (item) => item?.id ? '/classroom-detail/' + item.id + '/' + item.contentType : ''
 const classroomAccessLabel = (value) => value === 'paid' ? '付费课件' : '免费'
 const setBookingIntent = (intent) => { globalThis.__resultHarness.intents.push(intent); return true }
+const getStoredSiteConfig = () => globalThis.__resultHarness.siteConfig
+const normalizeMiniappLearn = (config = {}) => ({
+  classroom: { enabled: typeof config?.home?.miniappLearn?.classroom?.enabled === 'boolean' ? config.home.miniappLearn.classroom.enabled : true },
+})
 `
 await writeFile(
   modulePath,
-  `${harnessPrelude}\n${executableScript}\nexport { result, r, info, classroomRecommendations, classroomRecommendationLoading, classroomRecommendationError, loadClassroomRecommendations, openClassroomRecommendation, goClassroom, goBooking, restart, goRelation, resultShareImage }\n`,
+  `${harnessPrelude}\n${executableScript}\nexport { result, r, info, classroomEnabled, classroomRecommendations, classroomRecommendationLoading, classroomRecommendationError, loadClassroomRecommendations, openClassroomRecommendation, goClassroom, goBooking, restart, goRelation, resultShareImage }\n`,
 )
 
 let caseId = 0
@@ -117,6 +121,7 @@ async function createHarness(overrides = {}) {
     redirects: [],
     toasts: [],
     intents: [],
+    siteConfig: {},
     shareAppMessage: null,
     shareTimeline: null,
     listStandalone: async () => ({ items: [] }),
@@ -136,6 +141,16 @@ async function createHarness(overrides = {}) {
 }
 
 try {
+  {
+    const { page, state } = await createHarness({
+      siteConfig: { home: { miniappLearn: { classroom: { enabled: false } } } },
+    })
+    state.onMounted()
+    await Promise.resolve()
+    assert.equal(page.classroomEnabled.value, false, 'disabled site config should hide result-page classroom entry')
+    assert.equal(state.classroomCalls.length, 0, 'disabled site config should skip classroom recommendation requests')
+  }
+
   {
     const { page, state } = await createHarness({
       listStandalone: async () => ({ items: [

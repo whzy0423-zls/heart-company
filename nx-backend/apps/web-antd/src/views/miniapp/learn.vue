@@ -17,6 +17,7 @@ const DEFAULT_LEARN = {
     meta: ['视频课程', '音频精讲', '九型实践'],
   },
   classroom: {
+    enabled: true,
     eyebrow: '课堂精选',
     title: '视频与音频课件',
     moreText: '查看全部',
@@ -99,6 +100,8 @@ export function ensureMiniappLearn(config: { home?: unknown }) {
   } as MiniappLearnHero;
   const classroom: MiniappLearnClassroom = {
     ...rawClassroom,
+    enabled:
+      typeof rawClassroom.enabled === 'boolean' ? rawClassroom.enabled : true,
     ctaText: text(rawClassroom.ctaText, DEFAULT_LEARN.classroom.ctaText),
     emptyActionText: text(
       rawClassroom.emptyActionText,
@@ -166,7 +169,7 @@ export function ensureMiniappLearn(config: { home?: unknown }) {
 <script setup lang="ts">
 import { computed, watch } from 'vue';
 
-import { Collapse, Form, Input, Textarea } from 'ant-design-vue';
+import { Collapse, Form, Input, Switch, Textarea } from 'ant-design-vue';
 
 import EditorShell from '#/views/site-config/components/editor-shell.vue';
 import { useSiteConfigEditor } from '#/views/site-config/use-site-config-editor';
@@ -246,6 +249,17 @@ async function saveLearnConfig() {
         </Collapse.Panel>
 
         <Collapse.Panel key="classroom" header="课堂精选">
+          <div class="classroom-visibility">
+            <div>
+              <strong>显示视频课程入口</strong>
+              <p>关闭后，小程序隐藏课程学习、课件资料和推荐课程入口；已上传内容不会删除。</p>
+            </div>
+            <Switch
+              v-model:checked="miniappLearn.classroom.enabled"
+              aria-label="小程序视频课程总入口显示状态"
+              data-testid="classroom-entry-enabled"
+            />
+          </div>
           <p class="classroom-note">
             课堂内容由“老师课堂”模块上传和维护，本页只配置展示文案。
           </p>
@@ -392,6 +406,21 @@ async function saveLearnConfig() {
 }
 .classroom-note {
   margin: 0 0 16px;
+  color: hsl(var(--muted-foreground));
+}
+.classroom-visibility {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--muted) / 30%);
+}
+.classroom-visibility p {
+  margin: 6px 0 0;
   color: hsl(var(--muted-foreground));
 }
 @media (max-width: 900px) {

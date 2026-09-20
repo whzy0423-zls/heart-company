@@ -8,6 +8,7 @@ import { clearBookingDraft, loadBookingDraft, saveBookingDraft } from '../../uti
 import { consumeBookingIntent } from '../../utils/bookingIntent'
 import { getCachedSiteConfig, getStoredSiteConfig } from '../../utils/siteConfig'
 import { normalizePersonalExpertHome } from '../../utils/personalExpertHome'
+import { normalizeMiniappLearn } from '../../utils/miniappPages'
 
 const kinds = [
   { value: 'consult', label: '1v1 咨询' },
@@ -26,6 +27,7 @@ let draftSaveTimer = null
 
 const siteConfig = getStoredSiteConfig() || {}
 const enterpriseView = ref(normalizePersonalExpertHome(siteConfig).enterprise)
+const classroomEnabled = ref(normalizeMiniappLearn(siteConfig).classroom.enabled)
 const defaultScenarios = Object.freeze([
   { title: '团队协作需要共同语言', description: '让不同风格的人看见彼此动机，减少误解。' },
   { title: '管理者需要提升带队觉察', description: '帮助管理者理解沟通、防御与激励方式。' },
@@ -113,6 +115,7 @@ async function refreshEnterpriseView() {
     const config = await getCachedSiteConfig()
     if (loadId === enterpriseConfigLoadId) {
       enterpriseView.value = normalizePersonalExpertHome(config || {}).enterprise
+      classroomEnabled.value = normalizeMiniappLearn(config || {}).classroom.enabled
     }
   } catch {
     // 保留已渲染的配置，预约表单仍可继续填写。
@@ -225,10 +228,10 @@ function submitAnother() {
     <view v-if="submitted" class="booking-success nx-card" aria-live="polite">
       <text class="booking-success__eyebrow">预约已提交</text>
       <text class="booking-success__title">老师会尽快与你确认企业需求</text>
-      <text class="booking-success__lead">你可以查看预约记录，也可以继续浏览老师课堂了解视频与音频课件。</text>
+      <text class="booking-success__lead">{{ classroomEnabled ? '你可以查看预约记录，也可以继续浏览老师课堂了解视频与音频课件。' : '你可以查看预约记录，老师会尽快与你联系。' }}</text>
       <view class="booking-success__actions">
         <button class="booking-success__primary" @click="viewBookingRecords">查看预约记录</button>
-        <button class="booking-success__secondary" @click="continueClassroom">继续浏览老师课堂</button>
+        <button v-if="classroomEnabled" class="booking-success__secondary" @click="continueClassroom">继续浏览老师课堂</button>
         <button class="booking-success__text" @click="submitAnother">再提交一个需求</button>
       </view>
     </view>

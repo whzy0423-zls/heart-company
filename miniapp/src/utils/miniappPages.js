@@ -6,6 +6,7 @@ export const DEFAULT_MINIAPP_LEARN = Object.freeze({
     meta: Object.freeze(['视频课程', '音频精讲', '九型实践']),
   }),
   classroom: Object.freeze({
+    enabled: true,
     eyebrow: '课堂精选',
     title: '视频与音频课件',
     moreText: '查看全部',
@@ -92,6 +93,7 @@ export function normalizeMiniappLearn(config) {
         meta: normalizeMeta(hero.meta),
       },
       classroom: {
+        enabled: typeof classroom.enabled === 'boolean' ? classroom.enabled : true,
         eyebrow: text(classroom.eyebrow, DEFAULT_MINIAPP_LEARN.classroom.eyebrow),
         title: text(classroom.title, DEFAULT_MINIAPP_LEARN.classroom.title),
         moreText: text(classroom.moreText, DEFAULT_MINIAPP_LEARN.classroom.moreText),

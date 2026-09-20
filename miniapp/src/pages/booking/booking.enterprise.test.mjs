@@ -65,6 +65,9 @@ const getCachedSiteConfig = () => {
   const nextConfig = state.cachedConfigs.shift()
   return Promise.resolve(nextConfig === undefined ? state.siteConfig : nextConfig)
 }
+const normalizeMiniappLearn = (config = {}) => ({
+  classroom: { enabled: typeof config?.home?.miniappLearn?.classroom?.enabled === 'boolean' ? config.home.miniappLearn.classroom.enabled : true },
+})
 const normalizePersonalExpertHome = (config = {}) => {
   globalThis.__bookingEnterpriseHarness.normalizedConfigs.push(config)
   const enterprise = config?.home?.enterprise || {}
@@ -113,7 +116,7 @@ const normalizePersonalExpertHome = (config = {}) => {
 
 await writeFile(
   modulePath,
-  `${harnessPrelude}\n${executableScript}\nexport { enterpriseView, scenarioItems, serviceModes, processSteps, kinds, kindIndex, selectedServiceModeIndex, form, submitted, restoredDraftNotice, fieldErrors, submitting, currentDraft, applyBookingIntent, selectServiceMode, submit, viewBookingRecords, continueClassroom, submitAnother }\n`,
+  `${harnessPrelude}\n${executableScript}\nexport { enterpriseView, classroomEnabled, scenarioItems, serviceModes, processSteps, kinds, kindIndex, selectedServiceModeIndex, form, submitted, restoredDraftNotice, fieldErrors, submitting, currentDraft, applyBookingIntent, selectServiceMode, submit, viewBookingRecords, continueClassroom, submitAnother }\n`,
 )
 
 let moduleCounter = 0
@@ -161,6 +164,16 @@ async function createHarness(overrides = {}) {
 }
 
 try {
+  {
+    const { page, state } = await createHarness({
+      siteConfig: { home: { miniappLearn: { classroom: { enabled: false } } } },
+    })
+    assert.equal(page.classroomEnabled.value, false, 'stored site config should hide the classroom completion action')
+    state.cachedConfigs.push({ home: { miniappLearn: { classroom: { enabled: true } } } })
+    await state.onShow()
+    assert.equal(page.classroomEnabled.value, true, 'refreshed site config should restore the classroom completion action')
+  }
+
   {
     const { page, state } = await createHarness()
     assert.deepEqual(state.normalizedConfigs[0], state.siteConfig, 'booking page should read stored site config')

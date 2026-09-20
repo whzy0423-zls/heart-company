@@ -21,6 +21,7 @@ import {
   retainLearningContentOnError,
 } from '../../utils/learningPageState'
 import { DEFAULT_TEACHERS } from '../../utils/teacherCourseware'
+import { normalizeMiniappLearn } from '../../utils/miniappPages'
 import { userErrorMessage } from '../../utils/userMessage'
 
 const TEACHER_FALLBACK = DEFAULT_TEACHERS[0].avatar
@@ -32,6 +33,7 @@ const COURSE_FALLBACKS = [
 const initialContent = createInitialLearningContent()
 const teachers = ref(initialContent.teachers)
 const coursewareItems = ref(initialContent.coursewareItems)
+const classroomEnabled = ref(true)
 const quotes = ref(initialContent.quotes)
 const types = ref(Object.keys(TYPES_INFO).map((id) => ({ id: Number(id), ...TYPES_INFO[id] })))
 const activeCategory = ref('course')
@@ -77,6 +79,10 @@ function syncContentImages() {
 }
 
 function applyContent(config, options = {}) {
+  classroomEnabled.value = normalizeMiniappLearn(config).classroom.enabled
+  if (!classroomEnabled.value && ['course', 'material'].includes(activeCategory.value)) {
+    activeCategory.value = 'quote'
+  }
   const next = applyLearningContent({
     teachers: teachers.value,
     coursewareItems: coursewareItems.value,
@@ -111,7 +117,10 @@ function toggleTeacher() {
 }
 
 function selectCategory(category) {
-  activeCategory.value = resolveLearningCategory(activeCategory.value, category)
+  const next = resolveLearningCategory(activeCategory.value, category)
+  activeCategory.value = !classroomEnabled.value && ['course', 'material'].includes(next)
+    ? 'quote'
+    : next
 }
 
 function onTabKeydown(event, category) {
@@ -124,7 +133,7 @@ function onTabKeydown(event, category) {
 }
 
 function consumeNavigationIntent() {
-  activeCategory.value = resolveLearningCategory(activeCategory.value, readLearningNavIntent())
+  selectCategory(readLearningNavIntent())
 }
 
 async function loadContent(options = {}) {
@@ -231,12 +240,12 @@ onMounted(() => {
       </section>
 
       <view class="learn-tabs" role="tablist" aria-label="学习内容分类">
-        <view id="learn-tab-course" class="learn-tab" :class="{ 'learn-tab--active': activeCategory === 'course' }" role="tab" data-category="course" aria-controls="learn-panel-course" :aria-selected="activeCategory === 'course'" :tabindex="activeCategory === 'course' ? 0 : -1" hover-class="learn-tab--pressed" @click="selectCategory('course')" @keydown="onTabKeydown($event, 'course')">课程</view>
-        <view id="learn-tab-material" class="learn-tab" :class="{ 'learn-tab--active': activeCategory === 'material' }" role="tab" data-category="material" aria-controls="learn-panel-material" :aria-selected="activeCategory === 'material'" :tabindex="activeCategory === 'material' ? 0 : -1" hover-class="learn-tab--pressed" @click="selectCategory('material')" @keydown="onTabKeydown($event, 'material')">课件</view>
+        <view v-if="classroomEnabled" id="learn-tab-course" class="learn-tab" :class="{ 'learn-tab--active': activeCategory === 'course' }" role="tab" data-category="course" aria-controls="learn-panel-course" :aria-selected="activeCategory === 'course'" :tabindex="activeCategory === 'course' ? 0 : -1" hover-class="learn-tab--pressed" @click="selectCategory('course')" @keydown="onTabKeydown($event, 'course')">课程</view>
+        <view v-if="classroomEnabled" id="learn-tab-material" class="learn-tab" :class="{ 'learn-tab--active': activeCategory === 'material' }" role="tab" data-category="material" aria-controls="learn-panel-material" :aria-selected="activeCategory === 'material'" :tabindex="activeCategory === 'material' ? 0 : -1" hover-class="learn-tab--pressed" @click="selectCategory('material')" @keydown="onTabKeydown($event, 'material')">课件</view>
         <view id="learn-tab-quote" class="learn-tab" :class="{ 'learn-tab--active': activeCategory === 'quote' }" role="tab" data-category="quote" aria-controls="learn-panel-quote" :aria-selected="activeCategory === 'quote'" :tabindex="activeCategory === 'quote' ? 0 : -1" hover-class="learn-tab--pressed" @click="selectCategory('quote')" @keydown="onTabKeydown($event, 'quote')">语录</view>
       </view>
 
-      <section v-if="activeCategory === 'course'" id="learn-panel-course" role="tabpanel" aria-labelledby="learn-tab-course" class="learning-panel">
+      <section v-if="classroomEnabled && activeCategory === 'course'" id="learn-panel-course" role="tabpanel" aria-labelledby="learn-tab-course" class="learning-panel">
         <text id="course-panel-heading" class="panel-title">全部课程</text>
         <view v-if="courseEntries.length" class="course-list">
           <article v-for="courseEntry in courseEntries" :key="courseEntry.key" class="course-row">
@@ -255,7 +264,7 @@ onMounted(() => {
         </view>
       </section>
 
-      <section v-else-if="activeCategory === 'material'" id="learn-panel-material" role="tabpanel" aria-labelledby="learn-tab-material" class="learning-panel">
+      <section v-else-if="classroomEnabled && activeCategory === 'material'" id="learn-panel-material" role="tabpanel" aria-labelledby="learn-tab-material" class="learning-panel">
         <text id="material-panel-heading" class="panel-title">全部课件</text>
         <view v-if="materialItems.length" class="material-list">
           <article v-for="material in materialItems" :key="material.key" class="material-row">

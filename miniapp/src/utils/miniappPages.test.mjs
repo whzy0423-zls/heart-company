@@ -18,6 +18,7 @@ try {
       meta: ['视频课程', '音频精讲', '九型实践'],
     },
     classroom: {
+      enabled: true,
       eyebrow: '课堂精选',
       title: '视频与音频课件',
       moreText: '查看全部',
@@ -80,6 +81,17 @@ try {
     'valid nested fields should override independently while missing fields retain current defaults',
   )
   assert.deepEqual(source, before, 'normalization must not mutate the site-config response')
+
+  assert.equal(
+    normalizeMiniappLearn({ home: { miniappLearn: { classroom: { enabled: false } } } }).classroom.enabled,
+    false,
+    'an explicit false should hide the complete video-course entrance',
+  )
+  assert.equal(
+    normalizeMiniappLearn({ home: { miniappLearn: { classroom: { enabled: 'false' } } } }).classroom.enabled,
+    true,
+    'malformed visibility values should keep the backward-compatible visible default',
+  )
 
   const malformed = normalizeMiniappLearn({
     home: {

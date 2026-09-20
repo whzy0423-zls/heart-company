@@ -10,6 +10,7 @@ import {
   normalizeTeachers,
 } from '../../utils/teacherCourseware'
 import { clearLearningNavIntent, setLearningNavIntent } from '../../utils/learningNavIntent'
+import { normalizeMiniappLearn } from '../../utils/miniappPages'
 import { userErrorMessage } from '../../utils/userMessage'
 
 const TEACHER_FALLBACK = DEFAULT_TEACHERS[0].avatar
@@ -39,6 +40,7 @@ const COURSE_SECTION_PATHS = [
 const total = QUESTIONS.length
 const teachers = ref(normalizeTeachers())
 const courses = ref(normalizeCoursewareItems())
+const classroomEnabled = ref(true)
 const loading = ref(true)
 const loadError = ref('')
 const teacherExpanded = ref(false)
@@ -99,6 +101,7 @@ function syncContentImages() {
 }
 
 function applyContent(config, options = {}) {
+  classroomEnabled.value = normalizeMiniappLearn(config).classroom.enabled
   const preserveMissing = !!options.preserveMissing
   if (!preserveMissing || hasTeacherSection(config)) {
     teachers.value = normalizeTeachers(config)
@@ -269,12 +272,12 @@ function goBooking() {
           <text class="section-note">选择你现在想了解的内容</text>
         </view>
         <nav class="service-grid" aria-label="常用服务">
-          <view class="service-entry" role="button" tabindex="0" hover-class="control--pressed" @click="activateAction(goCourse, $event)" @keydown="onActionKeydown($event, goCourse)">
+          <view v-if="classroomEnabled" class="service-entry" role="button" tabindex="0" hover-class="control--pressed" @click="activateAction(goCourse, $event)" @keydown="onActionKeydown($event, goCourse)">
             <text class="service-index" aria-hidden="true">01</text>
             <text class="service-title">课程学习</text>
             <text class="service-desc">系统认识九型人格</text>
           </view>
-          <view class="service-entry" role="button" tabindex="0" hover-class="control--pressed" @click="activateAction(goMaterial, $event)" @keydown="onActionKeydown($event, goMaterial)">
+          <view v-if="classroomEnabled" class="service-entry" role="button" tabindex="0" hover-class="control--pressed" @click="activateAction(goMaterial, $event)" @keydown="onActionKeydown($event, goMaterial)">
             <text class="service-index" aria-hidden="true">02</text>
             <text class="service-title">课件资料</text>
             <text class="service-desc">随时复习课程重点</text>
@@ -292,7 +295,7 @@ function goBooking() {
         </nav>
       </section>
 
-      <section class="content-section" aria-labelledby="course-heading">
+      <section v-if="classroomEnabled" class="content-section" aria-labelledby="course-heading">
         <view class="section-heading section-heading--row">
           <text id="course-heading" class="section-title">推荐课程</text>
           <view
@@ -328,7 +331,7 @@ function goBooking() {
         </view>
       </section>
 
-      <section class="content-section" aria-labelledby="material-heading">
+      <section v-if="classroomEnabled" class="content-section" aria-labelledby="material-heading">
         <view class="section-heading section-heading--row">
           <text id="material-heading" class="section-title">最新课件</text>
           <view

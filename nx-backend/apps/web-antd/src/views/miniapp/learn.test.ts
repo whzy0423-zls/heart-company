@@ -35,6 +35,20 @@ vi.mock('ant-design-vue', async () => {
         });
     },
   });
+  const Switch = defineComponent({
+    inheritAttrs: false,
+    props: { checked: { default: false, type: Boolean } },
+    emits: ['update:checked'],
+    setup(props, { attrs, emit }) {
+      return () =>
+        h('button', {
+          ...attrs,
+          'aria-checked': String(props.checked),
+          role: 'switch',
+          onClick: () => emit('update:checked', !props.checked),
+        });
+    },
+  });
   return {
     ...stubs,
     Collapse: Object.assign(
@@ -57,6 +71,7 @@ vi.mock('ant-design-vue', async () => {
       },
     ),
     Input,
+    Switch,
     Textarea,
   };
 });
@@ -174,6 +189,7 @@ describe('miniapp learn page management', () => {
         meta: ['视频', '音频', '九型'],
       },
       classroom: {
+        enabled: true,
         eyebrow: '课堂精选',
         title: '视频与音频课件',
         moreText: '查看全部',
@@ -208,6 +224,16 @@ describe('miniapp learn page management', () => {
     expect(config.home.miniappLearn.vendorExtension).toEqual({ source: 'cms' });
   });
 
+  it('keeps the video-course entry enabled for old config and preserves an explicit disable', () => {
+    const oldConfig = createConfig({ miniappLearn: { classroom: {} } });
+    expect(ensureMiniappLearn?.(oldConfig).classroom.enabled).toBe(true);
+
+    const disabledConfig = createConfig({
+      miniappLearn: { classroom: { enabled: false } },
+    });
+    expect(ensureMiniappLearn?.(disabledConfig).classroom.enabled).toBe(false);
+  });
+
   it('renders professional learn copy and saves edited trimmed tags through the existing update API', async () => {
     const config = createConfig({ experimental: { preserve: true } });
     vi.mocked(getSiteConfigApi).mockResolvedValue(config as any);
@@ -219,6 +245,12 @@ describe('miniapp learn page management', () => {
     expect(wrapper.text()).toContain('学习页管理');
     expect(wrapper.text()).toContain('配置学习页文案');
     expect(wrapper.text()).toContain('视频/音频实际内容请前往“老师课堂”');
+    const classroomSwitch = document.body.querySelector(
+      '[data-testid="classroom-entry-enabled"]',
+    ) as HTMLButtonElement;
+    expect(classroomSwitch).not.toBeNull();
+    expect(classroomSwitch.getAttribute('aria-checked')).toBe('true');
+    classroomSwitch.click();
     expect(
       [...document.body.querySelectorAll('.collapse-panel-stub > h2')].map(
         (node) => node.textContent,
@@ -233,8 +265,8 @@ describe('miniapp learn page management', () => {
     input('learn-classroom-empty-title', '新课准备中');
     input('learn-courses-empty-description', '课程会持续补充');
     input('learn-bottom-cta', '开始探索');
-    document.body
-      .querySelector('button')
+    [...document.body.querySelectorAll('button')]
+      .find((button) => button.textContent === '保存配置')
       ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flushVuePromises();
 
@@ -243,7 +275,7 @@ describe('miniapp learn page management', () => {
         title: '新的学习页标题',
         meta: ['视频课程', '音频精讲', '九型实践'],
       },
-      classroom: { emptyTitle: '新课准备中' },
+      classroom: { enabled: false, emptyTitle: '新课准备中' },
       sections: { courses: { emptyDescription: '课程会持续补充' } },
       bottomCtaText: '开始探索',
     });

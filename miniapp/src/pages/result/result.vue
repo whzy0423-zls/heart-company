@@ -17,6 +17,8 @@ import {
   normalizeClassroomContent,
 } from '../../utils/classroomDisplay'
 import { setBookingIntent } from '../../utils/bookingIntent'
+import { normalizeMiniappLearn } from '../../utils/miniappPages'
+import { getStoredSiteConfig } from '../../utils/siteConfig'
 
 const result = ref(null)
 const gender = ref(null)
@@ -47,6 +49,7 @@ const posterError = ref('')
 const avatarFailed = ref(false)
 const instance = getCurrentInstance()
 const classroomRecommendations = ref([])
+const classroomEnabled = ref(normalizeMiniappLearn(getStoredSiteConfig()).classroom.enabled)
 const classroomRecommendationLoading = ref(false)
 const classroomRecommendationError = ref('')
 let classroomRecommendationPromise = null
@@ -78,7 +81,7 @@ onMounted(() => {
   wing.value = isWing(t, cachedResult.second)
   growthInfo.value = TYPES_INFO[TYPES_INFO[t].growth]
   stressInfo.value = TYPES_INFO[TYPES_INFO[t].stress]
-  loadClassroomRecommendations()
+  if (classroomEnabled.value) loadClassroomRecommendations()
 })
 
 function loadClassroomRecommendations() {
@@ -378,7 +381,7 @@ function savePoster() {
       </template>
     </view>
 
-    <view class="result-recommendations nx-panel ios-card">
+    <view v-if="classroomEnabled" class="result-recommendations nx-panel ios-card">
       <view class="result-recommendations__head">
         <view>
           <text class="result-recommendations__eyebrow">老师课堂</text>
