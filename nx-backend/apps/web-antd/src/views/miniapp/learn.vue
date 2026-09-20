@@ -251,12 +251,12 @@ async function saveLearnConfig() {
         <Collapse.Panel key="classroom" header="课堂精选">
           <div class="classroom-visibility">
             <div>
-              <strong>显示视频课程入口</strong>
-              <p>关闭后，小程序隐藏课程学习、课件资料和推荐课程入口；已上传内容不会删除。</p>
+              <strong>显示小程序课程模块</strong>
+              <p>关闭后统一隐藏课程、课件、视频/音频课堂入口及相关推荐；已上传内容和发布状态不会删除。</p>
             </div>
             <Switch
               v-model:checked="miniappLearn.classroom.enabled"
-              aria-label="小程序视频课程总入口显示状态"
+              aria-label="小程序课程模块显示状态"
               data-testid="classroom-entry-enabled"
             />
           </div>

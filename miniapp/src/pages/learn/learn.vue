@@ -177,11 +177,11 @@ onMounted(() => {
     <view class="learn-content">
       <header class="learn-header">
         <text class="learn-header__title">学习中心</text>
-        <text class="learn-header__intro">课程、课件与老师语录，按分类随时查阅。</text>
+        <text class="learn-header__intro">{{ classroomEnabled ? '课程、课件与老师语录，按分类随时查阅。' : '老师资料与老师语录，按分类随时查阅。' }}</text>
       </header>
 
       <view v-if="loading" class="learn-sync" role="status">
-        <text>正在更新老师与课程资料，先读本地内容…</text>
+        <text>{{ classroomEnabled ? '正在更新老师与课程资料，先读本地内容…' : '正在更新老师资料与语录…' }}</text>
       </view>
 
       <view v-if="loadError" class="learn-error" role="status">

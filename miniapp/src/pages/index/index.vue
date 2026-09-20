@@ -219,7 +219,7 @@ function goBooking() {
 <template>
   <view class="home nx-page page-stack ios-page ios-safe-bottom">
     <main class="home__content">
-      <view v-if="loading" class="sync-note" role="status">正在更新老师与课程资料…</view>
+      <view v-if="loading" class="sync-note" role="status">{{ classroomEnabled ? '正在更新老师与课程资料…' : '正在更新老师资料…' }}</view>
 
       <view v-if="loadError" class="home-error" role="status">
         <text>{{ loadError }}</text>
