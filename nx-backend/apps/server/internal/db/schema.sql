@@ -3440,12 +3440,16 @@ CREATE INDEX IF NOT EXISTS idx_app_analytics_events_event_time
 -- ----- App 权益订单：App 用户独立订单，真实支付回调接入后发放权益 -----
 CREATE TABLE IF NOT EXISTS app_plans (
   code                 TEXT PRIMARY KEY,
+  plan_level           TEXT NOT NULL DEFAULT 'free',
+  billing_cycle        TEXT NOT NULL DEFAULT 'none',
   name                 TEXT NOT NULL,
   subtitle             TEXT NOT NULL DEFAULT '',
   price_cents          INT NOT NULL DEFAULT 0 CHECK (price_cents >= 0),
   original_price_cents INT NOT NULL DEFAULT 0 CHECK (original_price_cents >= 0),
   badge                TEXT NOT NULL DEFAULT '',
   features             JSONB NOT NULL DEFAULT '[]'::jsonb,
+  feature_flags        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  limits               JSONB NOT NULL DEFAULT '{}'::jsonb,
   enabled              BOOLEAN NOT NULL DEFAULT true,
   sort_order           INT NOT NULL DEFAULT 0,
   duration_days        INT NOT NULL DEFAULT 0 CHECK (duration_days >= 0),
@@ -3457,17 +3461,128 @@ CREATE TABLE IF NOT EXISTS app_plans (
   member_poster_enabled BOOLEAN NOT NULL DEFAULT false,
   create_time          TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time          TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK (code IN ('free','vip_month','vip_quarter','vip_year'))
+  CHECK (code IN ('free','vip','svip','vip_month','vip_quarter','vip_year')),
+  CHECK (plan_level IN ('free','vip','svip')),
+  CHECK (billing_cycle IN ('none','month','quarter','year')),
+  CHECK (jsonb_typeof(features) = 'array'),
+  CHECK (jsonb_typeof(feature_flags) = 'object'),
+  CHECK (jsonb_typeof(limits) = 'object')
 );
 
+-- Additive columns are declared before the seed so this file also upgrades an
+-- existing database whose app_plans table predates the membership levels.
+ALTER TABLE app_plans ADD COLUMN IF NOT EXISTS plan_level TEXT NOT NULL DEFAULT 'free';
+ALTER TABLE app_plans ADD COLUMN IF NOT EXISTS billing_cycle TEXT NOT NULL DEFAULT 'none';
+ALTER TABLE app_plans ADD COLUMN IF NOT EXISTS feature_flags JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE app_plans ADD COLUMN IF NOT EXISTS limits JSONB NOT NULL DEFAULT '{}'::jsonb;
+
 INSERT INTO app_plans
-  (code,name,subtitle,price_cents,original_price_cents,badge,features,enabled,sort_order,duration_days,daily_chat_limit,story_monthly_limit,card_limit,deep_chat_enabled,companion_enabled,member_poster_enabled)
+  (code,plan_level,billing_cycle,name,subtitle,price_cents,original_price_cents,badge,features,feature_flags,limits,enabled,sort_order,duration_days,daily_chat_limit,story_monthly_limit,card_limit,deep_chat_enabled,companion_enabled,member_poster_enabled)
 VALUES
-  ('free','免费版','每日基础陪伴','0','0','', '["每日 5 轮基础对话","首次 1 篇人生故事","最多 1 张人物卡","经典海报"]'::jsonb,true,0,0,5,1,1,false,false,false),
-  ('vip_month','月卡会员','灵活体验完整成长陪伴',2900,0,'灵活','["深度对话与专业陪伴","每月 3 篇人生故事","最多 5 张人物卡","2 款会员海报"]'::jsonb,true,10,30,-1,3,5,true,true,true),
-  ('vip_quarter','季卡会员','约 ¥26.3/月，适合持续成长',7900,8700,'推荐','["深度对话与专业陪伴","每月 5 篇人生故事","最多 8 张人物卡","2 款会员海报"]'::jsonb,true,20,90,-1,5,8,true,true,true),
-  ('vip_year','年卡会员','约 ¥16.6/月，适合长期自我探索',19900,34800,'最划算','["深度对话与专业陪伴","每月 12 篇人生故事","最多 20 张人物卡","2 款会员海报"]'::jsonb,true,30,365,-1,12,20,true,true,true)
+  ('free','free','none','免费版','每日基础陪伴','0','0','', '["每日 5 轮基础对话","首次 1 篇人生故事","最多 1 张人物卡","经典海报"]'::jsonb,'{"deepChat":false,"companion":false,"memberPoster":false}'::jsonb,'{"cardLimit":1,"dailyChatLimit":5,"storyMonthlyLimit":1}'::jsonb,true,0,0,5,1,1,false,false,false),
+  ('vip_month','vip','month','月卡会员','灵活体验完整成长陪伴',2900,0,'灵活','["深度对话与专业陪伴","每月 3 篇人生故事","最多 3 张人物卡","2 款会员海报"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":3,"dailyChatLimit":-1,"storyMonthlyLimit":3}'::jsonb,true,10,30,-1,3,3,true,true,true),
+  ('vip_quarter','vip','quarter','季卡会员','约 ¥26.3/月，适合持续成长',7900,8700,'推荐','["深度对话与专业陪伴","每月 5 篇人生故事","最多 3 张人物卡","2 款会员海报"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":3,"dailyChatLimit":-1,"storyMonthlyLimit":5}'::jsonb,true,20,90,-1,5,3,true,true,true),
+  ('vip_year','vip','year','年卡会员','约 ¥16.6/月，适合长期自我探索',19900,34800,'最划算','["深度对话与专业陪伴","每月 12 篇人生故事","最多 3 张人物卡","2 款会员海报"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":3,"dailyChatLimit":-1,"storyMonthlyLimit":12}'::jsonb,true,30,365,-1,12,3,true,true,true)
 ON CONFLICT (code) DO NOTHING;
+
+-- 会员等级/周期是新权威字段；旧套餐代码和旧额度列继续保留，供历史订单和老客户端读取。
+ALTER TABLE app_plans DROP CONSTRAINT IF EXISTS app_plans_code_check;
+ALTER TABLE app_plans DROP CONSTRAINT IF EXISTS app_plans_plan_level_check;
+ALTER TABLE app_plans DROP CONSTRAINT IF EXISTS app_plans_billing_cycle_check;
+ALTER TABLE app_plans DROP CONSTRAINT IF EXISTS app_plans_features_check;
+ALTER TABLE app_plans DROP CONSTRAINT IF EXISTS app_plans_feature_flags_check;
+ALTER TABLE app_plans DROP CONSTRAINT IF EXISTS app_plans_limits_check;
+ALTER TABLE app_plans ADD CONSTRAINT app_plans_code_check CHECK (code IN ('free','vip','svip','vip_month','vip_quarter','vip_year'));
+ALTER TABLE app_plans ADD CONSTRAINT app_plans_plan_level_check CHECK (plan_level IN ('free','vip','svip'));
+ALTER TABLE app_plans ADD CONSTRAINT app_plans_billing_cycle_check CHECK (billing_cycle IN ('none','month','quarter','year'));
+ALTER TABLE app_plans ADD CONSTRAINT app_plans_features_check CHECK (jsonb_typeof(features) = 'array');
+ALTER TABLE app_plans ADD CONSTRAINT app_plans_feature_flags_check CHECK (jsonb_typeof(feature_flags) = 'object');
+ALTER TABLE app_plans ADD CONSTRAINT app_plans_limits_check CHECK (jsonb_typeof(limits) = 'object');
+
+-- Seed the canonical S VIP only after replacing legacy constraints. This order
+-- keeps the migration valid for installations whose old code check excluded it.
+INSERT INTO app_plans
+  (code,plan_level,billing_cycle,name,subtitle,price_cents,original_price_cents,badge,features,feature_flags,limits,enabled,sort_order,duration_days,daily_chat_limit,story_monthly_limit,card_limit,deep_chat_enabled,companion_enabled,member_poster_enabled)
+VALUES
+  ('svip','svip','year','S VIP','深度陪伴与优先权益',0,0,'','["深度对话与专业陪伴","每月 12 篇人生故事","最多 10 张人物卡","全部高级内容"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":10,"dailyChatLimit":-1,"storyMonthlyLimit":12}'::jsonb,false,40,365,-1,12,10,true,true,true)
+ON CONFLICT (code) DO NOTHING;
+
+UPDATE app_plans
+SET plan_level = CASE
+      WHEN code = 'free' THEN 'free'
+      WHEN code = 'svip' THEN 'svip'
+      ELSE 'vip'
+    END,
+    billing_cycle = CASE code
+      WHEN 'free' THEN 'none'
+      WHEN 'vip' THEN 'month'
+      WHEN 'svip' THEN 'year'
+      WHEN 'vip_month' THEN 'month'
+      WHEN 'vip_quarter' THEN 'quarter'
+      WHEN 'vip_year' THEN 'year'
+      ELSE billing_cycle
+    END
+WHERE plan_level IS NULL OR billing_cycle IS NULL OR plan_level = 'free' AND code <> 'free';
+UPDATE app_plans
+SET feature_flags = jsonb_build_object(
+      'deepChat', deep_chat_enabled,
+      'companion', companion_enabled,
+      'memberPoster', member_poster_enabled
+    )
+WHERE feature_flags = '{}'::jsonb;
+UPDATE app_plans
+SET limits = jsonb_build_object(
+      'cardLimit', CASE WHEN plan_level = 'free' THEN 1 WHEN plan_level = 'svip' THEN 10 ELSE 3 END,
+      'dailyChatLimit', daily_chat_limit,
+      'storyMonthlyLimit', story_monthly_limit
+    )
+WHERE limits = '{}'::jsonb;
+
+-- Existing installations may still contain the old cycle-specific card
+-- capacities (5/8/20). Card capacity belongs to the normalized level, so
+-- migrate only those legacy values and preserve all other administrator
+-- configured quotas.
+UPDATE app_plans
+SET card_limit = CASE WHEN plan_level = 'svip' THEN 10 WHEN plan_level = 'vip' THEN 3 ELSE 1 END,
+    limits = jsonb_set(
+      COALESCE(limits, '{}'::jsonb),
+      '{cardLimit}',
+      to_jsonb(CASE WHEN plan_level = 'svip' THEN 10 WHEN plan_level = 'vip' THEN 3 ELSE 1 END),
+      true
+    ),
+    features = regexp_replace(
+      features::text,
+      '最多 [0-9]+ 张人物卡',
+      '最多 ' || CASE WHEN plan_level = 'svip' THEN 10 WHEN plan_level = 'vip' THEN 3 ELSE 1 END || ' 张人物卡',
+      'g'
+    )::jsonb
+WHERE (plan_level = 'vip' AND card_limit IN (5,8,20))
+   OR (plan_level = 'svip' AND card_limit <> 10)
+   OR (plan_level = 'free' AND card_limit <> 1);
+
+-- 资源访问账本：降级只改变写入状态，不删除用户已经创建的资源。
+CREATE TABLE IF NOT EXISTS app_membership_resource_access (
+  id                  BIGSERIAL PRIMARY KEY,
+  app_user_id         BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  resource_type       TEXT NOT NULL,
+  resource_id         BIGINT NOT NULL,
+  state               TEXT NOT NULL DEFAULT 'active'
+                      CHECK (state IN ('active','read_only_over_limit','locked_requires_upgrade','deleted_by_user')),
+  required_plan_level TEXT NOT NULL DEFAULT 'free'
+                      CHECK (required_plan_level IN ('free','vip','svip')),
+  priority_rank       INT NOT NULL DEFAULT 0 CHECK (priority_rank >= 0),
+  reason              TEXT NOT NULL DEFAULT '',
+  retention_until     TIMESTAMPTZ,
+  create_time         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (app_user_id, resource_type, resource_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_membership_resource_access_user_state
+  ON app_membership_resource_access(app_user_id, resource_type, state, priority_rank, resource_id);
+CREATE INDEX IF NOT EXISTS idx_app_membership_resource_access_retention
+  ON app_membership_resource_access(app_user_id, retention_until)
+  WHERE retention_until IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS app_orders (
   id              BIGSERIAL PRIMARY KEY,
