@@ -44,6 +44,27 @@ describe('App plan management contract', () => {
     }
   });
 
+  it('edits normalized membership level and billing cycle fields', () => {
+    const source = readFileSync(resolve(here, 'plan-management.vue'), 'utf8');
+    for (const expected of [
+      '会员等级',
+      '购买周期',
+      'planLevel',
+      'billingCycle',
+      'featuresJson',
+      'limitsJson',
+      'read_only_over_limit',
+    ]) {
+      expect(source).toContain(expected);
+    }
+  });
+
+  it('keeps free plan validation visible in the editor', () => {
+    const source = readFileSync(resolve(here, 'plan-management.vue'), 'utf8');
+    expect(source).toContain('免费版只能使用 none 周期');
+    expect(source).toContain('付费套餐必须选择 VIP 或 S VIP');
+  });
+
   it('refreshes current permissions before exposing write actions', () => {
     const source = readFileSync(resolve(here, 'plan-management.vue'), 'utf8');
     expect(source).toContain('getAccessCodesApi');

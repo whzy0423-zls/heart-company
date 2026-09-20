@@ -17,6 +17,10 @@ export interface AppPlan {
   sortOrder: number;
   storyMonthlyLimit: number;
   subtitle: string;
+  planLevel: 'free' | 'vip' | 'svip';
+  billingCycle: 'none' | 'month' | 'quarter' | 'year';
+  featureFlags?: Record<string, boolean>;
+  limits?: Record<string, number>;
 }
 
 export function getAppPlansApi() {

@@ -54,10 +54,16 @@ const form = reactive({
   sortOrder: 0,
   storyMonthlyLimit: 1,
   subtitle: '',
+  planLevel: 'free' as AppPlan['planLevel'],
+  billingCycle: 'none' as AppPlan['billingCycle'],
+  featuresJson: '{}',
+  limitsJson: '{}',
 });
 
 const baseColumns = [
   { dataIndex: 'name', fixed: 'left' as const, title: '套餐', width: 140 },
+  { dataIndex: 'planLevel', title: '会员等级', width: 100 },
+  { dataIndex: 'billingCycle', title: '购买周期', width: 100 },
   { dataIndex: 'priceCents', title: '套餐价格', width: 120 },
   { dataIndex: 'durationDays', title: '有效期', width: 100 },
   { dataIndex: 'dailyChatLimit', title: '每日聊天', width: 110 },
@@ -85,6 +91,33 @@ function limitText(value: number) {
   return value < 0 ? '不限' : `${value} 次`;
 }
 
+function levelText(value: AppPlan['planLevel']) {
+  return value === 'svip' ? 'S VIP' : value === 'vip' ? 'VIP' : '免费';
+}
+
+function cycleText(value: AppPlan['billingCycle']) {
+  return value === 'month'
+    ? '月'
+    : value === 'quarter'
+      ? '季'
+      : value === 'year'
+        ? '年'
+        : '无';
+}
+
+function parseJsonObject(value: string, label: string) {
+  try {
+    const parsed = JSON.parse(value || '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('object required');
+    }
+    return parsed as Record<string, boolean | number>;
+  } catch {
+    message.warning(`${label}必须是 JSON 对象`);
+    return null;
+  }
+}
+
 async function load() {
   loading.value = true;
   try {
@@ -102,6 +135,10 @@ function edit(plan: AppPlan) {
     featuresText: plan.features.join('\n'),
     originalPriceYuan: plan.originalPriceCents / 100,
     priceYuan: plan.priceCents / 100,
+    planLevel: plan.planLevel ?? (plan.code === 'vip_year' ? 'svip' : plan.code === 'free' ? 'free' : 'vip'),
+    billingCycle: plan.billingCycle ?? (plan.code === 'vip_quarter' ? 'quarter' : plan.code === 'vip_year' ? 'year' : plan.code === 'free' ? 'none' : 'month'),
+    featuresJson: JSON.stringify(plan.featureFlags ?? {}, null, 2),
+    limitsJson: JSON.stringify(plan.limits ?? {}, null, 2),
   });
   drawerOpen.value = true;
 }
@@ -112,6 +149,17 @@ async function save() {
     message.warning('请填写套餐名称');
     return;
   }
+  if (form.planLevel === 'free' && form.billingCycle !== 'none') {
+    message.warning('免费版只能使用 none 周期');
+    return;
+  }
+  if (form.planLevel !== 'free' && form.billingCycle === 'none') {
+    message.warning('付费套餐必须选择 VIP 或 S VIP');
+    return;
+  }
+  const featureFlags = parseJsonObject(form.featuresJson, '功能开关');
+  const limits = parseJsonObject(form.limitsJson, '扩展额度');
+  if (!featureFlags || !limits) return;
   saving.value = true;
   try {
     const payload: AppPlan = {
@@ -125,6 +173,10 @@ async function save() {
       originalPriceCents: Math.round(form.originalPriceYuan * 100),
       priceCents: Math.round(form.priceYuan * 100),
       subtitle: form.subtitle.trim(),
+      planLevel: form.planLevel,
+      billingCycle: form.billingCycle,
+      featureFlags: featureFlags as Record<string, boolean>,
+      limits: limits as Record<string, number>,
     };
     await updateAppPlanApi(form.code, payload);
     message.success('套餐配置已保存');
@@ -203,6 +255,12 @@ onMounted(async () => {
         <template v-else-if="column.dataIndex === 'priceCents'">
           {{ money(recordOf(record).priceCents) }}
         </template>
+        <template v-else-if="column.dataIndex === 'planLevel'">
+          {{ levelText(recordOf(record).planLevel) }}
+        </template>
+        <template v-else-if="column.dataIndex === 'billingCycle'">
+          {{ cycleText(recordOf(record).billingCycle) }}
+        </template>
         <template v-else-if="column.dataIndex === 'durationDays'">
           {{
             recordOf(record).durationDays > 0
@@ -263,6 +321,21 @@ onMounted(async () => {
               :maxlength="40"
               placeholder="请输入套餐名称"
             />
+          </Form.Item>
+          <Form.Item label="会员等级">
+            <select v-model="form.planLevel" class="native-select">
+              <option value="free">免费</option>
+              <option value="vip">VIP</option>
+              <option value="svip">S VIP</option>
+            </select>
+          </Form.Item>
+          <Form.Item label="购买周期">
+            <select v-model="form.billingCycle" class="native-select">
+              <option value="none">无</option>
+              <option value="month">月</option>
+              <option value="quarter">季</option>
+              <option value="year">年</option>
+            </select>
           </Form.Item>
           <Form.Item label="套餐价格（元）">
             <InputNumber
@@ -351,6 +424,26 @@ onMounted(async () => {
             placeholder="每行填写一项会员权益"
           />
         </Form.Item>
+        <Form.Item label="功能开关 JSON">
+          <Input.TextArea
+            v-model:value="form.featuresJson"
+            :auto-size="{ minRows: 3, maxRows: 6 }"
+            placeholder='例如：{"deepChat":true,"xinzhili":false}'
+          />
+        </Form.Item>
+        <Form.Item label="扩展额度 JSON">
+          <Input.TextArea
+            v-model:value="form.limitsJson"
+            :auto-size="{ minRows: 3, maxRows: 6 }"
+            placeholder='例如：{"deepReport":10,"voiceMinutes":60}'
+          />
+        </Form.Item>
+        <Alert
+          message="降级保留规则"
+          description="降级后超出额度的历史资源会进入 read_only_over_limit，保留查看和删除入口，不会静默删除。"
+          show-icon
+          type="info"
+        />
         <Space size="large" wrap>
           <label
             ><Switch v-model:checked="form.deepChatEnabled" /> 深度对话</label
@@ -389,6 +482,14 @@ onMounted(async () => {
 }
 .full-width {
   width: 100%;
+}
+.native-select {
+  width: 100%;
+  height: 32px;
+  border: 1px solid var(--ant-color-border);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: var(--ant-color-bg-container);
 }
 .read-only-alert {
   margin-bottom: 16px;
