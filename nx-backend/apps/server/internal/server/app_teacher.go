@@ -49,6 +49,25 @@ func (s *Server) appTeacherRouter(w http.ResponseWriter, r *http.Request) {
 		s.appTeacherContentList(w, r, key, parts[1] == "updates")
 		return
 	}
+	if len(parts) == 3 && r.Method == http.MethodPost && (parts[2] == "like" || parts[2] == "favorite") {
+		id, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil {
+			httpx.Fail(w, 400, "invalid content id")
+			return
+		}
+		u, ok := appUserFromContext(r)
+		if !ok {
+			httpx.Fail(w, 401, "Unauthorized Exception")
+			return
+		}
+		item, active, err := s.teachers.ToggleEngagement(r.Context(), id, u.ID, parts[2])
+		if err != nil {
+			httpx.Fail(w, 400, "engagement failed")
+			return
+		}
+		httpx.OK(w, map[string]any{"content": item, "active": active, "likeCount": item.LikeCount, "favoriteCount": item.FavoriteCount})
+		return
+	}
 	httpx.Fail(w, http.StatusNotFound, "not found")
 }
 
@@ -82,6 +101,8 @@ func (s *Server) appTeacherVideoList(w http.ResponseWriter, r *http.Request, key
 			publishedAt := draft.CreatedAt
 			item.PublishedAt = &publishedAt
 		}
+		item.LikeCount = draft.LikeCount
+		item.FavoriteCount = draft.FavoriteCount
 		items = append(items, item)
 	}
 	httpx.OK(w, map[string]any{"items": items})

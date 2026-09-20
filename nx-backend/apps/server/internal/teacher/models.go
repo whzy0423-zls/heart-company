@@ -126,4 +126,6 @@ type ContentDraft struct {
 	PublishedAt       *time.Time  `json:"publishedAt,omitempty"`
 	CreatedAt         time.Time   `json:"createdAt"`
 	UpdatedAt         time.Time   `json:"updatedAt"`
+	LikeCount         int         `json:"likeCount"`
+	FavoriteCount     int         `json:"favoriteCount"`
 }

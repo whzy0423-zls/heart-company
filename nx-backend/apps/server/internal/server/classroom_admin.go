@@ -128,13 +128,55 @@ func (a *classroomAdminStore) DeleteSeries(ctx context.Context, id int64, expect
 }
 
 func (a *classroomAdminStore) GetContent(ctx context.Context, id int64) (classroom.Content, error) {
-	return a.store.GetContent(ctx, id)
+	item, err := a.store.GetContent(ctx, id)
+	if err != nil {
+		return item, err
+	}
+	return a.withEngagement(ctx, item)
 }
 func (a *classroomAdminStore) CreateContent(ctx context.Context, v classroom.Content) (classroom.Content, error) {
-	return a.store.CreateContent(ctx, v)
+	item, err := a.store.CreateContent(ctx, v)
+	if err != nil {
+		return item, err
+	}
+	if v.LikeCount != 0 || v.FavoriteCount != 0 {
+		if err := a.saveEngagement(ctx, item.ID, v.LikeCount, v.FavoriteCount); err != nil {
+			return classroom.Content{}, err
+		}
+	}
+	item.LikeCount, item.FavoriteCount = v.LikeCount, v.FavoriteCount
+	return item, nil
 }
 func (a *classroomAdminStore) UpdateContent(ctx context.Context, v classroom.Content, at time.Time) (classroom.Content, error) {
-	return a.store.UpdateContent(ctx, v, at)
+	item, err := a.store.UpdateContent(ctx, v, at)
+	if err != nil {
+		return item, err
+	}
+	if v.LikeCount != 0 || v.FavoriteCount != 0 || item.LikeCount != 0 || item.FavoriteCount != 0 {
+		if err := a.saveEngagement(ctx, item.ID, v.LikeCount, v.FavoriteCount); err != nil {
+			return classroom.Content{}, err
+		}
+	}
+	item.LikeCount, item.FavoriteCount = v.LikeCount, v.FavoriteCount
+	return item, nil
+}
+
+func (a *classroomAdminStore) withEngagement(ctx context.Context, item classroom.Content) (classroom.Content, error) {
+	err := a.db.QueryRowContext(ctx, `SELECT like_count,favorite_count FROM classroom_content_engagement WHERE content_id=$1`, item.ID).Scan(&item.LikeCount, &item.FavoriteCount)
+	if err != nil {
+		// Engagement rows are additive metadata; older databases and read-only
+		// fixtures may not have them yet, so preserve the content response.
+		return item, nil
+	}
+	return item, nil
+}
+
+func (a *classroomAdminStore) saveEngagement(ctx context.Context, id int64, likes, favorites int) error {
+	if likes < 0 || favorites < 0 {
+		return errors.New("engagement counts must be non-negative")
+	}
+	_, err := a.db.ExecContext(ctx, `INSERT INTO classroom_content_engagement(content_id,like_count,favorite_count,updated_at) VALUES($1,$2,$3,now()) ON CONFLICT(content_id) DO UPDATE SET like_count=EXCLUDED.like_count,favorite_count=EXCLUDED.favorite_count,updated_at=now()`, id, likes, favorites)
+	return err
 }
 func (a *classroomAdminStore) DeleteContent(ctx context.Context, id int64, expected time.Time) error {
 	if expected.IsZero() {
@@ -200,6 +242,12 @@ func (a *classroomAdminStore) ListContents(ctx context.Context, f classroom.Cont
 	items, err := a.store.ListContents(ctx, f)
 	if err != nil {
 		return nil, 0, err
+	}
+	for i := range items {
+		items[i], err = a.withEngagement(ctx, items[i])
+		if err != nil {
+			return nil, 0, err
+		}
 	}
 	where, args := []string{"1=1"}, []any{}
 	if f.SeriesID != nil {
@@ -374,6 +422,8 @@ type classroomContentDTO struct {
 	PublishedAt          *time.Time                 `json:"publishedAt,omitempty"`
 	CreatedAt            time.Time                  `json:"createdAt"`
 	UpdatedAt            time.Time                  `json:"updatedAt"`
+	LikeCount            int                        `json:"likeCount"`
+	FavoriteCount        int                        `json:"favoriteCount"`
 }
 type classroomUploadTaskDTO struct {
 	ID               int64                  `json:"id"`
@@ -1204,11 +1254,13 @@ type contentWriteInput struct {
 	Tags              []string              `json:"tags"`
 	EpisodeNo         int                   `json:"episodeNo"`
 	SortOrder         int                   `json:"sortOrder"`
+	LikeCount         int                   `json:"likeCount"`
+	FavoriteCount     int                   `json:"favoriteCount"`
 	ExpectedUpdatedAt time.Time             `json:"expectedUpdatedAt"`
 }
 
 func (i contentWriteInput) content() classroom.Content {
-	return classroom.Content{SeriesID: i.SeriesID, ShowAsStandalone: i.ShowAsStandalone, Title: strings.TrimSpace(i.Title), Description: i.Description, ContentType: i.ContentType, CoverURL: i.CoverURL, DurationSeconds: i.DurationSeconds, TeacherKey: i.TeacherKey, TeacherNameSnapshot: i.TeacherName, RecordedAt: i.RecordedAt, Badge: i.Badge, Tags: i.Tags, EpisodeNo: i.EpisodeNo, SortOrder: i.SortOrder, Status: classroom.ContentDraft, AccessLevel: classroom.AccessPublic}
+	return classroom.Content{SeriesID: i.SeriesID, ShowAsStandalone: i.ShowAsStandalone, Title: strings.TrimSpace(i.Title), Description: i.Description, ContentType: i.ContentType, CoverURL: i.CoverURL, DurationSeconds: i.DurationSeconds, TeacherKey: i.TeacherKey, TeacherNameSnapshot: i.TeacherName, RecordedAt: i.RecordedAt, Badge: i.Badge, Tags: i.Tags, EpisodeNo: i.EpisodeNo, SortOrder: i.SortOrder, LikeCount: i.LikeCount, FavoriteCount: i.FavoriteCount, Status: classroom.ContentDraft, AccessLevel: classroom.AccessPublic}
 }
 
 type priceInput struct {
@@ -1434,7 +1486,7 @@ func (s *Server) toContentDTOWithContext(ctx context.Context, v classroom.Conten
 		TeacherName: v.TeacherNameSnapshot, RecordedAt: v.RecordedAt, Badge: v.Badge, Tags: v.Tags, EpisodeNo: v.EpisodeNo,
 		SortOrder: v.SortOrder, Status: v.Status, PlaybackBlocked: v.PlaybackBlocked, AccessLevel: v.AccessLevel,
 		EffectiveAccessLevel: effective, PriceCents: v.PriceCents, EffectivePriceCents: price, PurchaseTarget: target,
-		PublishedAt: v.PublishedAt, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt,
+		PublishedAt: v.PublishedAt, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt, LikeCount: v.LikeCount, FavoriteCount: v.FavoriteCount,
 	}, nil
 }
 
@@ -1474,7 +1526,7 @@ func (s *Server) toContentDTOFallback(v classroom.Content, coverContext classroo
 		TeacherName: v.TeacherNameSnapshot, RecordedAt: v.RecordedAt, Badge: v.Badge, Tags: v.Tags, EpisodeNo: v.EpisodeNo,
 		SortOrder: v.SortOrder, Status: v.Status, PlaybackBlocked: v.PlaybackBlocked, AccessLevel: v.AccessLevel,
 		EffectiveAccessLevel: effective, PriceCents: v.PriceCents, EffectivePriceCents: price, PurchaseTarget: target,
-		PublishedAt: v.PublishedAt, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt,
+		PublishedAt: v.PublishedAt, CreatedAt: v.CreatedAt, UpdatedAt: v.UpdatedAt, LikeCount: v.LikeCount, FavoriteCount: v.FavoriteCount,
 	}, nil
 }
 func writeClassroomAdminError(w http.ResponseWriter, err error) {

@@ -53,6 +53,8 @@ type classroomPublicContent struct {
 	ContentType      classroom.ContentType      `json:"contentType"`
 	DurationSeconds  int                        `json:"durationSeconds"`
 	PublishedAt      *time.Time                 `json:"publishedAt,omitempty"`
+	LikeCount        int                        `json:"likeCount"`
+	FavoriteCount    int                        `json:"favoriteCount"`
 	AccessLevel      classroom.AccessLevel      `json:"accessLevel"`
 	EffectiveAccess  classroom.AccessLevel      `json:"effectiveAccess"`
 	PriceCents       int                        `json:"priceCents"`
@@ -532,6 +534,14 @@ func (s *Server) classroomAppContent(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) classroomAppContentRouter(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
+	if strings.HasSuffix(path, "/like") || strings.HasSuffix(path, "/favorite") {
+		kind := "favorite"
+		if strings.HasSuffix(path, "/like") {
+			kind = "like"
+		}
+		s.classroomAppEngagement(w, r, strings.TrimSuffix(strings.TrimSuffix(path, "/like"), "/favorite"), kind)
+		return
+	}
 	if strings.HasSuffix(path, "/play") {
 		s.classroomAppPlayback(w, r)
 		return
@@ -541,6 +551,25 @@ func (s *Server) classroomAppContentRouter(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.classroomAppContent(w, r)
+}
+
+func (s *Server) classroomAppEngagement(w http.ResponseWriter, r *http.Request, path, kind string) {
+	id, err := classroomID(path, "/api/app/classroom/content/", "")
+	if err != nil || r.Method != http.MethodPost {
+		httpx.Fail(w, http.StatusBadRequest, "invalid engagement")
+		return
+	}
+	u, ok := appUserFromContext(r)
+	if !ok || u.ID <= 0 {
+		httpx.Fail(w, http.StatusUnauthorized, "Unauthorized Exception")
+		return
+	}
+	item, active, err := s.teachers.ToggleEngagement(r.Context(), id, u.ID, kind)
+	if err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "engagement failed")
+		return
+	}
+	httpx.OK(w, map[string]any{"active": active, "likeCount": item.LikeCount, "favoriteCount": item.FavoriteCount})
 }
 
 func (s *Server) classroomAppPlayback(w http.ResponseWriter, r *http.Request) {
@@ -865,7 +894,7 @@ func contentViewResolved(c classroom.Content, parent *classroom.Series, a classr
 		price = parent.PriceCents
 	}
 	blocked := c.PlaybackBlocked || (parent != nil && parent.PlaybackBlocked)
-	v := classroomPublicContent{ID: c.ID, SeriesID: c.SeriesID, Title: c.Title, Description: c.Description, CoverURL: c.CoverURL, CoverAspectRatio: ratio, TeacherName: c.TeacherNameSnapshot, ContentType: c.ContentType, DurationSeconds: c.DurationSeconds, PublishedAt: c.PublishedAt, AccessLevel: c.AccessLevel, EffectiveAccess: a, PriceCents: price, CanPlay: ok && !blocked, PurchaseState: pstate, PlaybackBlocked: blocked}
+	v := classroomPublicContent{ID: c.ID, SeriesID: c.SeriesID, Title: c.Title, Description: c.Description, CoverURL: c.CoverURL, CoverAspectRatio: ratio, TeacherName: c.TeacherNameSnapshot, ContentType: c.ContentType, DurationSeconds: c.DurationSeconds, PublishedAt: c.PublishedAt, LikeCount: c.LikeCount, FavoriteCount: c.FavoriteCount, AccessLevel: c.AccessLevel, EffectiveAccess: a, PriceCents: price, CanPlay: ok && !blocked, PurchaseState: pstate, PlaybackBlocked: blocked}
 	if len(signedCover) > 0 {
 		v.signedCover = signedCover[0]
 	}
@@ -1154,6 +1183,7 @@ func (d *classroomPublicDB) GetContent(ctx context.Context, id, uid int64) (clas
 	if e != nil {
 		return classroomPublicContent{}, e
 	}
+	_ = d.db.QueryRowContext(ctx, `SELECT like_count,favorite_count FROM classroom_content_engagement WHERE content_id=$1`, id).Scan(&c.LikeCount, &c.FavoriteCount)
 	var p *classroom.Series
 	if parentID.Valid {
 		p = &classroom.Series{ID: parentID.Int64, Status: classroom.SeriesStatus(parentStatus.String), AccessLevel: classroom.AccessLevel(parentAccess.String), PriceCents: int(parentPrice.Int64), PlaybackBlocked: parentBlocked.Bool}

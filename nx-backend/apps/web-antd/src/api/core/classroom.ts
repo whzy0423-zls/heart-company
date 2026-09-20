@@ -117,6 +117,8 @@ export interface ClassroomContent {
   teacherName: string;
   title: string;
   updatedAt: string;
+  likeCount: number;
+  favoriteCount: number;
 }
 
 export interface ClassroomSeriesCreatePayload {
@@ -149,6 +151,8 @@ export interface ClassroomContentCreatePayload {
   teacherKey?: string;
   teacherName?: string;
   title: string;
+  likeCount?: number;
+  favoriteCount?: number;
 }
 
 export interface ClassroomContentUpdatePayload extends ClassroomContentCreatePayload {

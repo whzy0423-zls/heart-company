@@ -192,11 +192,22 @@ func (s *Store) CreateContent(ctx context.Context, item ContentDraft, creatorID 
 	row := s.db.QueryRowContext(ctx, `INSERT INTO classroom_contents(series_id,show_as_standalone,title,description,content_type,cover_url,teacher_key,feed_type,status,review_status,created_by,updated_by)
 		VALUES($1,$2,$3,$4,'video',$5,$6,$7,'draft','draft',$8,$8)
 		RETURNING id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at`, item.SeriesID, item.ShowAsStandalone, strings.TrimSpace(item.Title), item.Description, item.CoverURL, item.TeacherKey, item.FeedType, creatorID)
-	return scanContentDraft(row)
+	created, err := scanContentDraft(row)
+	if err != nil {
+		return ContentDraft{}, err
+	}
+	if err := s.setEngagementCounts(ctx, created.ID, item.LikeCount, item.FavoriteCount); err != nil {
+		return ContentDraft{}, err
+	}
+	return s.GetContent(ctx, created.ID)
 }
 
 func (s *Store) GetContent(ctx context.Context, id int64) (ContentDraft, error) {
-	return scanContentDraft(s.db.QueryRowContext(ctx, `SELECT id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at FROM classroom_contents WHERE id=$1`, id))
+	item, err := scanContentDraft(s.db.QueryRowContext(ctx, `SELECT id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at FROM classroom_contents WHERE id=$1`, id))
+	if err == nil {
+		_ = s.hydrateEngagement(ctx, &item)
+	}
+	return item, err
 }
 
 func (s *Store) UpdateContent(ctx context.Context, item ContentDraft, key string) (ContentDraft, error) {
@@ -209,7 +220,69 @@ func (s *Store) UpdateContent(ctx context.Context, item ContentDraft, key string
 	if item.FeedType != "course" && item.FeedType != "daily" {
 		return ContentDraft{}, errors.New("invalid feed type")
 	}
-	return scanContentDraft(s.db.QueryRowContext(ctx, `UPDATE classroom_contents SET title=$1,description=$2,cover_url=$3,feed_type=$4,show_as_standalone=$5,review_status='draft',review_reason='',updated_at=now() WHERE id=$6 AND teacher_key=$7 AND review_status IN ('draft','rejected') RETURNING id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at`, strings.TrimSpace(item.Title), item.Description, item.CoverURL, item.FeedType, item.ShowAsStandalone, item.ID, strings.TrimSpace(key)))
+	_, err := scanContentDraft(s.db.QueryRowContext(ctx, `UPDATE classroom_contents SET title=$1,description=$2,cover_url=$3,feed_type=$4,show_as_standalone=$5,review_status='draft',review_reason='',updated_at=now() WHERE id=$6 AND teacher_key=$7 AND review_status IN ('draft','rejected') RETURNING id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at`, strings.TrimSpace(item.Title), item.Description, item.CoverURL, item.FeedType, item.ShowAsStandalone, item.ID, strings.TrimSpace(key)))
+	if err != nil {
+		return ContentDraft{}, err
+	}
+	if err := s.setEngagementCounts(ctx, item.ID, item.LikeCount, item.FavoriteCount); err != nil {
+		return ContentDraft{}, err
+	}
+	return s.GetContent(ctx, item.ID)
+}
+
+func (s *Store) setEngagementCounts(ctx context.Context, id int64, likes, favorites int) error {
+	if id <= 0 || likes < 0 || favorites < 0 {
+		return errors.New("engagement counts must be non-negative")
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO classroom_content_engagement(content_id,like_count,favorite_count,updated_at) VALUES($1,$2,$3,now()) ON CONFLICT(content_id) DO UPDATE SET like_count=EXCLUDED.like_count,favorite_count=EXCLUDED.favorite_count,updated_at=now()`, id, likes, favorites)
+	return err
+}
+
+func (s *Store) SetEngagementCounts(ctx context.Context, id int64, likes, favorites int) (ContentDraft, error) {
+	if err := s.setEngagementCounts(ctx, id, likes, favorites); err != nil {
+		return ContentDraft{}, err
+	}
+	return s.GetContent(ctx, id)
+}
+
+func (s *Store) hydrateEngagement(ctx context.Context, item *ContentDraft) error {
+	return s.db.QueryRowContext(ctx, `SELECT like_count,favorite_count FROM classroom_content_engagement WHERE content_id=$1`, item.ID).Scan(&item.LikeCount, &item.FavoriteCount)
+}
+
+func (s *Store) ToggleEngagement(ctx context.Context, contentID, userID int64, kind string) (ContentDraft, bool, error) {
+	if contentID <= 0 || userID <= 0 || (kind != "like" && kind != "favorite") {
+		return ContentDraft{}, false, errors.New("invalid engagement")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ContentDraft{}, false, err
+	}
+	defer tx.Rollback()
+	var active bool
+	err = tx.QueryRowContext(ctx, `DELETE FROM classroom_content_engagement_actions WHERE content_id=$1 AND app_user_id=$2 AND kind=$3 RETURNING true`, contentID, userID, kind).Scan(&active)
+	if errors.Is(err, sql.ErrNoRows) {
+		_, err = tx.ExecContext(ctx, `INSERT INTO classroom_content_engagement_actions(content_id,app_user_id,kind) VALUES($1,$2,$3)`, contentID, userID, kind)
+		active = true
+	}
+	if err != nil {
+		return ContentDraft{}, false, err
+	}
+	column := "like_count"
+	if kind == "favorite" {
+		column = "favorite_count"
+	}
+	delta := 1
+	if !active {
+		delta = -1
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO classroom_content_engagement(content_id,`+column+`) VALUES($1,$2) ON CONFLICT(content_id) DO UPDATE SET `+column+`=GREATEST(0,classroom_content_engagement.`+column+`+$2),updated_at=now()`, contentID, delta); err != nil {
+		return ContentDraft{}, false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return ContentDraft{}, false, err
+	}
+	item, err := s.GetContent(ctx, contentID)
+	return item, active, err
 }
 
 func (s *Store) ListContent(ctx context.Context, key string, state ReviewState, feedType string, publishedOnly bool) ([]ContentDraft, error) {
@@ -237,6 +310,7 @@ func (s *Store) ListContent(ctx context.Context, key string, state ReviewState, 
 			return nil, err
 		}
 		items = append(items, item)
+		_ = s.hydrateEngagement(ctx, &items[len(items)-1])
 	}
 	return items, rows.Err()
 }
@@ -246,10 +320,7 @@ func (s *Store) ListContent(ctx context.Context, key string, state ReviewState, 
 // both the classroom publication state and the teacher review state must be
 // published.
 func (s *Store) ListPublishedVideos(ctx context.Context, key string) ([]ContentDraft, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at
-		FROM classroom_contents
-		WHERE teacher_key=$1 AND feed_type IN ('course','daily') AND review_status='published' AND status='published'
-		ORDER BY COALESCE(published_at,created_at) DESC,id DESC`, strings.TrimSpace(key))
+	rows, err := s.db.QueryContext(ctx, `SELECT id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at FROM classroom_contents WHERE teacher_key=$1 AND feed_type IN ('course','daily') AND review_status='published' AND status='published' ORDER BY COALESCE(published_at,created_at) DESC,id DESC`, strings.TrimSpace(key))
 	if err != nil {
 		return nil, err
 	}
@@ -261,6 +332,7 @@ func (s *Store) ListPublishedVideos(ctx context.Context, key string) ([]ContentD
 			return nil, err
 		}
 		items = append(items, item)
+		_ = s.hydrateEngagement(ctx, &items[len(items)-1])
 	}
 	return items, rows.Err()
 }
@@ -299,6 +371,7 @@ func (s *Store) ReviewContent(ctx context.Context, id int64, state ReviewState, 
 	if err = s.RecordReviewEvent(ctx, id, state, reason, &actorID); err != nil {
 		return ContentDraft{}, err
 	}
+	_ = s.hydrateEngagement(ctx, &item)
 	return item, nil
 }
 

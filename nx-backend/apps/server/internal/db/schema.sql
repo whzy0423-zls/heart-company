@@ -4263,6 +4263,20 @@ ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS review_reason TEXT NOT N
 ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS reviewed_by BIGINT REFERENCES users(id) ON DELETE SET NULL;
 ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
 ALTER TABLE classroom_contents ADD COLUMN IF NOT EXISTS replaces_content_id BIGINT REFERENCES classroom_contents(id) ON DELETE SET NULL;
+
+CREATE TABLE IF NOT EXISTS classroom_content_engagement (
+  content_id BIGINT PRIMARY KEY REFERENCES classroom_contents(id) ON DELETE CASCADE,
+  like_count INTEGER NOT NULL DEFAULT 0 CHECK (like_count >= 0),
+  favorite_count INTEGER NOT NULL DEFAULT 0 CHECK (favorite_count >= 0),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS classroom_content_engagement_actions (
+  content_id BIGINT NOT NULL REFERENCES classroom_contents(id) ON DELETE CASCADE,
+  app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('like','favorite')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (content_id, app_user_id, kind)
+);
 ALTER TABLE classroom_contents DROP CONSTRAINT IF EXISTS classroom_contents_feed_type_check;
 ALTER TABLE classroom_contents ADD CONSTRAINT classroom_contents_feed_type_check CHECK (feed_type IN ('course','daily'));
 ALTER TABLE classroom_contents DROP CONSTRAINT IF EXISTS classroom_contents_review_status_check;

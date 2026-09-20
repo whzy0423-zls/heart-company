@@ -52,6 +52,8 @@ const accessLevel = ref<'inherit' | 'public' | 'login' | 'member' | 'paid'>(
   'public',
 );
 const priceCents = ref(0);
+const likeCount = ref(0);
+const favoriteCount = ref(0);
 const saving = ref(false);
 const standalonePaidStrategy = ref<'content' | 'series'>('series');
 const persistedContent = ref<ClassroomContent>();
@@ -112,6 +114,8 @@ watch(
     );
     accessLevel.value = content?.accessLevel ?? 'public';
     priceCents.value = content?.priceCents ?? 0;
+    likeCount.value = content?.likeCount ?? 0;
+    favoriteCount.value = content?.favoriteCount ?? 0;
     persistedContent.value = content;
     metadataCommitted.value = Boolean(content);
   },
@@ -132,6 +136,8 @@ async function save() {
       update: () =>
         updateClassroomContentApi(persistedContent.value!.id, {
           ...contentMetadataPayload(form),
+          likeCount: Math.max(0, likeCount.value),
+          favoriteCount: Math.max(0, favoriteCount.value),
           expectedUpdatedAt: persistedContent.value!.updatedAt,
         }),
       onPersist: (value) => {
@@ -237,6 +243,10 @@ watch(
         ><Radio.Button value="audio">音频课件</Radio.Button>
       </Radio.Group>
     </Form.Item>
+    <Space style="width: 100%" :size="16" wrap>
+      <Form.Item label="点赞数"><InputNumber v-model:value="likeCount" :min="0" /></Form.Item>
+      <Form.Item label="收藏数"><InputNumber v-model:value="favoriteCount" :min="0" /></Form.Item>
+    </Space>
     <Form.Item label="所属老师视频系列">
       <Select
         v-model:value="form.seriesId"

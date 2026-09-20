@@ -104,6 +104,8 @@ type Series struct {
 	UpdatedBy            *int64
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
+	LikeCount            int
+	FavoriteCount        int
 }
 
 func (s Series) Validate() error {
@@ -166,6 +168,8 @@ type Content struct {
 	UpdatedBy            *int64
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
+	LikeCount            int
+	FavoriteCount        int
 }
 
 func (c Content) Validate() error {

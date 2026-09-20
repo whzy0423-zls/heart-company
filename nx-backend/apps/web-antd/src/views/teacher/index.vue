@@ -152,6 +152,8 @@ const reviewColumns = [
   { dataIndex: 'feedType', title: '内容类型' },
   { dataIndex: 'reviewStatus', title: '审核状态' },
   { dataIndex: 'reviewReason', title: '退回原因' },
+  { dataIndex: 'likeCount', title: '点赞数' },
+  { dataIndex: 'favoriteCount', title: '收藏数' },
   { key: 'action', title: '操作', width: 220 },
 ];
 
