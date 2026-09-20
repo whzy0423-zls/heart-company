@@ -18,7 +18,7 @@ let advanceTimer = null
 const q = computed(() => QUESTIONS[step.value])
 const progress = computed(() => ((step.value + 1) / QUESTIONS.length) * 100)
 const currentVisualCenter = computed(() => questionVisualCenter(step.value))
-const questionVisualSrc = computed(() => `/static/editorial/center-${currentVisualCenter.value}.webp`)
+const questionVisualSrc = computed(() => `/static/editorial/center-${currentVisualCenter.value}.png`)
 
 function start(g) {
   clearAdvanceTimer()
@@ -113,7 +113,7 @@ onUnload(() => {
           hover-class="gender__card--hover"
           @click="start('male')"
         >
-          <text class="gender__mark">M</text>
+          <text class="gender__mark" aria-hidden="true">♂</text>
           <text class="gender__b">男生</text>
           <text class="gender__d">更偏行动、边界与掌控感</text>
         </button>
@@ -123,7 +123,7 @@ onUnload(() => {
           hover-class="gender__card--hover"
           @click="start('female')"
         >
-          <text class="gender__mark">F</text>
+          <text class="gender__mark" aria-hidden="true">♀</text>
           <text class="gender__b">女生</text>
           <text class="gender__d">更偏关系、细腻与安全感</text>
         </button>
@@ -295,31 +295,22 @@ onUnload(() => {
 }
 
 .quiz {
-  --quiz-accent: var(--nx-blue);
-  --quiz-selected-bg: #E4E9FC;
-  --quiz-atmosphere: rgba(49, 91, 234, .10);
   width: 100%;
   max-width: 720rpx;
   margin: 0 auto;
   padding: 36rpx;
   overflow: hidden;
   box-sizing: border-box;
-  background: linear-gradient(145deg, var(--quiz-atmosphere) 0, rgba(255, 253, 248, .96) 34%, #FFFDF8 100%);
+  background: linear-gradient(145deg, rgba(49, 91, 234, .10) 0, rgba(255, 253, 248, .96) 34%, #FFFDF8 100%);
 }
 .quiz--head {
-  --quiz-accent: #315BEA;
-  --quiz-selected-bg: #E4E9FC;
-  --quiz-atmosphere: rgba(49, 91, 234, .12);
+  background: linear-gradient(145deg, rgba(223, 188, 127, .18) 0, rgba(255, 253, 248, .96) 34%, #FFFDF8 100%);
 }
 .quiz--heart {
-  --quiz-accent: #C9472D;
-  --quiz-selected-bg: #F5DDD6;
-  --quiz-atmosphere: rgba(201, 71, 45, .12);
+  background: linear-gradient(145deg, rgba(223, 188, 127, .14) 0, rgba(255, 253, 248, .96) 34%, #FFFDF8 100%);
 }
 .quiz--gut {
-  --quiz-accent: #347B62;
-  --quiz-selected-bg: #DDECE6;
-  --quiz-atmosphere: rgba(52, 123, 98, .13);
+  background: linear-gradient(145deg, rgba(49, 64, 82, .10) 0, rgba(255, 253, 248, .96) 34%, #FFFDF8 100%);
 }
 .quiz__progress-copy {
   display: flex;
@@ -348,7 +339,7 @@ onUnload(() => {
 .quiz__bar-fill {
   height: 100%;
   border-radius: inherit;
-  background: var(--quiz-accent);
+  background: var(--nx-blue);
   transition: width .24s ease;
 }
 .quiz__body {
@@ -360,12 +351,13 @@ onUnload(() => {
 .quiz__visual {
   width: 100%;
   max-width: 260rpx;
+  height: 174rpx;
   aspect-ratio: 3 / 2;
   margin: 24rpx auto 0;
   overflow: hidden;
   border-radius: var(--nx-radius-md);
   border: 2rpx solid rgba(23, 33, 43, .10);
-  background: var(--quiz-selected-bg);
+  background: #E4E9FC;
   box-shadow: 0 14rpx 32rpx rgba(23, 33, 43, .10);
   box-sizing: border-box;
 }
@@ -382,7 +374,7 @@ onUnload(() => {
   animation: quiz-enter .22s ease-out backwards;
 }
 .quiz__number {
-  color: var(--quiz-accent);
+  color: var(--nx-blue);
   font-size: 24rpx;
   font-weight: 800;
   letter-spacing: 2rpx;
@@ -431,9 +423,9 @@ onUnload(() => {
 .quiz__opt--hover { opacity: .84; transform: translateY(2rpx) scale(.992); }
 .quiz__opt--selected,
 .quiz__opt--selected[disabled] {
-  border-color: var(--quiz-accent);
-  background: var(--quiz-selected-bg);
-  box-shadow: inset 0 0 0 2rpx var(--quiz-accent), 0 8rpx 22rpx rgba(23, 33, 43, .12);
+  border-color: var(--nx-blue);
+  background: #E4E9FC;
+  box-shadow: inset 0 0 0 2rpx var(--nx-blue), 0 8rpx 22rpx rgba(23, 33, 43, .12);
   opacity: 1;
 }
 .quiz__opt-accent {
@@ -443,7 +435,7 @@ onUnload(() => {
   left: 0;
   width: 8rpx;
   border-radius: 0 8rpx 8rpx 0;
-  background: var(--quiz-accent);
+  background: var(--nx-blue);
 }
 .quiz__idx {
   width: 56rpx;
@@ -460,8 +452,8 @@ onUnload(() => {
   justify-content: center;
 }
 .quiz__opt--selected .quiz__idx {
-  border-color: var(--quiz-accent);
-  background: var(--quiz-accent);
+  border-color: var(--nx-blue);
+  background: var(--nx-blue);
   color: #FFFFFF;
 }
 .quiz__t {
@@ -476,7 +468,7 @@ onUnload(() => {
   height: 44rpx;
   flex-shrink: 0;
   border-radius: 50%;
-  background: var(--quiz-accent);
+  background: var(--nx-blue);
   color: #FFFFFF;
   display: flex;
   align-items: center;
@@ -490,6 +482,32 @@ onUnload(() => {
 .quiz__opt--selected .quiz__check {
   opacity: 1;
   transform: scale(1);
+}
+.quiz--heart .quiz__bar-fill,
+.quiz--heart .quiz__opt-accent,
+.quiz--heart .quiz__opt--selected .quiz__idx,
+.quiz--heart .quiz__check {
+  border-color: var(--nx-accent-gold);
+  background: var(--nx-accent-gold);
+}
+.quiz--heart .quiz__number { color: var(--nx-brand-700); }
+.quiz--heart .quiz__opt--selected {
+  border-color: var(--nx-accent-gold);
+  background: #F1E8D8;
+  box-shadow: inset 0 0 0 2rpx var(--nx-accent-gold), 0 8rpx 22rpx rgba(23, 33, 43, .12);
+}
+.quiz--gut .quiz__bar-fill,
+.quiz--gut .quiz__opt-accent,
+.quiz--gut .quiz__opt--selected .quiz__idx,
+.quiz--gut .quiz__check {
+  border-color: var(--nx-brand-700);
+  background: var(--nx-brand-700);
+}
+.quiz--gut .quiz__number { color: var(--nx-brand-700); }
+.quiz--gut .quiz__opt--selected {
+  border-color: var(--nx-brand-700);
+  background: #E6EBEF;
+  box-shadow: inset 0 0 0 2rpx var(--nx-brand-700), 0 8rpx 22rpx rgba(23, 33, 43, .12);
 }
 .quiz__footer {
   display: flex;

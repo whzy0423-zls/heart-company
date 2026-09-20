@@ -106,9 +106,15 @@ function setupProgress() {
     storage: progressStorage,
     completed: progressCompleted.value,
     send: async (id, positionSeconds) => {
-      const result = await updateClassroomProgressApi(id, positionSeconds);
-      if (!disposed) applyProgress(result?.positionSeconds ?? positionSeconds, result?.completed);
-      return result;
+      try {
+        const result = await updateClassroomProgressApi(id, positionSeconds);
+        if (!disposed) applyProgress(result?.positionSeconds ?? positionSeconds, result?.completed);
+        return result;
+      } catch (_) {
+        // Progress is best-effort. Keep playback and the local progress bar
+        // usable when an expired session or platform request fails.
+        return { positionSeconds, completed: progressCompleted.value };
+      }
     },
   });
 }
@@ -313,7 +319,14 @@ async function loadDetail() {
         purchaseTargetError.value = userErrorMessage(error, "系列购买信息加载失败，请重试");
       }
     }
-    setupProgress();
+    // Progress sync is auxiliary. A platform-specific storage/runtime issue
+    // must not prevent the lesson metadata and media from rendering.
+    try {
+      setupProgress();
+    } catch (error) {
+      progressTracker = null;
+      progressSyncError.value = userErrorMessage(error, "学习进度暂不可用");
+    }
     if (normalized.canPlay && pageVisible) await refreshPlayback();
   } catch (error) {
     if (!disposed && ticket === detailTicket) {

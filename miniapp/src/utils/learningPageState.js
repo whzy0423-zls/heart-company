@@ -172,6 +172,11 @@ export function flattenLearningMaterials(courses) {
       return {
         baseKey: `${courseKey}::material::${identity.id}`,
         courseKey,
+        contentId: identityText(
+          safeGet(course, 'classroomId', '') || safeGet(course, 'id', ''),
+          '',
+        ),
+        contentType: /音频|audio/i.test(identity.label) ? 'audio' : 'video',
         courseTitle,
         type: identity.label,
         description: identityText(safeGet(course, 'description', ''), ''),

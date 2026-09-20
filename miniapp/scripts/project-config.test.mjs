@@ -12,7 +12,7 @@ const pageTitles = Object.fromEntries(
 )
 assert.equal(pageTitles['pages/index/index'], '首页', 'home navigation title should use the primary navigation label')
 assert.equal(pageTitles['pages/learn/learn'], '学习中心', 'learn navigation title should describe the learning center')
-assert.equal(pagesConfig.tabBar?.selectedColor, '#335B4A', 'selected tabs should use the brand green')
+assert.equal(pagesConfig.tabBar?.selectedColor, '#314052', 'selected tabs should use the current brand color')
 assert.equal(pagesConfig.tabBar?.backgroundColor, '#FFFDF8', 'native tab bar should use the warm surface color')
 assert.equal(
   Object.hasOwn(pagesConfig.tabBar || {}, 'custom'),
@@ -87,8 +87,10 @@ assert.match(productionExample, /VITE_API_BASE=https:\/\/xn--9iq9az5uo8fz16d\.co
 assert.match(productionExample, /CI|release|上线|生产/)
 
 const productionCheck = readFileSync(resolve('scripts/verify-production-api-base.mjs'), 'utf8')
-assert.match(productionCheck, /\.local/, 'production API validation should reject .local placeholder/internal hosts')
-assert.match(productionCheck, /yourdomain\.com/, 'production API validation should reject unchanged example hosts')
+const productionValidation = readFileSync(resolve('src/apiBaseValidation.mjs'), 'utf8')
+assert.match(productionCheck, /blocked/, 'production API validation should handle blocked hosts')
+assert.match(productionValidation, /\.local/, 'production API validation should reject .local placeholder/internal hosts')
+assert.match(productionValidation, /yourdomain/, 'production API validation should reject unchanged example hosts')
 assert.doesNotMatch(qa, /\nnpm run build:h5\n/, 'QA automation should not suggest production H5 build without VITE_API_BASE')
 assert.doesNotMatch(qa, /nine-xing\.local/, 'QA automation should not use .local placeholder API hosts')
 

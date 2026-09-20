@@ -13,6 +13,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/classroom"
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/teacher"
+	"nine-xing/nx-backend/apps/server/internal/uploadasset"
 	"reflect"
 	"strings"
 	"testing"
@@ -47,7 +48,7 @@ func (c *teacherVideoTestConn) QueryContext(_ context.Context, query string, _ [
 	if strings.Contains(query, "FROM teacher_profiles") {
 		return &teacherVideoTestRows{
 			columns: strings.Split("id,teacher_key,name,title,avatar,cover,short_intro,detail_intro,expertise,intro_video_url,customer_service,offline_service,show_on_home,show_in_drawer,sort_order,enabled,created_at,updated_at", ","),
-			values:  [][]driver.Value{{int64(1), "han", "老韩", "导师", "", "", "", "", []byte(`[]`), "", []byte(`null`), []byte(`null`), false, false, int64(0), true, now, now}},
+			values:  [][]driver.Value{{int64(1), "han", "老韩", "导师", "/api/upload-assets/26", "/api/upload-assets/25", "", "", []byte(`[]`), "", []byte(`null`), []byte(`null`), false, false, int64(0), true, now, now}},
 		}, nil
 	}
 	if strings.Contains(query, "FROM classroom_contents") {
@@ -62,6 +63,12 @@ func (c *teacherVideoTestConn) QueryContext(_ context.Context, query string, _ [
 			{int64(2), nil, false, "日常二", "", "han", "daily", "published", "", nil, now, now, now},
 			{int64(1), nil, false, "课程一", "", "han", "course", "published", "", nil, now.Add(-time.Hour), now.Add(-time.Hour), now},
 		}}, nil
+	}
+	if strings.Contains(query, "FROM upload_assets") {
+		return &teacherVideoTestRows{
+			columns: strings.Split("id,key,name,content_type,size,data,object_key,object_url", ","),
+			values:  [][]driver.Value{{int64(25), "upload-assets/25", "cover.png", "image/png", int64(5), []byte("cover"), "", ""}},
+		}, nil
 	}
 	return nil, errors.New("unexpected query")
 }
@@ -130,6 +137,89 @@ func TestTeacherRoutesAreLoginProtected(t *testing.T) {
 	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestTeacherCollectionReturnsPublicProfileImageURLs(t *testing.T) {
+	drv := &teacherVideoTestDriver{}
+	name := "teacher-collection-test-" + strings.ReplaceAll(t.Name(), "/", "-")
+	sql.Register(name, drv)
+	db, err := sql.Open(name, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	s := &Server{teachers: teacher.NewStore(db)}
+	r := httptest.NewRequest(http.MethodGet, "/api/app/teachers", nil)
+	rr := httptest.NewRecorder()
+	s.appTeacherCollection(rr, r)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if body := rr.Body.String(); !strings.Contains(body, `"avatar":"/api/public/teacher-assets/26"`) || !strings.Contains(body, `"cover":"/api/public/teacher-assets/25"`) {
+		t.Fatalf("teacher response did not expose public image URLs: %s", body)
+	}
+}
+
+func TestPublicTeacherAssetServesOnlyReferencedProfileImage(t *testing.T) {
+	drv := &teacherVideoTestDriver{}
+	name := "teacher-public-asset-test-" + strings.ReplaceAll(t.Name(), "/", "-")
+	sql.Register(name, drv)
+	db, err := sql.Open(name, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	s := &Server{teachers: teacher.NewStore(db), uploads: uploadasset.NewStore(db)}
+	r := httptest.NewRequest(http.MethodGet, "/api/public/teacher-assets/25", nil)
+	rr := httptest.NewRecorder()
+	s.publicTeacherAsset(rr, r)
+	if rr.Code != http.StatusOK || rr.Body.String() != "cover" {
+		t.Fatalf("status=%d body=%q", rr.Code, rr.Body.String())
+	}
+
+	r = httptest.NewRequest(http.MethodGet, "/api/public/teacher-assets/99", nil)
+	rr = httptest.NewRecorder()
+	s.publicTeacherAsset(rr, r)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("unreferenced asset status=%d", rr.Code)
+	}
+}
+
+func TestPublicTeacherRewritesProtectedImageURLs(t *testing.T) {
+	item := teacher.Teacher{
+		Key:    "han",
+		Name:   "老韩",
+		Avatar: "/api/upload-assets/26",
+		Cover:  "/api/uploads/teacher-covers/cover.jpg",
+	}
+
+	rewritePublicTeacherAssets(&item)
+
+	if item.Avatar != "/api/public/teacher-assets/26" {
+		t.Fatalf("avatar=%q", item.Avatar)
+	}
+	if item.Cover != "/api/public/teacher-uploads/teacher-covers/cover.jpg" {
+		t.Fatalf("cover=%q", item.Cover)
+	}
+}
+
+func TestTeacherAssetReferenceOnlyAcceptsEnabledProfileImages(t *testing.T) {
+	items := []teacher.Teacher{
+		{Key: "enabled", Enabled: true, Avatar: "/api/upload-assets/26"},
+		{Key: "disabled", Enabled: false, Cover: "/api/upload-assets/27"},
+	}
+
+	if !teachersReferenceUploadAsset(items, 26) {
+		t.Fatal("enabled teacher avatar should be public")
+	}
+	if teachersReferenceUploadAsset(items, 27) {
+		t.Fatal("disabled teacher cover should stay private")
+	}
+	if teachersReferenceUploadAsset(items, 99) {
+		t.Fatal("unreferenced upload should stay private")
 	}
 }
 

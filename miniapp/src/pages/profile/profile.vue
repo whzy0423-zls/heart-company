@@ -193,23 +193,58 @@ function openProfileEdit() {
 function openBookingRecords() {
   uni.navigateTo({ url: '/pages/booking-records/booking-records' })
 }
+
+function openLearn() {
+  uni.switchTab({ url: '/pages/learn/learn' })
+}
+
+function openTest() {
+  uni.navigateTo({ url: '/pages/test/test' })
+}
 </script>
 
 <template>
   <view class="wrap profile page-stack ios-page ios-safe-bottom">
-    <view v-if="!logged" class="profile-hero nx-page-hero login">
-      <image v-if="!profileLogoFailed" src="/static/wheel.png" mode="aspectFit" aria-label="九型 Logo" class="profile-hero__mark profile-logo" @error="onProfileLogoError" />
-      <view v-else class="profile-hero__mark profile-hero__mark--ph">九</view>
-      <text class="profile-hero__eyebrow">个人档案</text>
-      <text class="profile-hero__title">记录每一次自我看见</text>
-      <text class="profile-hero__lead">登录后沉淀你的九型档案、测试历史和预约记录。</text>
-      <!-- #ifdef H5 -->
-      <button class="profile-login ios-button" disabled>请在微信小程序内登录</button>
-      <text class="login__hint">H5 可浏览公开内容；保存档案和预约记录请打开微信小程序。</text>
-      <!-- #endif -->
-      <!-- #ifndef H5 -->
-      <button class="profile-login ios-button" :loading="logging" :disabled="logging" @click="login">微信一键登录</button>
-      <!-- #endif -->
+    <view v-if="!logged" class="profile-guest">
+      <view class="profile-hero nx-page-hero login">
+        <image v-if="!profileLogoFailed" src="/static/wheel.png" mode="aspectFit" aria-label="九型 Logo" class="profile-hero__mark profile-logo" @error="onProfileLogoError" />
+        <view v-else class="profile-hero__mark profile-hero__mark--ph">九</view>
+        <text class="profile-hero__eyebrow">个人档案</text>
+        <text class="profile-hero__title">记录每一次自我看见</text>
+        <text class="profile-hero__lead">登录后沉淀你的九型档案、测试历史和预约记录。</text>
+        <view class="login-benefits" aria-label="登录后可使用的功能">
+          <text>保存测试结果</text>
+          <text>查看预约进度</text>
+          <text>持续记录成长</text>
+        </view>
+        <!-- #ifdef H5 -->
+        <button class="profile-login ios-button" disabled>请在微信小程序内登录</button>
+        <text class="login__hint">H5 可浏览公开内容；保存档案和预约记录请打开微信小程序。</text>
+        <!-- #endif -->
+        <!-- #ifndef H5 -->
+        <button class="profile-login ios-button" :loading="logging" :disabled="logging" @click="login">微信一键登录</button>
+        <!-- #endif -->
+      </view>
+
+      <view class="guest-preview">
+        <view class="guest-preview__heading">
+          <text class="guest-preview__eyebrow">现在就开始</text>
+          <text class="guest-preview__title">先探索，再决定是否登录</text>
+        </view>
+        <view class="guest-preview__actions">
+          <view class="guest-preview__action guest-preview__action--test" role="button" tabindex="0" hover-class="profile-action--pressed" @click="openTest" @keydown.enter="openTest" @keydown.space.prevent="openTest">
+            <text class="guest-preview__number">01</text>
+            <text class="guest-preview__action-title">开始九型测试</text>
+            <text class="guest-preview__action-desc">用一组问题认识你的关注点</text>
+          </view>
+          <view class="guest-preview__action guest-preview__action--learn" role="button" tabindex="0" hover-class="profile-action--pressed" @click="openLearn" @keydown.enter="openLearn" @keydown.space.prevent="openLearn">
+            <text class="guest-preview__number">02</text>
+            <text class="guest-preview__action-title">浏览学习内容</text>
+            <text class="guest-preview__action-desc">看看课程、课件和九型地图</text>
+          </view>
+        </view>
+        <text class="guest-preview__note">登录只在你需要保存记录和预约时使用。</text>
+      </view>
     </view>
 
     <template v-else>
@@ -251,6 +286,24 @@ function openBookingRecords() {
             <text class="profile-stat__value">{{ bookingCountLabel }}</text>
             <text class="profile-stat__label">预约</text>
           </view>
+        </view>
+      </view>
+
+      <view class="profile-actions" aria-label="个人快捷操作">
+        <view class="profile-action profile-action--primary" role="button" tabindex="0" hover-class="profile-action--pressed" @click="openTest" @keydown.enter="openTest" @keydown.space.prevent="openTest">
+          <text class="profile-action__index">01</text>
+          <text class="profile-action__title">重新测试</text>
+          <text class="profile-action__desc">更新你的九型画像</text>
+        </view>
+        <view class="profile-action profile-action--gold" role="button" tabindex="0" hover-class="profile-action--pressed" @click="openBookingRecords" @keydown.enter="openBookingRecords" @keydown.space.prevent="openBookingRecords">
+          <text class="profile-action__index">02</text>
+          <text class="profile-action__title">预约记录</text>
+          <text class="profile-action__desc">查看老师沟通安排</text>
+        </view>
+        <view class="profile-action profile-action--soft" role="button" tabindex="0" hover-class="profile-action--pressed" @click="openLearn" @keydown.enter="openLearn" @keydown.space.prevent="openLearn">
+          <text class="profile-action__index">03</text>
+          <text class="profile-action__title">继续学习</text>
+          <text class="profile-action__desc">回到课程与课件</text>
         </view>
       </view>
 
@@ -423,5 +476,152 @@ function openBookingRecords() {
   .profile-hero,
   .history-section,
   .booking-summary { padding-left: 26rpx; padding-right: 26rpx; }
+}
+
+/* Personal dashboard refresh: compact identity, clear stats, calm history cards. */
+.profile {
+  gap: 18rpx;
+  padding-top: 22rpx;
+  background: var(--nx-page-bg);
+}
+
+.profile-hero {
+  padding: 28rpx;
+  border-radius: 28rpx;
+  box-shadow: 0 22rpx 48rpx -34rpx rgba(32, 42, 55, .72);
+}
+
+.login.profile-hero { min-height: 0; justify-content: flex-start; padding-top: 30rpx; padding-bottom: 28rpx; }
+.profile-hero__mark { width: 96rpx; height: 96rpx; border-radius: 26rpx; }
+.profile-hero__title { font-size: 38rpx; }
+.profile-hero__lead { font-size: 24rpx; }
+.profile-login { min-height: 94rpx; margin-top: 12rpx; border-radius: 20rpx; }
+.login-benefits { display: flex; flex-wrap: wrap; gap: 10rpx; margin-top: 20rpx; }
+.login-benefits text { padding: 8rpx 12rpx; border: 2rpx solid rgba(223, 188, 127, .32); border-radius: 999rpx; color: rgba(255, 255, 255, .82); background: rgba(255, 255, 255, .08); font-size: 21rpx; }
+
+.guest-preview {
+  padding: 24rpx;
+  border: 2rpx solid var(--nx-border);
+  border-radius: 24rpx;
+  background: var(--nx-surface);
+  box-shadow: 0 14rpx 32rpx -28rpx rgba(32, 42, 55, .5);
+}
+.guest-preview__heading { display: flex; flex-direction: column; gap: 5rpx; padding-left: 14rpx; border-left: 6rpx solid var(--nx-accent-gold); }
+.guest-preview__eyebrow { color: var(--nx-brand-700); font-size: 21rpx; font-weight: 900; letter-spacing: 1rpx; }
+.guest-preview__title { color: var(--nx-brand-900); font-size: 29rpx; font-weight: 900; line-height: 1.35; }
+.guest-preview__actions { display: flex; gap: 12rpx; margin-top: 18rpx; }
+.guest-preview__action { flex: 1 1 0; min-width: 0; min-height: 150rpx; padding: 20rpx; display: flex; flex-direction: column; justify-content: flex-end; border: 2rpx solid var(--nx-border); border-radius: 20rpx; box-sizing: border-box; touch-action: manipulation; }
+.guest-preview__action--test { background: #EEF1F3; border-color: rgba(49, 64, 82, .22); }
+.guest-preview__action--learn { background: #F8F1E5; border-color: rgba(223, 188, 127, .48); }
+.guest-preview__number { color: var(--nx-brand-700); font-size: 20rpx; font-weight: 900; letter-spacing: 1rpx; }
+.guest-preview__action-title { margin-top: 8rpx; color: var(--nx-brand-900); font-size: 26rpx; font-weight: 900; line-height: 1.35; }
+.guest-preview__action-desc { margin-top: 5rpx; color: var(--nx-text-muted); font-size: 21rpx; line-height: 1.4; }
+.guest-preview__note { display: block; margin-top: 16rpx; color: var(--nx-text-muted); font-size: 21rpx; line-height: 1.5; }
+
+.user.profile-hero { padding-top: 24rpx; }
+.profile-hero__identity-action { min-height: 104rpx; padding: 4rpx 0; }
+.user__avatar { width: 92rpx; height: 92rpx; flex-basis: 92rpx; border-radius: 26rpx; }
+.user__name { font-size: 32rpx; }
+.profile-stats { gap: 10rpx; margin-top: 22rpx; }
+.profile-stat { padding: 16rpx 8rpx; border-radius: 18rpx; background: rgba(255, 255, 255, .12); }
+.profile-stat__value { font-size: 30rpx; }
+.profile-stat__label { font-size: 22rpx; }
+
+.history-section,
+.booking-summary {
+  position: relative;
+  overflow: hidden;
+  padding: 24rpx;
+  border-radius: 24rpx;
+  box-shadow: 0 14rpx 32rpx -28rpx rgba(32, 42, 55, .5);
+}
+
+.history-section::before,
+.booking-summary::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 8rpx;
+}
+.history-section::before { background: var(--nx-brand-700); }
+.booking-summary::before { background: var(--nx-accent-gold); }
+.section-head { margin-bottom: 18rpx; padding-top: 4rpx; }
+.section-kicker { font-size: 21rpx; letter-spacing: 1rpx; }
+.sec-title { font-size: 29rpx; }
+.section-count { font-size: 28rpx; }
+
+.empty { min-height: 116rpx; display: flex; align-items: center; justify-content: center; padding: 20rpx; border-radius: 18rpx; }
+.history-item { min-height: 78rpx; gap: 16rpx; }
+.history-item__rail { padding-top: 26rpx; }
+.history-item__dot { width: 14rpx; height: 14rpx; }
+.history-item__body { padding: 14rpx 0; }
+.history-item__main { font-size: 26rpx; }
+.history-item__meta { font-size: 22rpx; }
+.more-tip { font-size: 22rpx; }
+
+.booking-summary__open { padding: 20rpx; border-radius: 18rpx; background: #F8F1E5; }
+.booking-summary__state { min-height: 82rpx; }
+.booking-summary__main { font-size: 26rpx; }
+.booking-summary__meta { font-size: 22rpx; }
+.booking-summary__footer { margin-top: 16rpx; padding-top: 14rpx; color: var(--nx-brand-700); }
+
+.logout {
+  min-height: 82rpx;
+  margin-top: 2rpx;
+  border: 2rpx solid rgba(180, 35, 24, .22);
+  border-radius: 18rpx;
+  background: transparent;
+  color: var(--nx-danger);
+  font-size: 24rpx;
+}
+
+.profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+}
+
+.profile-action {
+  position: relative;
+  overflow: hidden;
+  flex: 1 1 30%;
+  min-width: 0;
+  min-height: 148rpx;
+  padding: 20rpx;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  border: 2rpx solid var(--nx-border);
+  border-radius: 22rpx;
+  box-sizing: border-box;
+  touch-action: manipulation;
+}
+
+.profile-action::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 7rpx;
+  background: var(--nx-brand-700);
+}
+
+.profile-action--primary { background: #EEF1F3; }
+.profile-action--gold { background: #F8F1E5; }
+.profile-action--gold::before { background: var(--nx-accent-gold); }
+.profile-action--soft { background: #F2F3EF; }
+.profile-action--soft::before { background: #7A6253; }
+.profile-action__index { color: var(--nx-brand-700); font-size: 20rpx; font-weight: 900; letter-spacing: 1rpx; }
+.profile-action__title { margin-top: 8rpx; color: var(--nx-brand-900); font-size: 27rpx; font-weight: 900; line-height: 1.35; }
+.profile-action__desc { margin-top: 5rpx; color: var(--nx-text-muted); font-size: 21rpx; line-height: 1.4; }
+.profile-action--pressed { opacity: .78; transform: translateY(2rpx); }
+.profile-action:focus-visible { outline: 4rpx solid var(--nx-accent-gold); outline-offset: 3rpx; }
+
+@media (max-width: 500rpx) {
+  .profile-action { flex-basis: 45%; }
+  .profile-action--soft { flex-basis: 100%; min-height: 116rpx; }
 }
 </style>

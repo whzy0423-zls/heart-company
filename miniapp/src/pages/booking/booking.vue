@@ -241,6 +241,11 @@ function submitAnother() {
         <text class="enterprise-hero__eyebrow">{{ enterpriseView.eyebrow }}</text>
         <text class="enterprise-hero__title">{{ enterpriseView.title }}</text>
         <text class="enterprise-hero__lead">{{ enterpriseView.lead }}</text>
+        <view class="enterprise-hero__meta" aria-label="预约服务特点">
+          <text>先沟通</text>
+          <text>再定方案</text>
+          <text>按需匹配</text>
+        </view>
       </view>
 
       <view class="enterprise-scenarios">
@@ -464,18 +469,21 @@ button::after {
 }
 
 .enterprise-scenarios__grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 14rpx;
 }
 
 .enterprise-scenario,
 .enterprise-process__item {
+  flex: 1 1 30%;
+  min-width: 0;
   padding: 26rpx;
   border: 2rpx solid var(--nx-border);
   border-radius: 28rpx;
   background: var(--nx-surface);
 }
+.enterprise-process__item { flex: none; }
 
 .enterprise-scenario__title,
 .enterprise-process__title,
@@ -754,8 +762,11 @@ button::after {
 
 @media (max-width: 420px) {
   .enterprise-scenarios__grid {
+    flex-direction: column;
     grid-template-columns: 1fr;
   }
+
+  .enterprise-scenario { flex-basis: auto; }
 
   .draft-restored,
   .enterprise-mode {
@@ -763,4 +774,98 @@ button::after {
     flex-direction: column;
   }
 }
+
+/* Booking page visual refresh. Keep the form calm and let one action lead. */
+.booking {
+  gap: 26rpx;
+  background: var(--nx-page-bg);
+}
+
+.enterprise-hero { order: 1; }
+.enterprise-modes { order: 2; }
+.enterprise-scenarios { order: 3; }
+.enterprise-process { order: 4; }
+.draft-restored { order: 5; }
+.booking-form { order: 6; }
+
+.enterprise-hero {
+  position: relative;
+  overflow: hidden;
+  min-height: 276rpx;
+  justify-content: flex-end;
+  padding: 34rpx 28rpx;
+  border-color: rgba(223, 188, 127, .58);
+  border-radius: 28rpx;
+  background: #EEE6D8;
+  box-shadow: 0 18rpx 42rpx -32rpx rgba(32, 42, 55, .42);
+}
+
+.enterprise-hero::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 42%;
+  height: 10rpx;
+  background: var(--nx-brand-900);
+}
+
+.enterprise-hero__eyebrow { color: var(--nx-brand-700); }
+.enterprise-hero__title { max-width: 640rpx; color: var(--nx-brand-900); font-size: 42rpx; }
+.enterprise-hero__lead { max-width: 660rpx; color: var(--nx-text-muted); font-size: 24rpx; }
+.enterprise-hero__meta { display: flex; flex-wrap: wrap; gap: 10rpx; margin-top: 20rpx; }
+.enterprise-hero__meta text { padding: 8rpx 14rpx; border: 2rpx solid rgba(49, 64, 82, .16); border-radius: 999rpx; color: var(--nx-brand-700); background: rgba(255, 253, 248, .58); font-size: 21rpx; font-weight: 900; }
+
+.enterprise-scenarios,
+.enterprise-modes,
+.enterprise-process { gap: 18rpx; }
+
+.section-heading { padding-left: 16rpx; border-left: 6rpx solid var(--nx-accent-gold); }
+.section-heading__eyebrow { color: var(--nx-brand-700); font-size: 21rpx; }
+.section-heading__title { font-size: 31rpx; }
+
+.enterprise-scenarios__grid { gap: 12rpx; }
+.enterprise-scenario {
+  flex-basis: 45%;
+  min-height: 158rpx;
+  padding: 22rpx;
+  border-radius: 20rpx;
+  background: var(--nx-surface);
+  box-shadow: 0 10rpx 24rpx -22rpx rgba(32, 42, 55, .54);
+}
+.enterprise-scenario:nth-child(2n) { border-color: rgba(223, 188, 127, .48); background: #F8F1E5; }
+.enterprise-scenario__title { font-size: 26rpx; }
+.enterprise-scenario__description { font-size: 22rpx; }
+
+.enterprise-mode {
+  min-height: 98rpx;
+  padding: 20rpx 22rpx;
+  border-radius: 20rpx;
+  background: var(--nx-surface);
+}
+.enterprise-mode--active { border-color: var(--nx-accent-gold); background: #F8F1E5; }
+.enterprise-mode__title { font-size: 27rpx; }
+.enterprise-mode__description { font-size: 22rpx; }
+.enterprise-mode__action { min-width: 108rpx; min-height: 58rpx; padding: 0 14rpx; display: inline-flex; align-items: center; justify-content: center; border-radius: 999rpx; background: var(--nx-brand-900); color: var(--nx-accent-gold); }
+
+.enterprise-process__item { padding: 20rpx; border-radius: 20rpx; background: var(--nx-surface); }
+.enterprise-process__index { min-width: 48rpx; height: 48rpx; border-radius: 14rpx; background: var(--nx-brand-900); color: var(--nx-accent-gold); }
+
+.draft-restored { padding: 20rpx; border-radius: 20rpx; background: #F8F1E5; }
+.booking-form { padding: 28rpx 24rpx; border-radius: 26rpx; background: var(--nx-surface); box-shadow: 0 16rpx 36rpx -30rpx rgba(32, 42, 55, .46); }
+.booking-form .section-heading { margin-bottom: 4rpx; }
+.form-section { gap: 16rpx; }
+.field { gap: 8rpx; }
+.label { color: var(--nx-brand-900); font-size: 24rpx; }
+.field-control { min-height: 88rpx; border-radius: 18rpx; background: var(--nx-surface-soft); }
+.textarea { min-height: 168rpx; }
+.booking-submit { min-height: 96rpx; margin-top: 6rpx; border-radius: 20rpx; background: var(--nx-brand-900); box-shadow: 0 14rpx 28rpx -20rpx rgba(32, 42, 55, .72); }
+
+.booking-success { border-radius: 28rpx; }
+
+@media (max-width: 420px) {
+  .enterprise-scenarios__grid { flex-direction: column; }
+  .enterprise-scenario { flex-basis: auto; min-height: 132rpx; }
+}
+
 </style>

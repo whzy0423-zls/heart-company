@@ -917,6 +917,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/public/site-visits", s.method(http.MethodPost, s.publicSiteVisit))
 	s.mux.HandleFunc("/api/public/site-assets/", s.method(http.MethodGet, s.publicSiteAsset))
 	s.mux.HandleFunc("/api/public/site-uploads/", s.method(http.MethodGet, s.publicSiteUpload))
+	s.mux.HandleFunc("/api/public/teacher-assets/", s.method(http.MethodGet, s.publicTeacherAsset))
+	s.mux.HandleFunc("/api/public/teacher-uploads/", s.method(http.MethodGet, s.publicTeacherUpload))
 	s.mux.HandleFunc("/api/public/story-skill-covers/", s.method(http.MethodGet, s.publicStorySkillCover))
 	// 阅读 H5：公开只读文章列表 / 详情 / 分类。
 	s.mux.HandleFunc("/api/public/articles", s.method(http.MethodGet, s.publicArticles))

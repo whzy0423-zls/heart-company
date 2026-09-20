@@ -13,6 +13,18 @@
       }
     },
     {
+      "path": "pages/enneagram/enneagram",
+      "style": {
+        "navigationBarTitleText": "认识九型"
+      }
+    },
+    {
+      "path": "pages/enneagram-detail/enneagram-detail",
+      "style": {
+        "navigationBarTitleText": "九型人格详情"
+      }
+    },
+    {
       "path": "pages/result/result",
       "style": {
         "navigationBarTitleText": "你的性格芯片"
@@ -31,9 +43,33 @@
       }
     },
     {
+      "path": "pages/classroom/classroom",
+      "style": {
+        "navigationBarTitleText": "老师课堂"
+      }
+    },
+    {
+      "path": "pages/classroom-detail/classroom-detail",
+      "style": {
+        "navigationBarTitleText": "课件详情"
+      }
+    },
+    {
       "path": "pages/booking/booking",
       "style": {
         "navigationBarTitleText": "预约咨询"
+      }
+    },
+    {
+      "path": "pages/booking-records/booking-records",
+      "style": {
+        "navigationBarTitleText": "预约记录"
+      }
+    },
+    {
+      "path": "pages/booking-detail/booking-detail",
+      "style": {
+        "navigationBarTitleText": "预约详情"
       }
     },
     {
@@ -41,11 +77,17 @@
       "style": {
         "navigationBarTitleText": "我的"
       }
+    },
+    {
+      "path": "pages/profile-edit/profile-edit",
+      "style": {
+        "navigationBarTitleText": "编辑资料"
+      }
     }
   ],
   "tabBar": {
     "color": "#9aa7b5",
-    "selectedColor": "#335B4A",
+    "selectedColor": "#314052",
     "backgroundColor": "#FFFDF8",
     "borderStyle": "white",
     "list": [
@@ -78,7 +120,7 @@
   "globalStyle": {
     "navigationBarTextStyle": "black",
     "navigationBarTitleText": "九型芯之力",
-    "navigationBarBackgroundColor": "#fbfcff",
-    "backgroundColor": "#f7f8fb"
+    "navigationBarBackgroundColor": "#F5F3ED",
+    "backgroundColor": "#F5F3ED"
   }
 }

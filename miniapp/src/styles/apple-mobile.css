@@ -1,17 +1,38 @@
-:root,
-page {
-  --nx-bg: #F3EFE7;
+:root {
+  --nx-brand-900: #202A37;
+  --nx-brand-700: #314052;
+  --nx-accent-gold: #DFBC7F;
+  --nx-page-bg: #F5F3ED;
+  --nx-surface-soft: #FAF8F2;
+  --nx-text: #1D2733;
+  --nx-text-muted: #64748B;
+  --nx-border: #E0DDD4;
+  --nx-danger: #B42318;
+  --nx-success: #157A55;
+  --nx-mist-bg: var(--nx-page-bg);
+  --nx-mist-surface: var(--nx-surface);
+  --nx-mist-soft: #F1E8D8;
+  --nx-mist-brand: var(--nx-brand-700);
+  --nx-mist-brand-soft: #EEE6D8;
+  --nx-mist-gold: var(--nx-accent-gold);
+  --nx-mist-border: var(--nx-border);
+  --booking-gold-soft: rgba(223, 188, 127, 0.18);
+  --booking-gold-border: rgba(223, 188, 127, 0.34);
+  --booking-on-brand-muted: rgba(255, 255, 255, 0.82);
+  --booking-brand-shadow: rgba(32, 42, 55, 0.28);
+
+  --nx-bg: var(--nx-page-bg);
   --nx-surface: #FFFDF8;
-  --nx-ink: #17212B;
-  --nx-muted: #68727C;
-  --nx-blue: #315BEA;
-  --nx-coral: #C9472D;
-  --nx-coral-soft: #F5DDD6;
-  --nx-jade: #347B62;
-  --nx-lilac: #A99BD4;
-  --nx-line: #DEDCD5;
+  --nx-ink: var(--nx-text);
+  --nx-muted: var(--nx-text-muted);
+  --nx-blue: var(--nx-brand-700);
+  --nx-coral: var(--nx-accent-gold);
+  --nx-coral-soft: #F1E8D8;
+  --nx-jade: var(--nx-brand-700);
+  --nx-lilac: #C8BDAA;
+  --nx-line: var(--nx-border);
   --nx-error: #B42318;
-  --nx-focus: #2449C7;
+  --nx-focus: var(--nx-brand-700);
   --nx-overlay: rgba(10, 17, 25, .56);
 
   --nx-radius-sm: 16rpx;
@@ -30,7 +51,7 @@ page {
   /* Temporary aliases while existing pages move to the editorial vocabulary. */
   --nx-bg-soft: var(--nx-surface);
   --nx-primary: var(--nx-blue);
-  --nx-primary-soft: #E4E9FC;
+  --nx-primary-soft: #EEE6D8;
   --nx-card: var(--nx-surface);
   --nx-radius: var(--nx-radius-lg);
 }

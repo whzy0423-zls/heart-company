@@ -92,10 +92,11 @@ function teacherNameAndTitle(source) {
 
 function hasTeacherContent(source) {
   if (!source || typeof source !== 'object') return false
+  const title = firstText(source, ['title'])
   return !!firstText(source, [
-    'name', 'teacherName', 'nickname', 'title', 'role', 'position', 'subtitle',
+    'name', 'teacherName', 'nickname',
     'avatar', 'photo', 'image', 'cover', 'bio', 'description', 'desc', 'intro', 'summary', 'lead',
-  ]) || normalizeTags(source.tags || source.badges || source.specialties || source.skills).length > 0
+  ]) || /[|｜（）()]/.test(title) || normalizeTags(source.tags || source.badges || source.specialties || source.skills).length > 0
 }
 
 function uniqueByTitle(items) {

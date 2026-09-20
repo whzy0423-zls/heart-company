@@ -184,6 +184,40 @@ func (s *Server) publicSiteAsset(w http.ResponseWriter, r *http.Request) {
 	writePublicUploadAsset(w, asset)
 }
 
+func (s *Server) publicTeacherAsset(w http.ResponseWriter, r *http.Request) {
+	id := publicAssetIDFromPath(r.URL.Path, "/api/public/teacher-assets/")
+	if id <= 0 || s.teachers == nil || s.uploads == nil {
+		http.NotFound(w, r)
+		return
+	}
+	items, err := s.teachers.List(r.Context(), false)
+	if err != nil || !teachersReferenceUploadAsset(items, id) {
+		http.NotFound(w, r)
+		return
+	}
+	asset, err := s.uploads.Find(r.Context(), id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	writePublicUploadAsset(w, asset)
+}
+
+func (s *Server) publicTeacherUpload(w http.ResponseWriter, r *http.Request) {
+	rel := publicUploadRelativePath(r.URL.Path, "/api/public/teacher-uploads/")
+	if rel == "" || s.teachers == nil {
+		http.NotFound(w, r)
+		return
+	}
+	privateURL := "/api/uploads/" + rel
+	items, err := s.teachers.List(r.Context(), false)
+	if err != nil || !teachersReferenceLocalUpload(items, privateURL) {
+		http.NotFound(w, r)
+		return
+	}
+	s.servePublicLocalUpload(w, r, rel)
+}
+
 func (s *Server) publicSiteUpload(w http.ResponseWriter, r *http.Request) {
 	rel := publicUploadRelativePath(r.URL.Path, "/api/public/site-uploads/")
 	if rel == "" {
@@ -331,6 +365,7 @@ func referencedUploadAssetID(raw string) (int64, bool) {
 		"/api/public/admin-branding-assets/",
 		"/api/public/article-assets/",
 		"/api/public/site-assets/",
+		"/api/public/teacher-assets/",
 	} {
 		if strings.HasPrefix(u.Path, prefix) {
 			id := publicAssetIDFromPath(u.Path, prefix)
@@ -353,6 +388,7 @@ func referencedLocalUploadRelativePath(raw string) (string, bool) {
 		"/api/public/admin-branding-uploads/",
 		"/api/public/article-uploads/",
 		"/api/public/site-uploads/",
+		"/api/public/teacher-uploads/",
 	} {
 		if rel := publicUploadRelativePath(u.Path, prefix); rel != "" {
 			return rel, true

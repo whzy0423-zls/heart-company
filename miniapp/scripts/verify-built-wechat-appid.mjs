@@ -5,7 +5,7 @@ import { extname, resolve } from 'node:path'
 const buildRoot = resolve('dist/build/mp-weixin')
 const projectConfigPath = resolve(buildRoot, 'project.config.json')
 const builtConfigPath = resolve(buildRoot, 'config.js')
-const productionAppId = 'wx7d12bddbec8e17f7'
+const productionAppId = 'wx7218327a92c4411d'
 const productionApiBase = 'https://xn--9iq9az5uo8fz16d.com/api'
 const forbiddenApiHosts = [
   /api\.example\.com/i,

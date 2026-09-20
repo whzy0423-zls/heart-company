@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const scriptPath = resolve(dirname(fileURLToPath(import.meta.url)), 'verify-built-wechat-appid.mjs')
-const productionAppId = 'wx7d12bddbec8e17f7'
+const productionAppId = 'wx7218327a92c4411d'
 const productionApiBase = 'https://xn--9iq9az5uo8fz16d.com/api'
 
 function createBuild({

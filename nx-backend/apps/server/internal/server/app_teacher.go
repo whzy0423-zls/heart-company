@@ -22,6 +22,9 @@ func (s *Server) appTeacherCollection(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, "list teachers failed")
 		return
 	}
+	for i := range items {
+		rewritePublicTeacherAssets(&items[i])
+	}
 	httpx.OK(w, map[string]any{"items": items})
 }
 
@@ -122,7 +125,38 @@ func (s *Server) appTeacherDetail(w http.ResponseWriter, r *http.Request, key st
 		httpx.Fail(w, http.StatusNotFound, "teacher not found")
 		return
 	}
+	rewritePublicTeacherAssets(&item)
 	httpx.OK(w, item)
+}
+
+func rewritePublicTeacherAssets(item *teacher.Teacher) {
+	if item == nil {
+		return
+	}
+	item.Avatar = publicTeacherAssetURL(item.Avatar)
+	item.Cover = publicTeacherAssetURL(item.Cover)
+}
+
+func publicTeacherAssetURL(raw string) string {
+	return publicConfigAssetURL(raw, "/api/public/teacher-assets/", "/api/public/teacher-uploads/")
+}
+
+func teachersReferenceUploadAsset(items []teacher.Teacher, id int64) bool {
+	for _, item := range items {
+		if item.Enabled && (valueReferencesUploadAsset(item.Avatar, id) || valueReferencesUploadAsset(item.Cover, id)) {
+			return true
+		}
+	}
+	return false
+}
+
+func teachersReferenceLocalUpload(items []teacher.Teacher, privateURL string) bool {
+	for _, item := range items {
+		if item.Enabled && (valueReferencesLocalUpload(item.Avatar, privateURL) || valueReferencesLocalUpload(item.Cover, privateURL)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) appTeacherContentList(w http.ResponseWriter, r *http.Request, key string, daily bool) {

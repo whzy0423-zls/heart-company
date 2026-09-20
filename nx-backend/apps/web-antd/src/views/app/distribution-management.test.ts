@@ -248,8 +248,9 @@ describe('distribution management page', () => {
     for (const expected of [
       '上传海报模板',
       '生成并下载 PNG',
-      'headline',
-      'subtitle',
+      'templateUrl',
+      'qrSize',
+      'inviteWidth',
       'inviteCode',
       'landingUrl',
       'QRCode.toDataURL',

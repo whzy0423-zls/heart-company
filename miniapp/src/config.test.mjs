@@ -12,8 +12,8 @@ const { resolveApiBase } = await import(`file://${modulePath}`)
 const developmentEnv = await readFile(new URL('../.env.development', import.meta.url), 'utf8')
 assert.match(
   developmentEnv,
-  /^VITE_API_BASE=http:\/\/127\.0\.0\.1:5320\/api\s*$/m,
-  'dev:mp-weixin should use the local test API so freshly published backend courseware is visible',
+  /^VITE_API_BASE=https:\/\/xn--9iq9az5uo8fz16d\.com\/api\s*$/m,
+  'dev:mp-weixin should use the reachable HTTPS API so courseware loads in the WeChat developer tool',
 )
 
 const originalURL = globalThis.URL

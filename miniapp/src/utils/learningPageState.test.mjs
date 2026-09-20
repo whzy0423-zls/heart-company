@@ -137,6 +137,8 @@ assert.deepEqual(
   'course data should flatten into stable, unique material entries using course and material identities',
 )
 assert.equal(new Set(flattenedMaterials.map((item) => item.key)).size, flattenedMaterials.length, 'flattened material keys should remain unique')
+assert.equal(flattenedMaterials[0].contentId, 'course-a', 'materials should retain the published classroom content id')
+assert.equal(flattenedMaterials[1].contentType, 'audio', 'audio materials should retain their playback type')
 assert.deepEqual(
   flattenLearningMaterials(materialCourses).map((item) => item.key),
   flattenedMaterials.map((item) => item.key),

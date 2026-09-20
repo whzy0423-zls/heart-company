@@ -110,7 +110,6 @@ function onClick(event) {
 }
 
 .type-badge {
-  --badge-ink: var(--nx-ink, #17212B);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -120,7 +119,7 @@ function onClick(event) {
   border: 2rpx solid var(--nx-line, #DEDCD5);
   border-radius: 999rpx;
   background: var(--nx-surface, #FFFDF8);
-  color: var(--badge-ink);
+  color: var(--nx-ink, #17212B);
   box-sizing: border-box;
   transition: opacity .16s ease, transform .16s ease, box-shadow .16s ease;
 }
@@ -140,12 +139,12 @@ function onClick(event) {
 }
 
 .type-badge__number {
-  color: var(--badge-ink);
+  color: var(--nx-ink, #17212B);
   font-weight: 900;
 }
 
 .type-badge__label {
-  color: var(--badge-ink);
+  color: var(--nx-ink, #17212B);
   font-weight: 700;
 }
 
