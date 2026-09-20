@@ -269,6 +269,12 @@ func normalizeCardFeatureCopy(features []string, cardLimit int) []string {
 			continue
 		}
 		prefix := strings.TrimSpace(feature[:strings.Index(feature, needle)])
+		// Existing rows may already contain the old capacity phrase. Remove it
+		// before applying the canonical tier limit, otherwise the copy becomes
+		// "最多 3 张最多 3 张人物卡" after normalization.
+		if capacityIndex := strings.LastIndex(prefix, "最多"); capacityIndex >= 0 {
+			prefix = strings.TrimSpace(prefix[:capacityIndex])
+		}
 		if prefix == "" {
 			result[i] = fmt.Sprintf("最多 %d 张%s", cardLimit, needle)
 		} else {

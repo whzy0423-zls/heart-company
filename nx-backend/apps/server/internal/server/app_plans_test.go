@@ -48,6 +48,13 @@ func TestDefaultSvipPlanIsVisibleButRequiresAdminPricingBeforeActivation(t *test
 	}
 }
 
+func TestNormalizeCardFeatureCopyReplacesExistingCapacityPhrase(t *testing.T) {
+	got := normalizeCardFeatureCopy([]string{"深度陪伴", "最多 5 张人物卡"}, 3)
+	if got[1] != "最多 3 张人物卡" {
+		t.Fatalf("normalizeCardFeatureCopy() = %v, want canonical capacity copy", got)
+	}
+}
+
 func TestValidateAppPlanRejectsInvalidCommercialValues(t *testing.T) {
 	base := defaultAppPlans()[1]
 	tests := []struct {
