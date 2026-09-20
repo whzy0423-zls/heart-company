@@ -135,7 +135,8 @@ function edit(plan: AppPlan) {
     featuresText: plan.features.join('\n'),
     originalPriceYuan: plan.originalPriceCents / 100,
     priceYuan: plan.priceCents / 100,
-    planLevel: plan.planLevel ?? (plan.code === 'vip_year' ? 'svip' : plan.code === 'free' ? 'free' : 'vip'),
+    // Legacy annual SKUs remain VIP unless the API explicitly says S VIP.
+    planLevel: plan.planLevel ?? (plan.code === 'free' ? 'free' : 'vip'),
     billingCycle: plan.billingCycle ?? (plan.code === 'vip_quarter' ? 'quarter' : plan.code === 'vip_year' ? 'year' : plan.code === 'free' ? 'none' : 'month'),
     featuresJson: JSON.stringify(plan.featureFlags ?? {}, null, 2),
     limitsJson: JSON.stringify(plan.limits ?? {}, null, 2),

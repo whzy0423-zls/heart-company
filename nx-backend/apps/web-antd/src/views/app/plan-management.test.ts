@@ -65,6 +65,12 @@ describe('App plan management contract', () => {
     expect(source).toContain('付费套餐必须选择 VIP 或 S VIP');
   });
 
+  it('keeps legacy annual products at VIP unless the API declares S VIP', () => {
+    const source = readFileSync(resolve(here, 'plan-management.vue'), 'utf8');
+    expect(source).toContain("plan.code === 'free' ? 'free' : 'vip'");
+    expect(source).not.toContain("plan.code === 'vip_year' ? 'svip'");
+  });
+
   it('refreshes current permissions before exposing write actions', () => {
     const source = readFileSync(resolve(here, 'plan-management.vue'), 'utf8');
     expect(source).toContain('getAccessCodesApi');
