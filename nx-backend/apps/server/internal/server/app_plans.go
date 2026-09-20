@@ -305,7 +305,13 @@ func (s *Server) loadAppPlanCapabilities(ctx context.Context, plan *appPlanConfi
 }
 
 func (s *Server) appPlan(ctx context.Context, code string) appPlanConfig {
-	code = normalizeAppPlanCode(code)
+	// Keep the canonical S VIP plan addressable for admin/configuration reads.
+	// Order and legacy membership paths still normalize svip to vip_year.
+	if !strings.EqualFold(strings.TrimSpace(code), "svip") {
+		code = normalizeAppPlanCode(code)
+	} else {
+		code = "svip"
+	}
 	plans, err := s.loadAppPlans(ctx)
 	if err == nil {
 		for _, plan := range plans {
