@@ -18,25 +18,35 @@ import (
 )
 
 type appEntitlementResp struct {
-	PlanName                  string        `json:"planName"`
-	PlanCode                  string        `json:"planCode"`
-	IsMember                  bool          `json:"isMember"`
-	ChatLimit                 int           `json:"chatLimit"`
-	ChatRemaining             int           `json:"chatRemaining"`
-	TrialChatRemaining        int           `json:"trialChatRemaining"`
-	TrialChatNearestExpiresAt string        `json:"trialChatNearestExpiresAt,omitempty"`
-	DeepReportRemaining       int           `json:"deepReportRemaining"`
-	StoryLimit                int           `json:"storyLimit"`
-	StoryRemaining            int           `json:"storyRemaining"`
-	CardLimit                 int           `json:"cardLimit"`
-	CardUsed                  int           `json:"cardUsed"`
-	StartedAt                 string        `json:"startedAt,omitempty"`
-	ExpiresAt                 string        `json:"expiresAt,omitempty"`
-	PendingOrder              *appOrderResp `json:"pendingOrder,omitempty"`
+	PlanName                  string                             `json:"planName"`
+	PlanCode                  string                             `json:"planCode"`
+	PlanLevel                 string                             `json:"planLevel"`
+	BillingCycle              string                             `json:"billingCycle"`
+	Features                  []string                           `json:"features"`
+	FeatureFlags              map[string]bool                    `json:"featureFlags,omitempty"`
+	Quotas                    map[string]any                     `json:"quotas"`
+	ResourceAccess            map[string][]appResourceAccessResp `json:"resourceAccess"`
+	DowngradedAt              string                             `json:"downgradedAt,omitempty"`
+	RetentionUntil            string                             `json:"retentionUntil,omitempty"`
+	IsMember                  bool                               `json:"isMember"`
+	ChatLimit                 int                                `json:"chatLimit"`
+	ChatRemaining             int                                `json:"chatRemaining"`
+	TrialChatRemaining        int                                `json:"trialChatRemaining"`
+	TrialChatNearestExpiresAt string                             `json:"trialChatNearestExpiresAt,omitempty"`
+	DeepReportRemaining       int                                `json:"deepReportRemaining"`
+	StoryLimit                int                                `json:"storyLimit"`
+	StoryRemaining            int                                `json:"storyRemaining"`
+	CardLimit                 int                                `json:"cardLimit"`
+	CardUsed                  int                                `json:"cardUsed"`
+	StartedAt                 string                             `json:"startedAt,omitempty"`
+	ExpiresAt                 string                             `json:"expiresAt,omitempty"`
+	PendingOrder              *appOrderResp                      `json:"pendingOrder,omitempty"`
 }
 
 type appProductResp struct {
 	ID                string   `json:"id"`
+	PlanLevel         string   `json:"planLevel"`
+	BillingCycle      string   `json:"billingCycle"`
 	Title             string   `json:"title"`
 	Subtitle          string   `json:"subtitle"`
 	PriceText         string   `json:"priceText"`
@@ -77,16 +87,41 @@ func appCardLimit(memberLevel string) int {
 }
 
 func appPlanCode(memberLevel string) string {
+	memberLevel = strings.ToLower(strings.TrimSpace(memberLevel))
 	switch memberLevel {
 	case "", "free":
 		return "free"
 	case "vip":
 		return "vip_month"
 	case "svip":
-		return "vip_year"
+		// Keep S VIP as its own canonical plan. `vip_year` is the legacy
+		// annual VIP SKU and carries the normalized VIP tier, not S VIP.
+		return "svip"
 	default:
 		return memberLevel
 	}
+}
+
+func cloneAppBoolMap(source map[string]bool) map[string]bool {
+	if source == nil {
+		return nil
+	}
+	result := make(map[string]bool, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
+}
+
+func cloneAppIntMap(source map[string]int) map[string]int {
+	if source == nil {
+		return nil
+	}
+	result := make(map[string]int, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
 }
 
 func appPlanName(planCode string) string {
@@ -120,7 +155,9 @@ func (s *Server) appBillingEntitlements(w http.ResponseWriter, r *http.Request) 
 		membershipExpiry = &memberExpiresAt.Time
 	}
 	planCode := appEffectivePlanCode(memberLevel, membershipExpiry, time.Now())
-	isMember := planCode != "free"
+	resolvedPlan := resolveMembershipPlan(memberLevel, planCode, membershipExpiry, time.Now())
+	resourceStates, _ := s.recomputeCardResourceAccess(r.Context(), userInfo.ID, resolvedPlan.PlanLevel)
+	isMember := resolvedPlan.Active && resolvedPlan.PlanLevel != "free"
 	startedAt := ""
 	expiresAt := ""
 	if isMember && memberStartedAt.Valid {
@@ -130,6 +167,28 @@ func (s *Server) appBillingEntitlements(w http.ResponseWriter, r *http.Request) 
 		expiresAt = memberExpiresAt.Time.Format(time.RFC3339)
 	}
 	plan := s.appPlan(r.Context(), planCode)
+	// Canonical SVIP metadata is independent of the historical vip_year SKU;
+	// keep the old SKU/name for VIP clients while exposing the new level fields.
+	if resolvedPlan.PlanLevel == "svip" {
+		canonical := defaultMembershipLevelPlan("svip")
+		// Overlay every capability field used by this response. A disabled,
+		// zero-priced seed row is intentionally valid for configuration, but it
+		// must not make an already-active S VIP member look like a free user.
+		plan.Code = canonical.Code
+		plan.PlanLevel = canonical.PlanLevel
+		plan.BillingCycle = canonical.BillingCycle
+		plan.Name = canonical.Name
+		plan.Features = append([]string(nil), canonical.Features...)
+		plan.FeatureFlags = cloneAppBoolMap(canonical.FeatureFlags)
+		plan.Limits = cloneAppIntMap(canonical.Limits)
+		plan.DurationDays = canonical.DurationDays
+		plan.DailyChatLimit = canonical.DailyChatLimit
+		plan.StoryMonthlyLimit = canonical.StoryMonthlyLimit
+		plan.CardLimit = canonical.CardLimit
+		plan.DeepChatEnabled = canonical.DeepChatEnabled
+		plan.CompanionEnabled = canonical.CompanionEnabled
+		plan.MemberPosterEnabled = canonical.MemberPosterEnabled
+	}
 	storyQuota := s.lifeStoryQuotaForPlan(r.Context(), userInfo.ID, planCode)
 	chatQuota := newAppChatQuotaSnapshot(plan.DailyChatLimit, 0, 0)
 	if s.appChatQuota != nil {
@@ -144,9 +203,57 @@ func (s *Server) appBillingEntitlements(w http.ResponseWriter, r *http.Request) 
 			pendingOrder = &enriched
 		}
 	}
+	cardActive, cardReadOnly, cardLocked := 0, 0, 0
+	for _, state := range resourceStates {
+		switch state.State {
+		case resourceAccessActive:
+			cardActive++
+		case resourceAccessReadOnlyOverLimit:
+			cardReadOnly++
+		case resourceAccessLockedUpgrade:
+			cardLocked++
+		}
+	}
+	cardQuota := map[string]int{
+		"limit":    membershipLevelCardLimit(resolvedPlan.PlanLevel),
+		"used":     cardUsed,
+		"active":   cardActive,
+		"readOnly": cardReadOnly,
+		"locked":   cardLocked,
+	}
+	quotas := map[string]any{
+		"card":              cardQuota,
+		"cards":             cardQuota,
+		"cardLimit":         membershipLevelCardLimit(resolvedPlan.PlanLevel),
+		"legacyCardLimit":   plan.CardLimit,
+		"cardUsed":          cardUsed,
+		"cardActive":        cardActive,
+		"cardReadOnly":      cardReadOnly,
+		"cardLocked":        cardLocked,
+		"dailyChatLimit":    plan.DailyChatLimit,
+		"storyMonthlyLimit": plan.StoryMonthlyLimit,
+	}
+	retentionUntil := ""
+	for _, state := range resourceStates {
+		if state.RetentionUntil != nil && (retentionUntil == "" || state.RetentionUntil.Format(time.RFC3339) > retentionUntil) {
+			retentionUntil = state.RetentionUntil.Format(time.RFC3339)
+		}
+	}
+	downgradedAt := ""
+	if resolvedPlan.DowngradedAt != nil {
+		downgradedAt = resolvedPlan.DowngradedAt.Format(time.RFC3339)
+	}
 	httpx.OK(w, appEntitlementResp{
 		PlanName:                  plan.Name,
 		PlanCode:                  planCode,
+		PlanLevel:                 resolvedPlan.PlanLevel,
+		BillingCycle:              resolvedPlan.BillingCycle,
+		Features:                  append([]string(nil), plan.Features...),
+		FeatureFlags:              plan.FeatureFlags,
+		Quotas:                    quotas,
+		ResourceAccess:            appResourceAccessForEntitlement(resourceStates),
+		DowngradedAt:              downgradedAt,
+		RetentionUntil:            retentionUntil,
 		IsMember:                  isMember,
 		ChatLimit:                 chatQuota.Limit,
 		ChatRemaining:             chatQuota.Remaining,
@@ -185,7 +292,20 @@ func (s *Server) appBillingProducts(w http.ResponseWriter, r *http.Request) {
 }
 
 func appProductFromPlan(plan appPlanConfig) appProductResp {
-	return appProductResp{ID: plan.Code, Title: plan.Name, Subtitle: plan.Subtitle, PriceText: formatAppPlanPrice(plan.PriceCents), OriginalPriceText: formatAppPlanPrice(plan.OriginalPriceCents), Badge: plan.Badge, Features: append([]string(nil), plan.Features...), Enabled: plan.Enabled, DurationDays: plan.DurationDays}
+	plan = normalizeLoadedAppPlan(plan)
+	return appProductResp{
+		ID:                plan.Code,
+		PlanLevel:         plan.PlanLevel,
+		BillingCycle:      plan.BillingCycle,
+		Title:             plan.Name,
+		Subtitle:          plan.Subtitle,
+		PriceText:         formatAppPlanPrice(plan.PriceCents),
+		OriginalPriceText: formatAppPlanPrice(plan.OriginalPriceCents),
+		Badge:             plan.Badge,
+		Features:          append([]string(nil), plan.Features...),
+		Enabled:           plan.Enabled,
+		DurationDays:      plan.DurationDays,
+	}
 }
 
 func formatAppPlanPrice(cents int) string {
@@ -284,6 +404,8 @@ func appProductTitle(productID string) string {
 		return "季卡会员"
 	case "vip_year":
 		return "年卡会员"
+	case "svip":
+		return "S VIP"
 	default:
 		return ""
 	}
@@ -297,6 +419,11 @@ func appProductAmount(productID string) int {
 		return 7900
 	case "vip_year":
 		return 19900
+	case "svip":
+		// S VIP is seeded unpublished and therefore has no fallback price.
+		// A configured plan is priced from app_plans; this helper only serves
+		// legacy callers that need a deterministic amount.
+		return 0
 	default:
 		return 0
 	}

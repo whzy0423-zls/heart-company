@@ -204,6 +204,11 @@ func (c *appCompatibilityTestConn) BeginTx(context.Context, driver.TxOptions) (d
 func (c *appCompatibilityTestConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	now := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
 	switch {
+	case strings.Contains(query, "FROM app_users") && strings.Contains(query, "member_level"):
+		return &appCompatibilityTestRows{
+			columns: []string{"member_level", "member_expires_at"},
+			values:  [][]driver.Value{{"vip", nil}},
+		}, nil
 	case strings.Contains(query, "FROM app_user_cards") && strings.Contains(query, "WHERE id = $1"):
 		cardID, _ := args[0].Value.(int64)
 		if c.mode == "compatibility_other_user" && cardID == 99 {

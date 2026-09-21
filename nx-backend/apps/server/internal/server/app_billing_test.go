@@ -28,7 +28,7 @@ func TestAppPlanCodeNormalizesLegacyMemberLevels(t *testing.T) {
 		{name: "empty is free", memberLevel: "", want: "free"},
 		{name: "free stays free", memberLevel: "free", want: "free"},
 		{name: "legacy vip becomes month", memberLevel: "vip", want: "vip_month"},
-		{name: "legacy svip becomes year", memberLevel: "svip", want: "vip_year"},
+		{name: "canonical svip stays separate", memberLevel: "svip", want: "svip"},
 		{name: "month stays month", memberLevel: "vip_month", want: "vip_month"},
 		{name: "quarter stays quarter", memberLevel: "vip_quarter", want: "vip_quarter"},
 		{name: "year stays year", memberLevel: "vip_year", want: "vip_year"},
@@ -53,6 +53,7 @@ func TestAppPlanNameUsesNormalizedPlanCodes(t *testing.T) {
 		{planCode: "vip_month", want: "月卡会员"},
 		{planCode: "vip_quarter", want: "季卡会员"},
 		{planCode: "vip_year", want: "年卡会员"},
+		{planCode: "svip", want: "S VIP"},
 		{planCode: "legacy_partner", want: "会员版"},
 	}
 
@@ -88,6 +89,58 @@ func TestAppBillingEntitlementsUsesNormalizedPlan(t *testing.T) {
 	}
 	if body.Data.ChatLimit != -1 || body.Data.ChatRemaining != -1 || body.Data.DeepReportRemaining != 0 {
 		t.Fatalf("expected unlimited member chat quota, got %+v", body.Data)
+	}
+}
+
+func TestAppBillingEntitlementsExposesCanonicalSvipCapabilities(t *testing.T) {
+	s := newAppBillingEntitlementTestServer(t, "active:svip")
+	response := performAppBillingRequest(t, s.appBillingEntitlements, http.MethodGet, "/api/app/billing/entitlements", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Data appEntitlementResp `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Data.PlanCode != "svip" || body.Data.PlanLevel != "svip" || body.Data.BillingCycle != "year" || !body.Data.IsMember {
+		t.Fatalf("expected canonical S VIP identity, got %+v", body.Data)
+	}
+	if body.Data.CardLimit != 10 || body.Data.ChatLimit != -1 {
+		t.Fatalf("expected canonical S VIP quotas, got %+v", body.Data)
+	}
+	cardLimit, cardOK := body.Data.Quotas["cardLimit"].(float64)
+	dailyChatLimit, chatOK := body.Data.Quotas["dailyChatLimit"].(float64)
+	storyMonthlyLimit, storyOK := body.Data.Quotas["storyMonthlyLimit"].(float64)
+	if !cardOK || !chatOK || !storyOK || cardLimit != 10 || dailyChatLimit != -1 || storyMonthlyLimit != 12 {
+		t.Fatalf("expected canonical quota map, got %+v", body.Data.Quotas)
+	}
+	if body.Data.FeatureFlags["deepChat"] != true || body.Data.FeatureFlags["companion"] != true || body.Data.FeatureFlags["memberPoster"] != true {
+		t.Fatalf("expected canonical feature flags, got %+v", body.Data.FeatureFlags)
+	}
+}
+
+func TestAppBillingEntitlementsUnknownMemberFailsClosedToFree(t *testing.T) {
+	s := newAppBillingEntitlementTestServer(t, "active:legacy_partner")
+	response := performAppBillingRequest(t, s.appBillingEntitlements, http.MethodGet, "/api/app/billing/entitlements", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Data appEntitlementResp `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Data.PlanCode != "free" || body.Data.PlanLevel != "free" || body.Data.IsMember {
+		t.Fatalf("unknown member should resolve to free, got %+v", body.Data)
+	}
+	if body.Data.ChatLimit != 5 || body.Data.CardLimit != 1 {
+		t.Fatalf("unknown member received paid quotas: %+v", body.Data)
+	}
+	if storyLimit, ok := body.Data.Quotas["storyMonthlyLimit"].(float64); !ok || storyLimit != 1 {
+		t.Fatalf("unknown member received paid story quota: %+v", body.Data.Quotas)
 	}
 }
 
@@ -209,7 +262,7 @@ func TestAppBillingCreateOrderReusesExistingPendingOrder(t *testing.T) {
 	}
 }
 
-func TestAppBillingProductsExposeThreeCustomerServicePlans(t *testing.T) {
+func TestAppBillingProductsExposeMembershipPlansAndUnpricedSvip(t *testing.T) {
 	s := newAppBillingTestServer(t)
 
 	response := performAppBillingRequest(t, s.appBillingProducts, http.MethodGet, "/api/app/billing/products", nil)
@@ -224,18 +277,27 @@ func TestAppBillingProductsExposeThreeCustomerServicePlans(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Data) != 3 {
-		t.Fatalf("expected three membership products, got %+v", body.Data)
+	if len(body.Data) != 4 {
+		t.Fatalf("expected four membership products including disabled S VIP, got %+v", body.Data)
 	}
 	for _, product := range body.Data {
-		if !product.Enabled || product.PayEnabled {
-			t.Fatalf("expected enabled manual product without SDK payment, got %+v", product)
-		}
-		if product.PurchaseMode != "customer_service" {
-			t.Fatalf("expected customer service mode, got %+v", product)
-		}
 		if product.ID == "deep_report" {
 			t.Fatalf("deep report must not be offered: %+v", product)
+		}
+		if product.ID == "svip" {
+			if product.Enabled || product.PayEnabled || product.PlanLevel != "svip" || product.BillingCycle != "year" {
+				t.Fatalf("unpriced S VIP must be disabled and canonical, got %+v", product)
+			}
+			if product.DurationDays != 365 || product.ConfigurationStatus != "plan_disabled" {
+				t.Fatalf("unexpected S VIP configuration: %+v", product)
+			}
+			continue
+		}
+		if !product.Enabled || product.PayEnabled || product.PurchaseMode != "customer_service" {
+			t.Fatalf("expected enabled manual product without SDK payment, got %+v", product)
+		}
+		if product.PlanLevel != "vip" {
+			t.Fatalf("legacy product must expose VIP level: %+v", product)
 		}
 		if product.DurationDays != map[string]int{"vip_month": 30, "vip_quarter": 90, "vip_year": 365}[product.ID] {
 			t.Fatalf("unexpected duration for product %+v", product)

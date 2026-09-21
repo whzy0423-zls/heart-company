@@ -166,6 +166,11 @@ func (c *appQuizTestConn) QueryContext(_ context.Context, query string, _ []driv
 		}, nil
 	case strings.Contains(query, "FROM app_chat_sessions"):
 		return &appQuizTestRows{columns: []string{"id", "create_time"}}, nil
+	case strings.Contains(query, "SELECT id FROM app_users WHERE id") && strings.Contains(query, "FOR UPDATE"):
+		return &appQuizTestRows{
+			columns: []string{"id"},
+			values:  [][]driver.Value{{int64(7)}},
+		}, nil
 	case strings.Contains(query, "FROM app_users WHERE id"):
 		return &appQuizTestRows{
 			columns: []string{"id", "phone", "account", "nickname", "avatar", "status", "member_level", "member_started_at", "member_expires_at", "register_source", "last_login_at", "create_time", "update_time"},

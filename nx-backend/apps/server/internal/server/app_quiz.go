@@ -80,7 +80,9 @@ func (s *Server) appCards(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusInternalServerError, "query failed")
 			return
 		}
-		httpx.OK(w, cards)
+		plan := s.currentAppMembershipPlan(r.Context(), userInfo.ID)
+		_, _ = s.recomputeCardResourceAccess(r.Context(), userInfo.ID, plan.PlanLevel)
+		httpx.OK(w, s.decorateCardsWithResourceAccess(r.Context(), userInfo.ID, cards, plan.PlanLevel))
 	case http.MethodPost:
 		var input quiz.CardInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -92,8 +94,8 @@ func (s *Server) appCards(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusNotFound, "user not found")
 			return
 		}
-		planCode := appEffectivePlanCode(user.MemberLevel, parseAppMembershipExpiry(user.MemberExpiresAt), time.Now())
-		created, err := s.quiz.CreateCardWithLimit(r.Context(), userInfo.ID, s.appPlan(r.Context(), planCode).CardLimit, input)
+		plan := resolveMembershipPlan(user.MemberLevel, user.MemberLevel, parseAppMembershipExpiry(user.MemberExpiresAt), time.Now())
+		created, err := s.quiz.CreateCardWithLimit(r.Context(), userInfo.ID, membershipLevelCardLimit(plan.PlanLevel), input)
 		if err != nil {
 			if errors.Is(err, quiz.ErrCardLimit) {
 				httpx.Fail(w, http.StatusBadRequest, err.Error())
@@ -101,6 +103,10 @@ func (s *Server) appCards(w http.ResponseWriter, r *http.Request) {
 			}
 			httpx.Fail(w, http.StatusInternalServerError, "create failed")
 			return
+		}
+		_, _ = s.recomputeCardResourceAccess(r.Context(), userInfo.ID, plan.PlanLevel)
+		if decorated := s.decorateCardsWithResourceAccess(r.Context(), userInfo.ID, []quiz.Card{created}, plan.PlanLevel); len(decorated) == 1 {
+			created = decorated[0]
 		}
 		httpx.OK(w, created)
 	default:
@@ -164,8 +170,18 @@ func (s *Server) appCardByID(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusInternalServerError, "query failed")
 			return
 		}
+		plan := s.currentAppMembershipPlan(r.Context(), userInfo.ID)
+		_, _ = s.recomputeCardResourceAccess(r.Context(), userInfo.ID, plan.PlanLevel)
+		if decorated := s.decorateCardsWithResourceAccess(r.Context(), userInfo.ID, []quiz.Card{card}, plan.PlanLevel); len(decorated) == 1 {
+			card = decorated[0]
+		}
 		httpx.OK(w, card)
 	case http.MethodPut:
+		if err := s.ensureCardWritable(r.Context(), userInfo.ID, id); err != nil {
+			if writeMembershipAccessError(w, err) {
+				return
+			}
+		}
 		var input quiz.CardInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "invalid request body")
@@ -189,6 +205,11 @@ func (s *Server) appCardByID(w http.ResponseWriter, r *http.Request) {
 			}
 			httpx.Fail(w, http.StatusInternalServerError, "delete failed")
 			return
+		}
+		// Keep the ledger row for audit/retention semantics while making the
+		// resource immediately eligible for promotion on the next recompute.
+		if s != nil && s.db != nil {
+			_, _ = s.db.ExecContext(r.Context(), `UPDATE app_membership_resource_access SET state='deleted_by_user',reason='用户已删除人物卡',update_time=now() WHERE app_user_id=$1 AND resource_type='cards' AND resource_id=$2`, userInfo.ID, id)
 		}
 		httpx.OK(w, true)
 	default:

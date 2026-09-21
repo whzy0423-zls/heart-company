@@ -6,11 +6,12 @@ func TestSecondaryLimitUsesCommercialMembershipPlans(t *testing.T) {
 	tests := map[string]int{
 		"":            1,
 		"free":        1,
-		"vip":         5,
-		"vip_month":   5,
-		"vip_quarter": 8,
-		"svip":        20,
-		"vip_year":    20,
+		"vip":         3,
+		"vip_month":   3,
+		"vip_quarter": 3,
+		"svip":        10,
+		"vip_year":    3,
+		"legacy":      3,
 	}
 	for plan, want := range tests {
 		if got := SecondaryLimit(plan); got != want {

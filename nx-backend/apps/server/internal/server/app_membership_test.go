@@ -52,9 +52,10 @@ func TestAppMembershipBenefitsByPlan(t *testing.T) {
 		wantStoryLimit int
 	}{
 		{plan: "free", wantName: "免费版", wantCards: 1, wantStoryLimit: 1},
-		{plan: "vip_month", wantName: "月卡会员", wantCards: 5, wantStoryLimit: 3},
-		{plan: "vip_quarter", wantName: "季卡会员", wantCards: 8, wantStoryLimit: 5},
-		{plan: "vip_year", wantName: "年卡会员", wantCards: 20, wantStoryLimit: 12},
+		{plan: "vip_month", wantName: "月卡会员", wantCards: 3, wantStoryLimit: 3},
+		{plan: "vip_quarter", wantName: "季卡会员", wantCards: 3, wantStoryLimit: 5},
+		{plan: "vip_year", wantName: "年卡会员", wantCards: 3, wantStoryLimit: 12},
+		{plan: "svip", wantName: "S VIP", wantCards: 10, wantStoryLimit: 12},
 	}
 
 	for _, tc := range tests {
@@ -69,7 +70,7 @@ func TestAppMembershipBenefitsByPlan(t *testing.T) {
 
 func TestAppMembershipBenefitsUseSafeDefaultsForUnknownMemberPlan(t *testing.T) {
 	benefits := appMembershipBenefits("legacy_partner")
-	if benefits.PlanName != "会员版" || benefits.CardLimit != 5 || benefits.StoryMonthlyLimit != 3 {
+	if benefits.PlanName != "会员版" || benefits.CardLimit != 3 || benefits.StoryMonthlyLimit != 3 {
 		t.Fatalf("unexpected compatibility benefits: %+v", benefits)
 	}
 }
@@ -86,9 +87,12 @@ func TestAppEffectivePlanCodeHonorsMembershipExpiry(t *testing.T) {
 	}{
 		{name: "free", level: "free", want: "free"},
 		{name: "legacy vip without expiry", level: "vip", want: "vip_month"},
+		{name: "legacy vip is case insensitive", level: "VIP", want: "vip_month"},
+		{name: "svip remains canonical level product", level: "svip", want: "svip"},
 		{name: "dated plan active", level: "vip_quarter", expiry: &future, want: "vip_quarter"},
 		{name: "dated plan expired", level: "vip_year", expiry: &past, want: "free"},
 		{name: "dated plan missing expiry", level: "vip_month", want: "free"},
+		{name: "unknown level fails closed", level: "legacy_partner", expiry: &future, want: "free"},
 	}
 
 	for _, tc := range tests {
@@ -97,6 +101,23 @@ func TestAppEffectivePlanCodeHonorsMembershipExpiry(t *testing.T) {
 				t.Fatalf("appEffectivePlanCode(%q) = %q, want %q", tc.level, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCanonicalMembershipBenefitsUseLevelCardLimits(t *testing.T) {
+	for _, tc := range []struct {
+		plan string
+		want int
+	}{
+		{plan: "vip_month", want: 3},
+		{plan: "vip_quarter", want: 3},
+		{plan: "vip_year", want: 3},
+		{plan: "svip", want: 10},
+	} {
+		benefits := appMembershipBenefits(tc.plan)
+		if benefits.CardLimit != tc.want {
+			t.Fatalf("appMembershipBenefits(%q).CardLimit = %d, want %d", tc.plan, benefits.CardLimit, tc.want)
+		}
 	}
 }
 

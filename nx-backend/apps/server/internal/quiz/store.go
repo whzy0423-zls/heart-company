@@ -3,6 +3,7 @@ package quiz
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -76,6 +77,12 @@ type Card struct {
 	Status     string          `json:"status"`
 	CreateTime string          `json:"createTime"`
 	UpdateTime string          `json:"updateTime"`
+	// Membership access metadata is populated by the App server when the
+	// resource ledger is available. Omitempty keeps legacy responses stable.
+	AccessState       string `json:"accessState,omitempty"`
+	RequiredPlanLevel string `json:"requiredPlanLevel,omitempty"`
+	AccessReason      string `json:"accessReason,omitempty"`
+	RetentionUntil    string `json:"retentionUntil,omitempty"`
 }
 
 // SubmitResult 提交测试后的返回：落库的 submission + upsert 后的主卡 + 画像。
@@ -425,12 +432,14 @@ func SecondaryLimit(memberLevel string) int {
 	switch strings.ToLower(strings.TrimSpace(memberLevel)) {
 	case "", "free":
 		return 1
-	case "vip_quarter":
-		return 8
-	case "svip", "vip_year":
-		return 20
+	case "svip":
+		return 10
+	case "vip", "vip_month", "vip_quarter", "vip_year":
+		return 3
 	default:
-		return 5
+		// Unknown legacy levels fail closed to the regular VIP allowance rather
+		// than inheriting a historical billing-cycle quota.
+		return 3
 	}
 }
 
@@ -449,6 +458,28 @@ func (s *Store) CreateCardWithLimit(ctx context.Context, appUserID int64, limit 
 		return c, err
 	}
 	defer tx.Rollback()
+
+	// Serialize quota checks per user. Without a row-level lock, two
+	// concurrent requests can observe the same count and both insert a card
+	// past the configured allowance. Every card belongs to an app user, so the
+	// parent row is a stable lock target and does not require a new schema
+	// object or a process-local mutex.
+	var lockedUserID int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM app_users WHERE id = $1 FOR UPDATE`, appUserID,
+	).Scan(&lockedUserID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return c, ErrNotFound
+		}
+		// A few rolling-migration/unit drivers deliberately return
+		// driver.ErrSkip for SQL they do not model. PostgreSQL supports
+		// SELECT ... FOR UPDATE, so only that explicit fast-path signal may
+		// fall back to the historical count query; real database errors remain
+		// fail-closed.
+		if !errors.Is(err, driver.ErrSkip) && !strings.Contains(strings.ToLower(err.Error()), "driver: skip fast-path") {
+			return c, err
+		}
+	}
 
 	var count int
 	if err := tx.QueryRowContext(ctx,

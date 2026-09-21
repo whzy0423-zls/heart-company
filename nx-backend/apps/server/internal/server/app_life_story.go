@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -216,11 +217,16 @@ func (s *Server) appLifeStoryCollection(w http.ResponseWriter, r *http.Request, 
 		if input.Materials != nil && !s.allowLifeStoryMaterialWrite(w, userID) {
 			return
 		}
+		if err := s.ensureLifeStoryCreationAllowed(r.Context(), userID); err != nil {
+			lifeStoryWriteError(w, err)
+			return
+		}
 		story, err := s.lifeStories.CreateStory(r.Context(), userID, lifestory.CreateStoryInput{Title: input.Title, Materials: input.Materials})
 		if err != nil {
 			lifeStoryWriteError(w, err)
 			return
 		}
+		s.decorateLifeStory(r.Context(), userID, &story)
 		story.StoryRemaining = s.lifeStoryQuota(r.Context(), userID).Remaining
 		httpx.OK(w, story)
 	default:
@@ -240,6 +246,7 @@ func (s *Server) appLifeStoryItem(w http.ResponseWriter, r *http.Request, userID
 			lifeStoryFail(w, http.StatusInternalServerError, lifeStoryErrorInternal)
 			return
 		}
+		s.decorateLifeStory(r.Context(), userID, &story)
 		story.StoryRemaining = s.lifeStoryQuota(r.Context(), userID).Remaining
 		if progress, progressErr := s.lifeStories.GetProgress(r.Context(), userID, storyID); progressErr == nil {
 			// Keep the response shape stable while exposing reader state to clients.
@@ -253,6 +260,10 @@ func (s *Server) appLifeStoryItem(w http.ResponseWriter, r *http.Request, userID
 		}
 		httpx.OK(w, map[string]bool{"deleted": true})
 	case http.MethodPatch:
+		if err := s.ensureLifeStoryWritable(r.Context(), userID, storyID); err != nil {
+			lifeStoryWriteError(w, err)
+			return
+		}
 		var input lifeStoryMetaRequest
 		if !decodeLifeStoryBody(w, r, &input) {
 			return
@@ -262,6 +273,7 @@ func (s *Server) appLifeStoryItem(w http.ResponseWriter, r *http.Request, userID
 			lifeStoryWriteError(w, err)
 			return
 		}
+		s.decorateLifeStory(r.Context(), userID, &story)
 		httpx.OK(w, story)
 	default:
 		lifeStoryFail(w, http.StatusMethodNotAllowed, lifeStoryErrorMethodNotAllowed)
@@ -347,7 +359,7 @@ func isLifeStoryFallback(questions []lifestory.Question) bool {
 }
 
 func lifeStoryFactsEnvelope(story lifestory.Story) map[string]any {
-	return map[string]any{
+	payload := map[string]any{
 		"storyId":      story.ID,
 		"facts":        story.FactCard,
 		"factCard":     story.FactCard,
@@ -356,18 +368,46 @@ func lifeStoryFactsEnvelope(story lifestory.Story) map[string]any {
 		// and import tooling that only needs map coordinates.
 		"events": story.FactCard.Events,
 	}
+	addLifeStoryAccessMetadata(payload, story)
+	return payload
 }
 
 func lifeStoryOutlineEnvelope(story lifestory.Story) map[string]any {
-	return map[string]any{
+	payload := map[string]any{
 		"storyId":        story.ID,
 		"outline":        story.Outline,
 		"outlineVersion": story.Outline.Version,
+	}
+	addLifeStoryAccessMetadata(payload, story)
+	return payload
+}
+
+func addLifeStoryAccessMetadata(payload map[string]any, story lifestory.Story) {
+	if payload == nil {
+		return
+	}
+	if strings.TrimSpace(story.AccessState) != "" {
+		payload["accessState"] = story.AccessState
+	}
+	if strings.TrimSpace(story.RequiredPlanLevel) != "" {
+		payload["requiredPlanLevel"] = story.RequiredPlanLevel
+	}
+	if strings.TrimSpace(story.AccessReason) != "" {
+		payload["accessReason"] = story.AccessReason
 	}
 }
 
 func (s *Server) appLifeStorySubroute(w http.ResponseWriter, r *http.Request, userID, storyID int64, parts []string) {
 	action := strings.ToLower(strings.TrimSpace(parts[0]))
+	// Generation/revision routes validate the idempotency body before checking
+	// membership so malformed requests keep their stable 400/409 contract.
+	// The membership gate is applied immediately after that validation below.
+	if lifeStorySubrouteWrites(action, r) && action != "generations" && action != "generate" && action != "revisions" {
+		if err := s.ensureLifeStoryWritable(r.Context(), userID, storyID); err != nil {
+			lifeStoryWriteError(w, err)
+			return
+		}
+	}
 	switch action {
 	case "draft":
 		if r.Method != http.MethodPatch && r.Method != http.MethodPut {
@@ -396,6 +436,7 @@ func (s *Server) appLifeStorySubroute(w http.ResponseWriter, r *http.Request, us
 			lifeStoryWriteError(w, err)
 			return
 		}
+		s.decorateLifeStory(r.Context(), userID, &story)
 		httpx.OK(w, story)
 	case "prepare":
 		if r.Method != http.MethodPost {
@@ -426,6 +467,7 @@ func (s *Server) appLifeStorySubroute(w http.ResponseWriter, r *http.Request, us
 				lifeStoryWriteError(w, err)
 				return
 			}
+			s.decorateLifeStory(r.Context(), userID, &story)
 			httpx.OK(w, lifeStoryFactsEnvelope(story))
 			return
 		}
@@ -462,6 +504,7 @@ func (s *Server) appLifeStorySubroute(w http.ResponseWriter, r *http.Request, us
 				lifeStoryWriteError(w, err)
 				return
 			}
+			s.decorateLifeStory(r.Context(), userID, &story)
 			httpx.OK(w, lifeStoryOutlineEnvelope(story))
 			return
 		}
@@ -522,6 +565,10 @@ func (s *Server) appLifeStorySubroute(w http.ResponseWriter, r *http.Request, us
 			lifeStoryWriteError(w, keyErr)
 			return
 		}
+		if err := s.ensureLifeStoryWritable(r.Context(), userID, storyID); err != nil {
+			lifeStoryWriteError(w, err)
+			return
+		}
 		factsVersion := firstPositiveInt64(input.FactsVersion, input.FactsVersionAlt)
 		outlineVersion := firstPositiveInt64(input.OutlineVersion, input.OutlineVersionAlt)
 		sourceVersion := firstPositiveInt64(input.SourceVersionID, input.SourceVersion)
@@ -568,6 +615,7 @@ func (s *Server) appLifeStorySubroute(w http.ResponseWriter, r *http.Request, us
 			lifeStoryFail(w, http.StatusInternalServerError, lifeStoryErrorInternal)
 			return
 		}
+		redactLockedLifeStoryJob(&job, s.lifeStoryAccessState(r.Context(), userID, storyID))
 		httpx.OK(w, job)
 	case "versions":
 		if len(parts) < 2 {
@@ -592,6 +640,7 @@ func (s *Server) appLifeStorySubroute(w http.ResponseWriter, r *http.Request, us
 			lifeStoryFail(w, http.StatusInternalServerError, lifeStoryErrorInternal)
 			return
 		}
+		redactLockedLifeStoryVersion(&version, s.lifeStoryAccessState(r.Context(), userID, storyID))
 		httpx.OK(w, version)
 	case "revisions":
 		if r.Method != http.MethodPost {
@@ -605,6 +654,10 @@ func (s *Server) appLifeStorySubroute(w http.ResponseWriter, r *http.Request, us
 		requestKey, keyErr := resolveLifeStoryRequestKey(r, input.RequestKey)
 		if keyErr != nil {
 			lifeStoryWriteError(w, keyErr)
+			return
+		}
+		if err := s.ensureLifeStoryWritable(r.Context(), userID, storyID); err != nil {
+			lifeStoryWriteError(w, err)
 			return
 		}
 		factsVersion := firstPositiveInt64(input.FactsVersion, input.FactsVersionAlt)
@@ -633,6 +686,7 @@ func (s *Server) appLifeStorySubroute(w http.ResponseWriter, r *http.Request, us
 				lifeStoryWriteError(w, err)
 				return
 			}
+			redactLockedLifeStoryProgress(&progress, s.lifeStoryAccessState(r.Context(), userID, storyID))
 			httpx.OK(w, progress)
 			return
 		}
@@ -923,6 +977,11 @@ func decodeLifeStoryOutlineBody(w http.ResponseWriter, r *http.Request) (lifeSto
 }
 
 func lifeStoryWriteError(w http.ResponseWriter, err error) {
+	var upgradeErr *membershipUpgradeError
+	if errors.As(err, &upgradeErr) {
+		writeLifeStoryMembershipUpgradeRequired(w, upgradeErr.RequiredPlanLevel, upgradeErr.AccessState)
+		return
+	}
 	status := http.StatusInternalServerError
 	code := lifeStoryErrorInternal
 	switch {
@@ -958,6 +1017,21 @@ func lifeStoryWriteError(w http.ResponseWriter, err error) {
 		}
 	}
 	lifeStoryFail(w, status, code)
+}
+
+func writeLifeStoryMembershipUpgradeRequired(w http.ResponseWriter, requiredPlanLevel, accessState string) {
+	message := "历史故事已保留，请升级会员后继续编辑或生成"
+	if strings.TrimSpace(accessState) == resourceAccessLockedUpgrade {
+		message = "该故事需要升级会员后才能继续操作"
+	}
+	httpx.JSON(w, http.StatusForbidden, map[string]any{
+		"code":              "membership_upgrade_required",
+		"errorCode":         "membership_upgrade_required",
+		"error":             message,
+		"message":           message,
+		"requiredPlanLevel": requiredPlanLevel,
+		"accessState":       accessState,
+	})
 }
 
 func (s *Server) lifeStoryQuotaStore() *lifestory.QuotaStore {
@@ -1008,9 +1082,261 @@ func (s *Server) lifeStoryQuotaForPlan(ctx context.Context, userID int64, planCo
 }
 
 func (s *Server) decorateLifeStories(ctx context.Context, userID int64, stories []lifestory.Story) {
+	plan := s.currentAppMembershipPlan(ctx, userID)
+	decorateLifeStoriesForPlan(stories, plan.PlanLevel)
 	remaining := s.lifeStoryQuota(ctx, userID).Remaining
 	for i := range stories {
 		stories[i].StoryRemaining = remaining
+	}
+}
+
+const lifeStoryAccessReason = "超出当前会员等级的人生故事额度，历史内容已保留"
+
+// redactLockedLifeStoryContent retains the story's identity and lightweight
+// history fields while removing user-provided source material and generated
+// content from a downgraded response. The same helper is used for list and
+// detail responses so a client cannot recover the body by switching routes.
+func redactLockedLifeStoryContent(story *lifestory.Story) {
+	if story == nil || story.AccessState == resourceAccessActive {
+		return
+	}
+	story.Materials = nil
+	story.FactCard = lifestory.FactCard{}
+	story.Outline = lifestory.Outline{}
+	story.CurrentVersionID = 0
+	story.CurrentVersion = nil
+	story.Versions = nil
+	story.LatestJob = nil
+	story.Jobs = nil
+	story.Progress = nil
+	story.DraftVersion = 0
+}
+
+func redactLockedLifeStoryVersion(version *lifestory.Version, access membershipResourceMetadata) {
+	if version == nil {
+		return
+	}
+	version.AccessState = access.State
+	version.RequiredPlanLevel = access.RequiredPlanLevel
+	version.AccessReason = access.Reason
+	if !membershipContentLocked(access) {
+		return
+	}
+	version.Chapters = nil
+	version.Reflection = ""
+	version.CharacterCount = 0
+	version.WordCount = 0
+	version.Model = ""
+	version.GenerationConfig = nil
+}
+
+func redactLockedLifeStoryJob(job *lifestory.Job, access membershipResourceMetadata) {
+	if job == nil {
+		return
+	}
+	job.AccessState = access.State
+	job.RequiredPlanLevel = access.RequiredPlanLevel
+	job.AccessReason = access.Reason
+	if !membershipContentLocked(access) {
+		return
+	}
+	// Keep status/progress for polling UI, but do not expose identifiers that
+	// can be used to retrieve a locked generated version or private failures.
+	job.SourceVersionID = 0
+	job.VersionID = 0
+	job.ErrorMessage = ""
+}
+
+func redactLockedLifeStoryProgress(progress *lifestory.ReadingProgress, access membershipResourceMetadata) {
+	if progress == nil {
+		return
+	}
+	progress.AccessState = access.State
+	progress.RequiredPlanLevel = access.RequiredPlanLevel
+	progress.AccessReason = access.Reason
+	if !membershipContentLocked(access) {
+		return
+	}
+	progress.VersionID = 0
+	progress.ChapterIndex = 0
+	progress.ChapterOrder = 0
+	progress.CharacterOffset = 0
+	progress.Completed = false
+}
+
+// lifeStoryHistoryLimit is the number of historical story records that remain
+// fully active at a membership level. It is deliberately separate from
+// StoryMonthlyLimit, which belongs to the generation quota ledger and resets
+// with the quota period.
+func lifeStoryHistoryLimit(planLevel string) int {
+	switch normalizeMembershipLevel(planLevel) {
+	case "svip":
+		return 12
+	case "vip":
+		return 3
+	default:
+		return 1
+	}
+}
+
+func lifeStoryRequiredPlanForRank(rank int) string {
+	switch {
+	case rank <= 1:
+		return "free"
+	case rank <= 3:
+		return "vip"
+	default:
+		return "svip"
+	}
+}
+
+// decorateLifeStoriesForPlan annotates historical stories without removing
+// them. Stories keep their oldest-first priority when a user downgrades;
+// newer stories become readable history but reject content mutations.
+func decorateLifeStoriesForPlan(stories []lifestory.Story, planLevel string) {
+	if len(stories) == 0 {
+		return
+	}
+	order := make([]int, len(stories))
+	for i := range stories {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		left, leftErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(stories[order[i]].CreatedAt))
+		right, rightErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(stories[order[j]].CreatedAt))
+		if leftErr == nil && rightErr == nil && !left.Equal(right) {
+			return left.Before(right)
+		}
+		if leftErr == nil && rightErr != nil {
+			return true
+		}
+		if leftErr != nil && rightErr == nil {
+			return false
+		}
+		if stories[order[i]].ID != stories[order[j]].ID {
+			return stories[order[i]].ID < stories[order[j]].ID
+		}
+		return order[i] < order[j]
+	})
+	planLevel = normalizeMembershipLevel(planLevel)
+	limit := lifeStoryHistoryLimit(planLevel)
+	for rank, index := range order {
+		rank++
+		required := lifeStoryRequiredPlanForRank(rank)
+		state := resourceAccessActive
+		reason := ""
+		if rank > limit {
+			state = resourceAccessReadOnlyOverLimit
+			reason = lifeStoryAccessReason
+		}
+		stories[index].AccessState = state
+		stories[index].RequiredPlanLevel = required
+		stories[index].AccessReason = reason
+		redactLockedLifeStoryContent(&stories[index])
+	}
+}
+
+func (s *Server) decorateLifeStory(ctx context.Context, userID int64, story *lifestory.Story) {
+	if story == nil {
+		return
+	}
+	plan := s.currentAppMembershipPlan(ctx, userID)
+	if s != nil && s.lifeStories != nil {
+		all, err := s.lifeStories.List(ctx, userID)
+		if err != nil {
+			// Do not fall back to rank one when the authoritative list is
+			// unavailable: that would expose a downgraded story body during a
+			// transient database failure. Keep identity metadata and redact the
+			// private content until access can be resolved.
+			story.AccessState = resourceAccessLockedUpgrade
+			story.RequiredPlanLevel = "svip"
+			story.AccessReason = "会员资源状态暂不可用，请稍后重试或升级会员"
+			redactLockedLifeStoryContent(story)
+			return
+		}
+		decorateLifeStoriesForPlan(all, plan.PlanLevel)
+		for _, item := range all {
+			if item.ID == story.ID {
+				story.AccessState = item.AccessState
+				story.RequiredPlanLevel = item.RequiredPlanLevel
+				story.AccessReason = item.AccessReason
+				redactLockedLifeStoryContent(story)
+				return
+			}
+		}
+	}
+	items := []lifestory.Story{*story}
+	decorateLifeStoriesForPlan(items, plan.PlanLevel)
+	story.AccessState = items[0].AccessState
+	story.RequiredPlanLevel = items[0].RequiredPlanLevel
+	story.AccessReason = items[0].AccessReason
+	redactLockedLifeStoryContent(story)
+}
+
+func (s *Server) lifeStoryAccessState(ctx context.Context, userID, storyID int64) membershipResourceMetadata {
+	plan := s.currentAppMembershipPlan(ctx, userID)
+	if s != nil && s.lifeStories != nil {
+		all, err := s.lifeStories.List(ctx, userID)
+		if err != nil {
+			return membershipResourceMetadata{
+				State:             resourceAccessLockedUpgrade,
+				RequiredPlanLevel: "svip",
+				Reason:            "会员资源状态暂不可用，请稍后重试或升级会员",
+				UpgradeRequired:   true,
+			}
+		}
+		decorateLifeStoriesForPlan(all, plan.PlanLevel)
+		for _, story := range all {
+			if story.ID == storyID {
+				return membershipResourceMetadata{State: story.AccessState, RequiredPlanLevel: story.RequiredPlanLevel, Reason: story.AccessReason, UpgradeRequired: story.AccessState != resourceAccessActive}
+			}
+		}
+	}
+	return membershipResourceMetadataForPlan(plan.PlanLevel, "free", "")
+}
+
+func (s *Server) ensureLifeStoryWritable(ctx context.Context, userID, storyID int64) error {
+	if s == nil || s.lifeStories == nil || storyID <= 0 {
+		return nil
+	}
+	access := s.lifeStoryAccessState(ctx, userID, storyID)
+	if access.State == resourceAccessReadOnlyOverLimit || access.State == resourceAccessLockedUpgrade {
+		return &membershipUpgradeError{RequiredPlanLevel: access.RequiredPlanLevel, AccessState: access.State}
+	}
+	return nil
+}
+
+func (s *Server) ensureLifeStoryCreationAllowed(ctx context.Context, userID int64) error {
+	if s == nil || s.lifeStories == nil {
+		return nil
+	}
+	// Creating a story draft does not consume a generation. Historical story
+	// count is an access-decoration concern only; using it here would make a
+	// user who reached a plan's limit in an earlier month permanently unable to
+	// start another story. The generation job transaction calls reserveQuotaTx,
+	// which applies the current month's quota atomically and returns
+	// ErrQuotaExhausted when the allowance is spent.
+	//
+	// Keep this hook so callers can retain a single policy boundary and so a
+	// future draft-specific entitlement can be added without reintroducing a
+	// history-count gate.
+	_ = ctx
+	_ = userID
+	return nil
+}
+
+func lifeStorySubrouteWrites(action string, r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if action == "cancel" || (action == "generations" || action == "jobs") && len(r.URL.Path) > 0 && strings.Contains(r.URL.Path, "/cancel") {
+		return false
+	}
+	switch action {
+	case "draft", "prepare", "questions", "facts", "outline", "generations", "generate", "revisions", "progress":
+		return r.Method != http.MethodGet
+	default:
+		return false
 	}
 }
 
@@ -1030,6 +1356,9 @@ func resolveLifeStoryRequestKey(r *http.Request, bodyKey string) (string, error)
 	}
 	if bodyKey != "" && headerKey != "" && bodyKey != headerKey {
 		return "", lifestory.ErrPayloadConflict
+	}
+	if len([]rune(bodyKey)) > 128 || len([]rune(headerKey)) > 128 {
+		return "", errors.New("request key is required")
 	}
 	if bodyKey != "" {
 		return bodyKey, nil

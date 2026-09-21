@@ -445,6 +445,7 @@ func (s *Server) applyXZNCallback(ctx context.Context, cfg xznPaymentConfig, cal
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("%w: commit: %v", errXZNCallbackDatabase, err)
 		}
+		s.refreshMembershipResourceAccess(ctx, appUserID)
 		return nil
 	}
 	if callback.TradeStatus == "TRADE_REFUND" {
@@ -464,6 +465,7 @@ func (s *Server) applyXZNCallback(ctx context.Context, cfg xznPaymentConfig, cal
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("%w: commit: %v", errXZNCallbackDatabase, err)
 		}
+		s.refreshMembershipResourceAccess(ctx, appUserID)
 		return nil
 	}
 	if callback.TradeStatus != "TRADE_SUCCESS" {
@@ -506,6 +508,7 @@ func (s *Server) applyXZNCallback(ctx context.Context, cfg xznPaymentConfig, cal
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("%w: commit: %v", errXZNCallbackDatabase, err)
 	}
+	s.refreshMembershipResourceAccess(ctx, appUserID)
 	return nil
 }
 

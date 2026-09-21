@@ -162,6 +162,7 @@ func (s *Server) adminAppOrderGrant(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.refreshMembershipResourceAccess(r.Context(), before.AppUserID)
 	after := adminMembershipGrantResp{OrderID: id, PlanCode: before.ProductID, StartedAt: startedAt.Format(time.RFC3339), ExpiresAt: period.Expires.Format(time.RFC3339)}
 	s.recordAdminAudit(r, auditlog.Entry{Action: "app_order.grant", TargetType: "app_order", TargetID: strconv.FormatInt(id, 10), Before: before, After: after, Summary: "确认收款并开通 App 会员"})
 	httpx.OK(w, after)
@@ -217,6 +218,7 @@ func (s *Server) adminAppOrderRefund(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.refreshMembershipResourceAccess(r.Context(), before.AppUserID)
 	response := adminAppOrderRefundResp{OrderID: id, Status: "refunded", AlreadyRefunded: result.AlreadyRefunded, EntitlementReverted: result.EntitlementReverted}
 	if !result.AlreadyRefunded {
 		s.recordAdminAudit(r, auditlog.Entry{Action: "app_order.refund", TargetType: "app_order", TargetID: strconv.FormatInt(id, 10), Before: before, After: response, Summary: body.Reason})

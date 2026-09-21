@@ -105,7 +105,10 @@ func normalizeAppPlanCode(code string) string {
 	case "vip":
 		return "vip_month"
 	case "svip":
-		return "vip_year"
+		// S VIP is a first-class membership level, not an alias for the
+		// historical annual VIP SKU. Keep the canonical code addressable so
+		// entitlement and admin APIs can distinguish the two.
+		return "svip"
 	default:
 		return strings.ToLower(strings.TrimSpace(code))
 	}
@@ -122,7 +125,14 @@ func supportedAppPlanCode(code string) bool {
 
 func validateAppPlan(plan appPlanConfig) error {
 	plan.Code = strings.ToLower(strings.TrimSpace(plan.Code))
-	plan.PlanLevel = normalizeMembershipLevel(plan.PlanLevel)
+	// Older callers omit the additive level fields. Infer them from the SKU
+	// before validation so a canonical `svip` row is not accidentally treated
+	// as a free plan.
+	if strings.TrimSpace(plan.PlanLevel) == "" {
+		plan.PlanLevel = normalizeMembershipLevel(plan.Code)
+	} else {
+		plan.PlanLevel = normalizeMembershipLevel(plan.PlanLevel)
+	}
 	if plan.BillingCycle == "" {
 		plan.BillingCycle = normalizeBillingCycle(plan.PlanLevel, plan.Code)
 	}
@@ -136,7 +146,12 @@ func validateAppPlan(plan appPlanConfig) error {
 		return errors.New("套餐价格不能为负数")
 	}
 	if plan.Code != "free" && (plan.PriceCents <= 0 || plan.DurationDays <= 0) {
-		return errors.New("付费套餐价格和有效天数必须大于 0")
+		// The canonical S VIP seed is intentionally unpublished until an
+		// administrator sets commercial terms. It is still a valid plan row;
+		// once enabled, normal paid-plan validation applies.
+		if !(plan.Code == "svip" && !plan.Enabled && plan.PriceCents == 0) {
+			return errors.New("付费套餐价格和有效天数必须大于 0")
+		}
 	}
 	if plan.Code == "free" && (plan.PriceCents != 0 || plan.DurationDays != 0) {
 		return errors.New("免费套餐价格和有效天数必须为 0")
@@ -169,7 +184,7 @@ func defaultAppPlan(code string) appPlanConfig {
 		}
 	}
 	if code != "free" && code != "vip_month" && code != "vip_quarter" && code != "vip_year" && code != "vip" && code != "svip" {
-		return appPlanConfig{Code: code, PlanLevel: "vip", BillingCycle: "month", Name: "会员版", Subtitle: "完整成长陪伴", Enabled: true, DurationDays: 30, DailyChatLimit: -1, StoryMonthlyLimit: 3, CardLimit: 5, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true}, Limits: map[string]int{"cardLimit": 5, "dailyChatLimit": -1, "storyMonthlyLimit": 3}}
+		return appPlanConfig{Code: code, PlanLevel: "vip", BillingCycle: "month", Name: "会员版", Subtitle: "完整成长陪伴", Enabled: true, DurationDays: 30, DailyChatLimit: -1, StoryMonthlyLimit: 3, CardLimit: 3, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true}, Limits: map[string]int{"cardLimit": 3, "dailyChatLimit": -1, "storyMonthlyLimit": 3}}
 	}
 	plan := defaultMembershipLevelPlan(normalizeMembershipLevel(code))
 	plan.Code = code
@@ -312,7 +327,8 @@ func (s *Server) loadAppPlanCapabilities(ctx context.Context, plan *appPlanConfi
 
 func (s *Server) appPlan(ctx context.Context, code string) appPlanConfig {
 	// Keep the canonical S VIP plan addressable for admin/configuration reads.
-	// Order and legacy membership paths still normalize svip to vip_year.
+	// Callers that need the historical annual VIP SKU must address vip_year
+	// explicitly; svip remains a distinct membership level throughout the API.
 	if !strings.EqualFold(strings.TrimSpace(code), "svip") {
 		code = normalizeAppPlanCode(code)
 	} else {

@@ -18,6 +18,13 @@ var (
 	ErrNotFound       = errors.New("insight.not_found")
 )
 
+const (
+	insightAccessActive        = "active"
+	insightAccessLockedUpgrade = "locked_requires_upgrade"
+	insightRequiredPlanVIP     = "vip"
+	insightAccessUpgradeReason = "历史关系洞察已保留，请升级后继续使用"
+)
+
 type Metric struct {
 	Score      int    `json:"score"`
 	Confidence int    `json:"confidence"`
@@ -40,6 +47,13 @@ type Report struct {
 	PersonalityReference    map[string]string `json:"personalityReference,omitempty"`
 	Suggestions             []string          `json:"suggestions"`
 	CreatedAt               time.Time         `json:"createdAt"`
+	// IsFull and the access metadata let clients keep a useful history card
+	// while rendering the generated analysis as locked after a downgrade.
+	IsFull            bool   `json:"isFull"`
+	AccessState       string `json:"accessState"`
+	RequiredPlanLevel string `json:"requiredPlanLevel"`
+	AccessReason      string `json:"accessReason,omitempty"`
+	UpgradeRequired   bool   `json:"upgradeRequired"`
 }
 
 type messageSample struct {
@@ -85,6 +99,7 @@ func (s *Service) Generate(ctx context.Context, initiatorID, conversationID int6
 		return Report{}, ErrNoMessages
 	}
 	report := analyze(initiatorID, peerID, conversationID, messages)
+	markReportFull(&report)
 	report.PersonalityTypeSnapshot, report.PersonalityReference, err = s.visiblePersonality(ctx, initiatorID, peerID)
 	if err != nil {
 		return Report{}, err
@@ -129,6 +144,16 @@ func (s *Service) List(ctx context.Context, initiatorID, conversationID int64) (
 	if len(items) == 0 {
 		return items, nil
 	}
+	access, err := s.membershipAccess(ctx, initiatorID)
+	if err != nil {
+		return nil, err
+	}
+	if access == "free" {
+		for index := range items {
+			redactReportBody(&items[index])
+		}
+		return items, nil
+	}
 	visible, _, err := s.visiblePersonality(ctx, initiatorID, items[0].PeerID)
 	if err != nil {
 		return nil, err
@@ -137,6 +162,9 @@ func (s *Service) List(ctx context.Context, initiatorID, conversationID int64) (
 		for index := range items {
 			redactPersonality(&items[index])
 		}
+	}
+	for index := range items {
+		markReportFull(&items[index])
 	}
 	return items, nil
 }
@@ -168,6 +196,16 @@ func (s *Service) ListByPeer(ctx context.Context, initiatorID, peerID int64) ([]
 	if len(items) == 0 {
 		return items, nil
 	}
+	access, err := s.membershipAccess(ctx, initiatorID)
+	if err != nil {
+		return nil, err
+	}
+	if access == "free" {
+		for index := range items {
+			redactReportBody(&items[index])
+		}
+		return items, nil
+	}
 	visible, _, err := s.visiblePersonality(ctx, initiatorID, peerID)
 	if err != nil {
 		return nil, err
@@ -176,6 +214,9 @@ func (s *Service) ListByPeer(ctx context.Context, initiatorID, peerID int64) ([]
 		for index := range items {
 			redactPersonality(&items[index])
 		}
+	}
+	for index := range items {
+		markReportFull(&items[index])
 	}
 	return items, nil
 }
@@ -188,6 +229,14 @@ func (s *Service) Get(ctx context.Context, initiatorID, id int64) (Report, error
 	if err != nil {
 		return Report{}, err
 	}
+	access, err := s.membershipAccess(ctx, initiatorID)
+	if err != nil {
+		return Report{}, err
+	}
+	if access == "free" {
+		redactReportBody(&item)
+		return item, nil
+	}
 	visible, _, err := s.visiblePersonality(ctx, initiatorID, item.PeerID)
 	if err != nil {
 		return Report{}, err
@@ -195,12 +244,79 @@ func (s *Service) Get(ctx context.Context, initiatorID, id int64) (Report, error
 	if visible == nil {
 		redactPersonality(&item)
 	}
+	markReportFull(&item)
 	return item, nil
 }
 
 func redactPersonality(item *Report) {
+	if item == nil {
+		return
+	}
 	item.PersonalityTypeSnapshot = nil
 	item.PersonalityReference = nil
+}
+
+// redactReportBody preserves durable identity and sample-range metadata but
+// removes every generated analysis field that requires an active VIP/SVIP
+// entitlement.
+func redactReportBody(item *Report) {
+	if item == nil {
+		return
+	}
+	item.Metrics = nil
+	item.Summary = ""
+	item.Suggestions = nil
+	redactPersonality(item)
+	item.IsFull = false
+	item.AccessState = insightAccessLockedUpgrade
+	item.RequiredPlanLevel = insightRequiredPlanVIP
+	item.AccessReason = insightAccessUpgradeReason
+	item.UpgradeRequired = true
+}
+
+func markReportFull(item *Report) {
+	if item == nil {
+		return
+	}
+	item.IsFull = true
+	item.AccessState = insightAccessActive
+	item.RequiredPlanLevel = insightRequiredPlanVIP
+	item.AccessReason = ""
+	item.UpgradeRequired = false
+}
+
+// membershipAccess resolves the effective level at read time. Unknown values
+// deliberately normalize to free so a malformed or newly introduced level
+// cannot expose a stored paid report.
+func (s *Service) membershipAccess(ctx context.Context, userID int64) (string, error) {
+	var rawLevel sql.NullString
+	var expires sql.NullTime
+	err := s.db.QueryRowContext(ctx, `SELECT member_level,member_expires_at FROM app_users WHERE id=$1 AND status='active'`, userID).Scan(&rawLevel, &expires)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "free", nil
+	}
+	if err != nil {
+		return "free", err
+	}
+	level := normalizeMembershipLevel(rawLevel.String)
+	if level == "free" {
+		return "free", nil
+	}
+	if !expires.Valid || expires.Time.After(time.Now()) {
+		return level, nil
+	}
+	return "free", nil
+}
+
+func normalizeMembershipLevel(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "vip", "vip_month", "vip_quarter", "vip_year":
+		return "vip"
+	case "svip":
+		return "svip"
+	default:
+		return "free"
+	}
 }
 
 type scanner interface{ Scan(...any) error }
@@ -226,12 +342,13 @@ func scanReport(row scanner) (Report, error) {
 }
 
 func (s *Service) isVIP(ctx context.Context, userID int64) (bool, error) {
-	var level string
+	var rawLevel sql.NullString
 	var expires sql.NullTime
-	err := s.db.QueryRowContext(ctx, `SELECT member_level,member_expires_at FROM app_users WHERE id=$1 AND status='active'`, userID).Scan(&level, &expires)
+	err := s.db.QueryRowContext(ctx, `SELECT member_level,member_expires_at FROM app_users WHERE id=$1 AND status='active'`, userID).Scan(&rawLevel, &expires)
 	if err != nil {
 		return false, err
 	}
+	level := normalizeMembershipLevel(rawLevel.String)
 	return level != "free" && (!expires.Valid || expires.Time.After(time.Now())), nil
 }
 

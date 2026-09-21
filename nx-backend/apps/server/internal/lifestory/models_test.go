@@ -9,6 +9,7 @@ import (
 func TestLifeStoryModelsRoundTrip(t *testing.T) {
 	input := Story{
 		ID: 7, AppUserID: 42, Title: "那年夏天", Status: StatusDraft, Stage: StageOutline,
+		AccessState: "read_only_over_limit", RequiredPlanLevel: "vip", AccessReason: "历史故事已保留",
 		Materials:      []Material{{ID: 9, SourceType: MaterialText, Sequence: 1, Text: "我第一次离开家。", Transcript: "我第一次离开家。", ASRStatus: ASRNotApplicable}},
 		FactCard:       FactCard{Characters: []FactCharacter{{Name: "小林", Relation: "自己"}}, Events: []FactEvent{{Time: "2012", Description: "离开家"}}, Ending: "后来我回来了。"},
 		Outline:        Outline{Perspective: PerspectiveFirst, Tone: ToneWarm, StoryStyle: StoryStyleFairyTale, Chapters: []OutlineChapter{{Order: 1, Title: "出发", Summary: "离开熟悉的地方"}}},
@@ -25,6 +26,9 @@ func TestLifeStoryModelsRoundTrip(t *testing.T) {
 	}
 	if got.ID != input.ID || got.Status != StatusDraft || got.Stage != StageOutline || len(got.Materials) != 1 || got.CurrentVersion == nil || got.LatestJob == nil || got.Outline.StoryStyle != StoryStyleFairyTale || got.CurrentVersion.StoryStyle != StoryStyleFairyTale {
 		t.Fatalf("round trip mismatch: %+v", got)
+	}
+	if got.AccessState != input.AccessState || got.RequiredPlanLevel != input.RequiredPlanLevel || got.AccessReason != input.AccessReason {
+		t.Fatalf("membership access metadata was not preserved: %+v", got)
 	}
 }
 

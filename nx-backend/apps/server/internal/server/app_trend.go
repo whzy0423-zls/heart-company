@@ -20,6 +20,7 @@ type appTrendSeries struct {
 	Label     string          `json:"label"`
 	Dimension string          `json:"dimension"`
 	Points    []appTrendPoint `json:"points"`
+	membershipResourceMetadata
 }
 
 type appTrendDaySignals struct {
@@ -75,7 +76,6 @@ func (s *Server) appCardTrend(w http.ResponseWriter, r *http.Request, userID int
 		httpx.Fail(w, http.StatusForbidden, "access denied")
 		return
 	}
-
 	// 计算自然日范围：days=7 返回今天及之前 6 天，共 7 个点。
 	now := time.Now().In(appTrendLocation())
 	endExclusive := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
@@ -87,7 +87,29 @@ func (s *Server) appCardTrend(w http.ResponseWriter, r *http.Request, userID int
 		return
 	}
 
-	httpx.OK(w, buildAppTrendSeries(startTime, endExclusive, signals))
+	series := buildAppTrendSeries(startTime, endExclusive, signals)
+	access, accessErr := s.cardMembershipResourceMetadata(
+		r.Context(), userID, cardID, "历史趋势已保留，请升级后继续使用",
+	)
+	if accessErr != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "membership access unavailable")
+		return
+	}
+	for i := range series {
+		series[i].membershipResourceMetadata = access
+		redactAppTrendSeries(&series[i], access)
+	}
+	httpx.OK(w, series)
+}
+
+// redactAppTrendSeries preserves the dimension labels used to render a
+// historical trend card, but withholds the underlying daily observations
+// until the required membership level is active.
+func redactAppTrendSeries(series *appTrendSeries, access membershipResourceMetadata) {
+	if series == nil || !membershipContentLocked(access) {
+		return
+	}
+	series.Points = []appTrendPoint{}
 }
 
 func appTrendLocation() *time.Location {

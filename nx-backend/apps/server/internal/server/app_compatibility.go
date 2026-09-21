@@ -64,6 +64,7 @@ type appCompatibilityReport struct {
 	CreateTimeSnake       string                   `json:"create_time"`
 	UpdateTime            string                   `json:"updateTime"`
 	UpdateTimeSnake       string                   `json:"update_time"`
+	membershipResourceMetadata
 }
 
 // appCompatibilityRouter handles GET/POST /api/app/compatibility and
@@ -104,6 +105,11 @@ func (s *Server) appCompatibilityAsk(w http.ResponseWriter, r *http.Request, rep
 		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+	if err := s.ensureMembershipLevel(r.Context(), userInfo.ID, "vip"); err != nil {
+		if writeMembershipAccessError(w, err) {
+			return
+		}
+	}
 	idText := strings.Trim(strings.TrimPrefix(reportPath, "/api/app/compatibility/"), "/")
 	id, err := strconv.ParseInt(idText, 10, 64)
 	if err != nil || id <= 0 {
@@ -133,6 +139,16 @@ func (s *Server) appCompatibilityAsk(w http.ResponseWriter, r *http.Request, rep
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "query failed")
 		return
+	}
+	if err := s.ensureCardWritable(r.Context(), userInfo.ID, report.CardAID); err != nil {
+		if writeMembershipAccessError(w, err) {
+			return
+		}
+	}
+	if err := s.ensureCardWritable(r.Context(), userInfo.ID, report.CardBID); err != nil {
+		if writeMembershipAccessError(w, err) {
+			return
+		}
 	}
 	tier, err := s.appChatTierForUser(r.Context(), userInfo.ID, body.Tier)
 	if err != nil {
@@ -184,6 +200,11 @@ func (s *Server) appCompatibilityCreate(w http.ResponseWriter, r *http.Request) 
 		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
+	if err := s.ensureMembershipLevel(r.Context(), userInfo.ID, "vip"); err != nil {
+		if writeMembershipAccessError(w, err) {
+			return
+		}
+	}
 
 	var input appCompatibilityRequest
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -210,6 +231,11 @@ func (s *Server) appCompatibilityCreate(w http.ResponseWriter, r *http.Request) 
 		httpx.Fail(w, http.StatusInternalServerError, "query failed")
 		return
 	}
+	if err := s.ensureCardWritable(r.Context(), userInfo.ID, cardAID); err != nil {
+		if writeMembershipAccessError(w, err) {
+			return
+		}
+	}
 	cardB, err := s.quiz.GetCard(r.Context(), userInfo.ID, cardBID)
 	if errors.Is(err, quiz.ErrNotFound) {
 		httpx.Fail(w, http.StatusNotFound, "card not found")
@@ -219,8 +245,18 @@ func (s *Server) appCompatibilityCreate(w http.ResponseWriter, r *http.Request) 
 		httpx.Fail(w, http.StatusInternalServerError, "query failed")
 		return
 	}
+	if err := s.ensureCardWritable(r.Context(), userInfo.ID, cardBID); err != nil {
+		if writeMembershipAccessError(w, err) {
+			return
+		}
+	}
 
 	report := buildAppCompatibilityReport(userInfo.ID, cardA, cardB)
+	applyAppCompatibilityAccess(&report, membershipResourceMetadataForPlan(
+		s.currentAppMembershipPlan(r.Context(), userInfo.ID).PlanLevel,
+		"vip",
+		"合盘报告已生成，会员状态可影响后续追问",
+	))
 	highlightsJSON, _ := json.Marshal(report.Highlights)
 	conflictsJSON, _ := json.Marshal(report.ConflictPoints)
 	suggestionsJSON, _ := json.Marshal(report.Suggestions)
@@ -254,7 +290,6 @@ func (s *Server) appCompatibilityList(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-
 	rows, err := s.db.QueryContext(r.Context(), `
 		SELECT id, app_user_id, card_a_id, card_b_id, card_a_name, card_b_name, card_a_type, card_b_type,
 		       summary, highlights, conflict_points, suggestions, is_full,
@@ -268,23 +303,32 @@ func (s *Server) appCompatibilityList(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, "query failed")
 		return
 	}
-	defer rows.Close()
-
-	var out []appCompatibilityReport
+	var reports []appCompatibilityReport
 	for rows.Next() {
 		report, err := scanAppCompatibilityReport(rows)
 		if err != nil {
+			rows.Close()
 			httpx.Fail(w, http.StatusInternalServerError, "query failed")
 			return
 		}
-		out = append(out, report)
+		reports = append(reports, report)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		httpx.Fail(w, http.StatusInternalServerError, "query failed")
 		return
 	}
-	if out == nil {
-		out = []appCompatibilityReport{}
+	rows.Close()
+
+	out := make([]appCompatibilityReport, 0, len(reports))
+	for _, report := range reports {
+		reportAccess, err := s.compatibilityReportAccess(r.Context(), userInfo.ID, report.CardAID, report.CardBID)
+		if err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "membership access unavailable")
+			return
+		}
+		applyAppCompatibilityAccess(&report, reportAccess)
+		out = append(out, report)
 	}
 	httpx.OK(w, out)
 }
@@ -317,7 +361,150 @@ func (s *Server) appCompatibilityDetail(w http.ResponseWriter, r *http.Request, 
 		httpx.Fail(w, http.StatusInternalServerError, "query failed")
 		return
 	}
+	access, accessErr := s.compatibilityReportAccess(r.Context(), userInfo.ID, report.CardAID, report.CardBID)
+	if accessErr != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "membership access unavailable")
+		return
+	}
+	applyAppCompatibilityAccess(&report, access)
 	httpx.OK(w, report)
+}
+
+// compatibilityReportAccess combines the report's own VIP gate with the
+// access state of both source cards. A report can outlive a card-capacity
+// downgrade; if either source card is retained read-only, the report must be
+// redacted as well so a history endpoint cannot recover the paid analysis.
+// Callers may pass zero card IDs when they only need the report-level gate.
+func (s *Server) compatibilityReportAccess(ctx context.Context, appUserID, cardAID, cardBID int64) (membershipResourceMetadata, error) {
+	plan := s.currentAppMembershipPlan(ctx, appUserID)
+	access := membershipResourceMetadataForPlan(
+		plan.PlanLevel,
+		"vip",
+		"历史合盘已保留，请升级后继续使用",
+	)
+	if (cardAID <= 0 && cardBID <= 0) || s == nil || s.db == nil || s.appUsers == nil {
+		return access, nil
+	}
+	seen := make(map[int64]struct{}, 2)
+	lockedRequired := "free"
+	lockedReason := "历史合盘关联的人物卡已超出当前会员额度，请升级后继续使用"
+	for _, cardID := range []int64{cardAID, cardBID} {
+		if cardID <= 0 {
+			continue
+		}
+		if _, ok := seen[cardID]; ok {
+			continue
+		}
+		seen[cardID] = struct{}{}
+		state, found, err := s.compatibilityCardResourceAccess(ctx, appUserID, cardID, plan.PlanLevel)
+		if err != nil {
+			return access, err
+		}
+		if !found || (state.State != resourceAccessReadOnlyOverLimit && state.State != resourceAccessLockedUpgrade) {
+			continue
+		}
+		required := compatibilityRequiredPlanLevel(state)
+		// A stale ledger row must not hide a report after the user has upgraded
+		// past the source card's actual requirement. Only retain the lock when
+		// the current plan is still below that requirement.
+		if membershipLevelRank(plan.PlanLevel) >= membershipLevelRank(required) {
+			continue
+		}
+		if membershipLevelRank(required) > membershipLevelRank(lockedRequired) {
+			lockedRequired = required
+			if strings.TrimSpace(state.Reason) != "" {
+				lockedReason = state.Reason
+			}
+		}
+	}
+	if lockedRequired != "free" {
+		return membershipResourceMetadataForPlan(plan.PlanLevel, lockedRequired, lockedReason), nil
+	}
+	return access, nil
+}
+
+// compatibilityRequiredPlanLevel preserves the entitlement level recorded for
+// the source card. Older rows may be incomplete; a locked row with no usable
+// level fails closed at S VIP rather than silently exposing the report.
+func compatibilityRequiredPlanLevel(state resourceAccessState) string {
+	required := normalizeMembershipLevel(state.RequiredPlanLevel)
+	if required == "free" && (state.State == resourceAccessReadOnlyOverLimit || state.State == resourceAccessLockedUpgrade) {
+		return "svip"
+	}
+	return required
+}
+
+// compatibilityCardResourceAccess resolves a source card without treating
+// primary cards as secondary-card ledger resources. A missing ledger is
+// rebuilt lazily for current-card rows; migration-era missing tables and
+// partial test drivers intentionally fall back to the report-level gate.
+func (s *Server) compatibilityCardResourceAccess(ctx context.Context, appUserID, cardID int64, planLevel string) (resourceAccessState, bool, error) {
+	var state resourceAccessState
+	var cardType, cardStatus string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT card_type,status
+		FROM app_user_cards
+		WHERE id = $1 AND app_user_id = $2`, cardID, appUserID).Scan(&cardType, &cardStatus)
+	switch {
+	case err == nil:
+		if strings.EqualFold(strings.TrimSpace(cardType), "primary") {
+			return resourceAccessState{ResourceID: cardID, State: resourceAccessActive, RequiredPlanLevel: "free"}, true, nil
+		}
+		if !strings.EqualFold(strings.TrimSpace(cardStatus), "active") {
+			return state, false, nil
+		}
+	case errors.Is(err, sql.ErrNoRows):
+		return state, false, nil
+	case membershipLegacyDriverError(s.db, err):
+		return state, false, nil
+	default:
+		return state, false, err
+	}
+
+	state, err = s.cardResourceAccess(ctx, appUserID, cardID)
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, rebuildErr := s.recomputeCardResourceAccess(ctx, appUserID, planLevel); rebuildErr == nil {
+			state, err = s.cardResourceAccess(ctx, appUserID, cardID)
+		} else if membershipLegacyDriverError(s.db, rebuildErr) {
+			return resourceAccessState{}, false, nil
+		} else {
+			return resourceAccessState{}, false, rebuildErr
+		}
+	}
+	if errors.Is(err, sql.ErrNoRows) || membershipLegacyDriverError(s.db, err) {
+		return resourceAccessState{}, false, nil
+	}
+	if err != nil {
+		return resourceAccessState{}, false, err
+	}
+	return state, true, nil
+}
+
+// applyAppCompatibilityAccess keeps the report identity and short summary
+// available in history while withholding the paid analysis for a downgraded
+// or otherwise locked resource. The aliases are updated explicitly because
+// setAliases derives the full fields from the stored report body.
+func applyAppCompatibilityAccess(report *appCompatibilityReport, access membershipResourceMetadata) {
+	if report == nil {
+		return
+	}
+	report.membershipResourceMetadata = access
+	if !membershipContentLocked(access) {
+		return
+	}
+	report.IsFull = false
+	report.IsFullSnake = false
+	report.Dynamics = ""
+	report.Strengths = ""
+	report.Advice = ""
+	report.Highlights = []string{}
+	report.ConflictPoints = []string{}
+	report.ConflictPointsSnake = []string{}
+	report.Suggestions = []string{}
+	report.Scores = compatibility.Scores{}
+	report.ExplainTags = []string{}
+	report.ExplainTagsSnake = []string{}
+	report.Evidence = []compatibility.Evidence{}
 }
 
 func firstPositive(values ...int64) int64 {

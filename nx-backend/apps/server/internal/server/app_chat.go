@@ -263,6 +263,26 @@ type appChatStore interface {
 	SearchMessages(ctx context.Context, appUserID, cardID int64, keyword string) ([]chat.SearchResult, error)
 }
 
+// appChatMessageSessionStore is implemented by the production chat store. It
+// is kept optional so older lightweight handler fixtures can continue to use
+// their embedded appChatStore while production mutations still resolve the
+// message owner and card before applying membership gates.
+type appChatMessageSessionStore interface {
+	GetMessageSession(ctx context.Context, appUserID, messageID int64) (chat.Session, error)
+}
+
+func (s *Server) ensureAppChatMessageWritable(ctx context.Context, appUserID, messageID int64) error {
+	resolver, ok := s.appChat.(appChatMessageSessionStore)
+	if !ok {
+		return nil
+	}
+	session, err := resolver.GetMessageSession(ctx, appUserID, messageID)
+	if err != nil {
+		return err
+	}
+	return s.ensureCardWritable(ctx, appUserID, session.CardID)
+}
+
 func (s *Server) retrieveAppChatKnowledge(ctx context.Context, userID, sessionID, cardID int64, query string) ([]rag.Document, *chat.KnowledgeTrace, error) {
 	return s.retrieveKnowledgeForScene(ctx, s.appKnowledge, "app_chat", userID, sessionID, cardID, query)
 }
@@ -458,6 +478,11 @@ func (s *Server) appChatGetOrCreate(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusNotFound, "card not found")
 		return
 	}
+	if err := s.ensureCardWritable(r.Context(), userInfo.ID, body.CardID); err != nil {
+		if writeMembershipAccessError(w, err) {
+			return
+		}
+	}
 	sess, err := s.appChat.GetOrCreateSession(r.Context(), userInfo.ID, body.CardID)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
@@ -514,6 +539,11 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpx.Fail(w, http.StatusNotFound, "session not found")
 		return
+	}
+	if err := s.ensureCardWritable(r.Context(), userInfo.ID, sess.CardID); err != nil {
+		if writeMembershipAccessError(w, err) {
+			return
+		}
 	}
 
 	var body struct {
@@ -645,6 +675,11 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpx.Fail(w, http.StatusNotFound, "session not found")
 		return
+	}
+	if err := s.ensureCardWritable(r.Context(), userInfo.ID, sess.CardID); err != nil {
+		if writeMembershipAccessError(w, err) {
+			return
+		}
 	}
 
 	var body struct {
@@ -1574,6 +1609,15 @@ func (s *Server) appChatFeedback(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "invalid feedback")
 		return
 	}
+	if err := s.ensureAppChatMessageWritable(r.Context(), userInfo.ID, messageID); err != nil {
+		if errors.Is(err, chat.ErrNotFound) {
+			httpx.Fail(w, http.StatusNotFound, "message not found")
+			return
+		}
+		if writeMembershipAccessError(w, err) {
+			return
+		}
+	}
 	if err := s.appChat.SetFeedback(r.Context(), userInfo.ID, messageID, body.Feedback); err != nil {
 		httpx.Fail(w, http.StatusNotFound, "message not found")
 		return
@@ -1592,6 +1636,15 @@ func (s *Server) appChatFavorite(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		httpx.Fail(w, http.StatusBadRequest, "invalid message id")
 		return
+	}
+	if err := s.ensureAppChatMessageWritable(r.Context(), userInfo.ID, messageID); err != nil {
+		if errors.Is(err, chat.ErrNotFound) {
+			httpx.Fail(w, http.StatusNotFound, "message not found")
+			return
+		}
+		if writeMembershipAccessError(w, err) {
+			return
+		}
 	}
 	favorite, err := s.appChat.ToggleFavorite(r.Context(), userInfo.ID, messageID)
 	if err != nil {

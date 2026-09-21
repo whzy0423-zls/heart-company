@@ -136,6 +136,8 @@ func TestGetRedactsStoredPersonalityAfterPeerHidesType(t *testing.T) {
 				[]string{"id", "conversation_id", "peer_id", "from_sequence", "to_sequence", "message_count", "status", "observation_level", "personality_type_snapshot", "metrics", "summary", "personality_reference", "suggestions", "created_at"},
 				int64(7), int64(9), int64(2), int64(1), int64(20), int64(20), "completed", "stable", int64(5), []byte(`{"temperature":{"score":80,"confidence":90,"trend":"up","evidence":"x"}}`), "摘要", []byte(`{"label":"5号"}`), []byte(`["建议"]`), time.Now(),
 			), nil
+		case strings.Contains(query, "SELECT member_level,member_expires_at"):
+			return insightRows([]string{"member_level", "member_expires_at"}, "vip", time.Now().Add(time.Hour)), nil
 		case strings.Contains(query, "personality_visibility"):
 			return insightRows([]string{"personality_visibility", "enneagram"}, "private", int64(5)), nil
 		default:
@@ -150,8 +152,127 @@ func TestGetRedactsStoredPersonalityAfterPeerHidesType(t *testing.T) {
 	if report.PersonalityTypeSnapshot != nil || report.PersonalityReference != nil {
 		t.Fatalf("hidden personality leaked: %+v", report)
 	}
-	if queries != 2 {
-		t.Fatalf("queries = %d, want 2", queries)
+	if queries != 3 {
+		t.Fatalf("queries = %d, want 3", queries)
+	}
+}
+
+func TestListRedactsHistoryForFreeMembership(t *testing.T) {
+	database := openInsightDB(t, func(query string, _ []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "FROM relationship_insights"):
+			return insightRows(
+				[]string{"id", "conversation_id", "peer_id", "from_sequence", "to_sequence", "message_count", "status", "observation_level", "personality_type_snapshot", "metrics", "summary", "personality_reference", "suggestions", "created_at"},
+				int64(8), int64(10), int64(2), int64(1), int64(20), int64(20), "completed", "stable", int64(5), []byte(`{"temperature":{"score":80}}`), "历史摘要", []byte(`{"label":"5号"}`), []byte(`["升级建议"]`), time.Now(),
+			), nil
+		case strings.Contains(query, "SELECT member_level,member_expires_at"):
+			return insightRows([]string{"member_level", "member_expires_at"}, "free", nil), nil
+		default:
+			t.Fatalf("unexpected query: %s", query)
+			return nil, errors.New("unexpected query")
+		}
+	})
+	items, err := NewService(database).List(context.Background(), 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %+v", items)
+	}
+	item := items[0]
+	if item.Summary != "" || item.MessageCount != 20 {
+		t.Fatalf("history identity was not retained or summary leaked: %+v", item)
+	}
+	if item.Metrics != nil || item.Suggestions != nil || item.PersonalityTypeSnapshot != nil || item.PersonalityReference != nil {
+		t.Fatalf("paid body leaked to free user: %+v", item)
+	}
+	if item.IsFull || item.AccessState != insightAccessLockedUpgrade || item.RequiredPlanLevel != insightRequiredPlanVIP || !item.UpgradeRequired {
+		t.Fatalf("unexpected locked metadata: %+v", item)
+	}
+}
+
+func TestListByPeerTreatsUnknownMembershipAsFree(t *testing.T) {
+	database := openInsightDB(t, func(query string, _ []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "FROM relationship_insights"):
+			return insightRows(
+				[]string{"id", "conversation_id", "peer_id", "from_sequence", "to_sequence", "message_count", "status", "observation_level", "personality_type_snapshot", "metrics", "summary", "personality_reference", "suggestions", "created_at"},
+				int64(9), int64(11), int64(2), int64(2), int64(30), int64(28), "completed", "preliminary", int64(6), []byte(`{"balance":{"score":60}}`), "朋友摘要", []byte(`{"label":"6号"}`), []byte(`["建议"]`), time.Now(),
+			), nil
+		case strings.Contains(query, "SELECT member_level,member_expires_at"):
+			return insightRows([]string{"member_level", "member_expires_at"}, "future_plan_name", time.Now().Add(time.Hour)), nil
+		default:
+			t.Fatalf("unexpected query: %s", query)
+			return nil, errors.New("unexpected query")
+		}
+	})
+	items, err := NewService(database).ListByPeer(context.Background(), 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %+v", items)
+	}
+	item := items[0]
+	if item.IsFull || item.AccessState != insightAccessLockedUpgrade || item.Metrics != nil || item.Suggestions != nil {
+		t.Fatalf("unknown membership exposed report body: %+v", item)
+	}
+}
+
+func TestGetRedactsExpiredMembership(t *testing.T) {
+	database := openInsightDB(t, func(query string, _ []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "FROM relationship_insights"):
+			return insightRows(
+				[]string{"id", "conversation_id", "peer_id", "from_sequence", "to_sequence", "message_count", "status", "observation_level", "personality_type_snapshot", "metrics", "summary", "personality_reference", "suggestions", "created_at"},
+				int64(10), int64(12), int64(2), int64(1), int64(12), int64(12), "completed", "preliminary", int64(4), []byte(`{"activity":{"score":50}}`), "过期摘要", []byte(`{"label":"4号"}`), []byte(`["建议"]`), time.Now(),
+			), nil
+		case strings.Contains(query, "SELECT member_level,member_expires_at"):
+			return insightRows([]string{"member_level", "member_expires_at"}, "vip", time.Now().Add(-time.Hour)), nil
+		default:
+			t.Fatalf("unexpected query: %s", query)
+			return nil, errors.New("unexpected query")
+		}
+	})
+	item, err := NewService(database).Get(context.Background(), 1, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.IsFull || item.AccessState != insightAccessLockedUpgrade || item.Metrics != nil || item.Suggestions != nil || item.PersonalityTypeSnapshot != nil {
+		t.Fatalf("expired membership exposed report body: %+v", item)
+	}
+}
+
+func TestListMarksActiveVIPHistoryAsFullWithAccessMetadata(t *testing.T) {
+	database := openInsightDB(t, func(query string, _ []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(query, "FROM relationship_insights"):
+			return insightRows(
+				[]string{"id", "conversation_id", "peer_id", "from_sequence", "to_sequence", "message_count", "status", "observation_level", "personality_type_snapshot", "metrics", "summary", "personality_reference", "suggestions", "created_at"},
+				int64(12), int64(14), int64(2), int64(1), int64(18), int64(18), "completed", "stable", int64(3), []byte(`{"activity":{"score":70}}`), "当前摘要", []byte(`{"label":"3号"}`), []byte(`[]`), time.Now(),
+			), nil
+		case strings.Contains(query, "SELECT member_level,member_expires_at"):
+			return insightRows([]string{"member_level", "member_expires_at"}, "vip_quarter", time.Now().Add(time.Hour)), nil
+		case strings.Contains(query, "personality_visibility"):
+			return insightRows([]string{"personality_visibility", "enneagram"}, "friends", int64(3)), nil
+		default:
+			t.Fatalf("unexpected query: %s", query)
+			return nil, errors.New("unexpected query")
+		}
+	})
+	items, err := NewService(database).List(context.Background(), 1, 14)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %+v", items)
+	}
+	item := items[0]
+	if !item.IsFull || item.AccessState != insightAccessActive || item.RequiredPlanLevel != insightRequiredPlanVIP || item.UpgradeRequired {
+		t.Fatalf("unexpected active metadata: %+v", item)
+	}
+	if item.Summary == "" || len(item.Metrics) == 0 || item.PersonalityTypeSnapshot == nil {
+		t.Fatalf("active VIP body was unexpectedly redacted: %+v", item)
 	}
 }
 

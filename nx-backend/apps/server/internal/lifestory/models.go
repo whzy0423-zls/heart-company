@@ -191,6 +191,12 @@ type Story struct {
 	DeletedAt        string           `json:"deletedAt,omitempty"`
 	Revision         int64            `json:"revision"`
 	DraftVersion     int64            `json:"draftVersion"`
+	// Access metadata is owned by the application membership layer. Keeping it
+	// on the domain response lets list/detail/mutation endpoints share one
+	// wire shape without coupling this package to server membership types.
+	AccessState       string `json:"accessState,omitempty"`
+	RequiredPlanLevel string `json:"requiredPlanLevel,omitempty"`
+	AccessReason      string `json:"accessReason,omitempty"`
 }
 
 type Material struct {
@@ -377,6 +383,11 @@ type Version struct {
 	Model            string          `json:"model,omitempty"`
 	GenerationConfig json.RawMessage `json:"generationConfig,omitempty"`
 	CreatedAt        string          `json:"createdAt,omitempty"`
+	// Access metadata is populated by the app membership layer for history
+	// reads so a locked version is not an unexplained empty document.
+	AccessState       string `json:"accessState,omitempty"`
+	RequiredPlanLevel string `json:"requiredPlanLevel,omitempty"`
+	AccessReason      string `json:"accessReason,omitempty"`
 }
 
 type Job struct {
@@ -403,6 +414,10 @@ type Job struct {
 	CreatedAt       string          `json:"createdAt"`
 	StartedAt       string          `json:"startedAt,omitempty"`
 	FinishedAt      string          `json:"finishedAt,omitempty"`
+	// Access metadata mirrors Story and Version for downgrade-aware polling.
+	AccessState       string `json:"accessState,omitempty"`
+	RequiredPlanLevel string `json:"requiredPlanLevel,omitempty"`
+	AccessReason      string `json:"accessReason,omitempty"`
 }
 
 type ReadingProgress struct {
@@ -412,11 +427,14 @@ type ReadingProgress struct {
 	ChapterIndex int `json:"chapterIndex"`
 	// ChapterOrder is retained for older callers and database rows. It is
 	// one-based; JSON always exposes the canonical chapterIndex field.
-	ChapterOrder    int    `json:"-"`
-	CharacterOffset int    `json:"characterOffset"`
-	Completed       bool   `json:"completed"`
-	ClientUpdatedAt string `json:"clientUpdatedAt,omitempty"`
-	UpdatedAt       string `json:"updatedAt,omitempty"`
+	ChapterOrder      int    `json:"-"`
+	CharacterOffset   int    `json:"characterOffset"`
+	Completed         bool   `json:"completed"`
+	ClientUpdatedAt   string `json:"clientUpdatedAt,omitempty"`
+	UpdatedAt         string `json:"updatedAt,omitempty"`
+	AccessState       string `json:"accessState,omitempty"`
+	RequiredPlanLevel string `json:"requiredPlanLevel,omitempty"`
+	AccessReason      string `json:"accessReason,omitempty"`
 }
 
 func (p ReadingProgress) EffectiveChapterIndex() int {
@@ -428,31 +446,38 @@ func (p ReadingProgress) EffectiveChapterIndex() int {
 
 func (p ReadingProgress) MarshalJSON() ([]byte, error) {
 	type payload struct {
-		StoryID         int64  `json:"storyId"`
-		VersionID       int64  `json:"versionId"`
-		ChapterIndex    int    `json:"chapterIndex"`
-		ChapterOrder    int    `json:"chapterOrder"`
-		CharacterOffset int    `json:"characterOffset"`
-		Completed       bool   `json:"completed"`
-		ClientUpdatedAt string `json:"clientUpdatedAt,omitempty"`
-		UpdatedAt       string `json:"updatedAt,omitempty"`
+		StoryID           int64  `json:"storyId"`
+		VersionID         int64  `json:"versionId"`
+		ChapterIndex      int    `json:"chapterIndex"`
+		ChapterOrder      int    `json:"chapterOrder"`
+		CharacterOffset   int    `json:"characterOffset"`
+		Completed         bool   `json:"completed"`
+		ClientUpdatedAt   string `json:"clientUpdatedAt,omitempty"`
+		UpdatedAt         string `json:"updatedAt,omitempty"`
+		AccessState       string `json:"accessState,omitempty"`
+		RequiredPlanLevel string `json:"requiredPlanLevel,omitempty"`
+		AccessReason      string `json:"accessReason,omitempty"`
 	}
 	index := p.EffectiveChapterIndex()
 	return json.Marshal(payload{StoryID: p.StoryID, VersionID: p.VersionID,
 		ChapterIndex: index, ChapterOrder: index + 1, CharacterOffset: p.CharacterOffset,
-		Completed: p.Completed, ClientUpdatedAt: p.ClientUpdatedAt, UpdatedAt: p.UpdatedAt})
+		Completed: p.Completed, ClientUpdatedAt: p.ClientUpdatedAt, UpdatedAt: p.UpdatedAt,
+		AccessState: p.AccessState, RequiredPlanLevel: p.RequiredPlanLevel, AccessReason: p.AccessReason})
 }
 
 func (p *ReadingProgress) UnmarshalJSON(raw []byte) error {
 	type payload struct {
-		StoryID         int64  `json:"storyId"`
-		VersionID       int64  `json:"versionId"`
-		ChapterIndex    *int   `json:"chapterIndex"`
-		ChapterOrder    *int   `json:"chapterOrder"`
-		CharacterOffset int    `json:"characterOffset"`
-		Completed       bool   `json:"completed"`
-		ClientUpdatedAt string `json:"clientUpdatedAt"`
-		UpdatedAt       string `json:"updatedAt"`
+		StoryID           int64  `json:"storyId"`
+		VersionID         int64  `json:"versionId"`
+		ChapterIndex      *int   `json:"chapterIndex"`
+		ChapterOrder      *int   `json:"chapterOrder"`
+		CharacterOffset   int    `json:"characterOffset"`
+		Completed         bool   `json:"completed"`
+		ClientUpdatedAt   string `json:"clientUpdatedAt"`
+		UpdatedAt         string `json:"updatedAt"`
+		AccessState       string `json:"accessState"`
+		RequiredPlanLevel string `json:"requiredPlanLevel"`
+		AccessReason      string `json:"accessReason"`
 	}
 	var value payload
 	if err := json.Unmarshal(raw, &value); err != nil {
@@ -470,6 +495,7 @@ func (p *ReadingProgress) UnmarshalJSON(raw []byte) error {
 	p.StoryID, p.VersionID, p.ChapterIndex, p.ChapterOrder = value.StoryID, value.VersionID, index, index+1
 	p.CharacterOffset, p.Completed = value.CharacterOffset, value.Completed
 	p.ClientUpdatedAt, p.UpdatedAt = value.ClientUpdatedAt, value.UpdatedAt
+	p.AccessState, p.RequiredPlanLevel, p.AccessReason = value.AccessState, value.RequiredPlanLevel, value.AccessReason
 	return nil
 }
 

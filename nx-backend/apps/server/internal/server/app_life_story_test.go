@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -356,6 +357,155 @@ func TestLifeStoryMaterialWritesAreLimitedPerUser(t *testing.T) {
 	}
 	if ok := server.allowLifeStoryMaterialWrite(httptest.NewRecorder(), 8); !ok {
 		t.Fatal("another user must have an independent limit")
+	}
+}
+
+func TestLifeStoryAccessMetadataRetainsOldestStoriesAfterDowngrade(t *testing.T) {
+	stories := []lifestory.Story{
+		{ID: 30, CreatedAt: "2026-09-03T00:00:00Z"},
+		{ID: 10, CreatedAt: "2026-09-01T00:00:00Z"},
+		{ID: 20, CreatedAt: "2026-09-02T00:00:00Z"},
+		{ID: 40, CreatedAt: "2026-09-04T00:00:00Z"},
+	}
+	decorateLifeStoriesForPlan(stories, "free")
+	if stories[1].AccessState != resourceAccessActive || stories[1].RequiredPlanLevel != "free" {
+		t.Fatalf("oldest story should remain active: %+v", stories[1])
+	}
+	if stories[3].AccessState != resourceAccessReadOnlyOverLimit || stories[3].RequiredPlanLevel != "svip" {
+		t.Fatalf("newest story should be retained read-only: %+v", stories[3])
+	}
+	if stories[3].AccessReason == "" {
+		t.Fatal("read-only story should include an access reason")
+	}
+}
+
+func TestLifeStoryMembershipUpgradeResponseUsesStableCode(t *testing.T) {
+	response := httptest.NewRecorder()
+	lifeStoryWriteError(response, &membershipUpgradeError{RequiredPlanLevel: "vip", AccessState: resourceAccessReadOnlyOverLimit})
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status=%d want 403 body=%s", response.Code, response.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["code"] != "membership_upgrade_required" || payload["errorCode"] != "membership_upgrade_required" || payload["requiredPlanLevel"] != "vip" {
+		t.Fatalf("unexpected membership response: %#v", payload)
+	}
+}
+
+func TestLifeStorySubresourceAccessMetadataSurvivesRedaction(t *testing.T) {
+	access := membershipResourceMetadata{
+		State:             resourceAccessReadOnlyOverLimit,
+		RequiredPlanLevel: "svip",
+		Reason:            "历史内容已保留，请升级后继续使用",
+		UpgradeRequired:   true,
+	}
+	version := &lifestory.Version{
+		ID:         9,
+		Chapters:   []lifestory.Chapter{{Order: 1, Body: "private"}},
+		Reflection: "private",
+	}
+	job := &lifestory.Job{ID: 10, VersionID: 9, SourceVersionID: 8, ErrorMessage: "private"}
+	progress := &lifestory.ReadingProgress{StoryID: 7, VersionID: 9, ChapterIndex: 2, CharacterOffset: 12, Completed: true}
+
+	redactLockedLifeStoryVersion(version, access)
+	redactLockedLifeStoryJob(job, access)
+	redactLockedLifeStoryProgress(progress, access)
+
+	if version.AccessState != access.State || version.RequiredPlanLevel != access.RequiredPlanLevel || version.AccessReason != access.Reason || len(version.Chapters) != 0 || version.Reflection != "" {
+		t.Fatalf("version metadata/redaction mismatch: %+v", version)
+	}
+	if job.AccessState != access.State || job.RequiredPlanLevel != access.RequiredPlanLevel || job.AccessReason != access.Reason || job.VersionID != 0 || job.SourceVersionID != 0 || job.ErrorMessage != "" {
+		t.Fatalf("job metadata/redaction mismatch: %+v", job)
+	}
+	if progress.AccessState != access.State || progress.RequiredPlanLevel != access.RequiredPlanLevel || progress.AccessReason != access.Reason || progress.VersionID != 0 || progress.CharacterOffset != 0 || progress.Completed {
+		t.Fatalf("progress metadata/redaction mismatch: %+v", progress)
+	}
+	raw, err := json.Marshal(progress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["accessState"] != access.State || payload["requiredPlanLevel"] != access.RequiredPlanLevel || payload["accessReason"] != access.Reason {
+		t.Fatalf("progress JSON lost access metadata: %s", raw)
+	}
+}
+
+func TestLifeStoryAccessFailsClosedWhenAuthoritativeListIsUnavailable(t *testing.T) {
+	registerPgxErrorDriver()
+	db, err := sql.Open(pgxErrorDriverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	server := &Server{db: db, lifeStories: lifestory.NewStore(db)}
+	story := &lifestory.Story{
+		ID:        7,
+		Title:     "保留标题",
+		Materials: []lifestory.Material{{SourceType: lifestory.MaterialText, Transcript: "私密素材"}},
+		FactCard:  lifestory.FactCard{Setting: "私密事实"},
+		Outline:   lifestory.Outline{Version: 1},
+	}
+	server.decorateLifeStory(context.Background(), 7, story)
+	if story.AccessState != resourceAccessLockedUpgrade || story.RequiredPlanLevel != "svip" {
+		t.Fatalf("story list failure should lock access: %+v", story)
+	}
+	if len(story.Materials) != 0 || story.FactCard.Setting != "" || story.Outline.Version != 0 {
+		t.Fatalf("locked story leaked private content: %+v", story)
+	}
+
+	access := server.lifeStoryAccessState(context.Background(), 7, story.ID)
+	if access.State != resourceAccessLockedUpgrade || access.RequiredPlanLevel != "svip" || !access.UpgradeRequired {
+		t.Fatalf("story access failure should remain locked: %+v", access)
+	}
+	if err := server.ensureLifeStoryWritable(context.Background(), 7, story.ID); err == nil {
+		t.Fatal("story writes must be rejected while access state is unavailable")
+	}
+	// Draft creation is independent from historical access decoration. A list
+	// outage must not turn into a permanent creation lock; the generation job
+	// will enforce the current period's quota transactionally.
+	if err := server.ensureLifeStoryCreationAllowed(context.Background(), 7); err != nil {
+		t.Fatalf("story draft creation should not depend on historical list access: %v", err)
+	}
+}
+
+func TestLifeStoryCreationDoesNotUseHistoricalCountAsMonthlyQuota(t *testing.T) {
+	registerPgxErrorDriver()
+	db, err := sql.Open(pgxErrorDriverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	server := &Server{db: db, lifeStories: lifestory.NewStore(db)}
+	// The production-style fixture returns a database error for the story list.
+	// A historical-count gate would fail here (and would also block forever
+	// after a month rolls over); draft creation must remain allowed. Quota is
+	// consumed later by CreateGenerationJobWithInput/reserveQuotaTx.
+	if err := server.ensureLifeStoryCreationAllowed(context.Background(), 7); err != nil {
+		t.Fatalf("historical story count must not enforce monthly generation quota: %v", err)
+	}
+}
+
+func TestLifeStoryHistoryLimitIsSeparateFromMonthlyGenerationQuota(t *testing.T) {
+	if got := lifeStoryHistoryLimit("free"); got != 1 {
+		t.Fatalf("free history limit=%d want 1", got)
+	}
+	if got := lifeStoryHistoryLimit("vip"); got != 3 {
+		t.Fatalf("VIP history limit=%d want 3", got)
+	}
+	if got := lifeStoryHistoryLimit("svip"); got != 12 {
+		t.Fatalf("S VIP history limit=%d want 12", got)
+	}
+	// The monthly generation policy is a separate field and may change without
+	// changing the number of historical records kept active at each level.
+	if defaultMembershipLevelPlan("vip").StoryMonthlyLimit == lifeStoryHistoryLimit("vip") {
+		t.Log("current VIP defaults happen to match; the functions remain separate")
 	}
 }
 

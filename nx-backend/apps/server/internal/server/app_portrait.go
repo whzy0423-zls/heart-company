@@ -27,6 +27,7 @@ type portraitResp struct {
 	GuidingQuestions     []string `json:"guidingQuestions,omitempty"`     // 引导问题
 	MainType             int      `json:"mainType,omitempty"`             // 主型 id
 	UpdatedAt            string   `json:"updatedAt,omitempty"`            // 更新时间，格式 YYYY/MM/DD HH:mm:ss
+	membershipResourceMetadata
 }
 
 // appCardPortrait 返回指定人物卡的成长状态画像。
@@ -52,9 +53,40 @@ func (s *Server) appCardPortrait(w http.ResponseWriter, r *http.Request, userID 
 		httpx.Fail(w, http.StatusInternalServerError, "query failed")
 		return
 	}
-
 	resp := buildPortrait(card)
+	access, accessErr := s.cardMembershipResourceMetadata(
+		r.Context(), userID, id, "历史画像已保留，请升级后继续使用",
+	)
+	if accessErr != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "membership access unavailable")
+		return
+	}
+	resp.membershipResourceMetadata = access
+	redactPortraitContent(&resp, access)
 	httpx.OK(w, resp)
+}
+
+// redactPortraitContent keeps the card identity and update timestamp useful
+// for history navigation while withholding the generated portrait sections
+// when the underlying card is no longer entitled to them.
+func redactPortraitContent(resp *portraitResp, access membershipResourceMetadata) {
+	if resp == nil || !membershipContentLocked(access) {
+		return
+	}
+	resp.HasEnoughData = false
+	resp.Summary = ""
+	resp.StateLabel = ""
+	resp.Strengths = nil
+	resp.PotentialDirections = nil
+	resp.SupportResources = nil
+	resp.PositivePatterns = nil
+	resp.StressPoints = nil
+	resp.StressSolutions = nil
+	resp.EmotionSupport = nil
+	resp.RelationshipPatterns = nil
+	resp.GrowthAdvice = nil
+	resp.AwarenessPrompts = nil
+	resp.GuidingQuestions = nil
 }
 
 // buildPortrait 依据人物卡的主型，组装成长状态画像。

@@ -72,7 +72,14 @@ func (s *Server) appReportList(w http.ResponseWriter, r *http.Request) {
 		Summary   string `json:"summary"`
 		StartDate string `json:"startDate"`
 		EndDate   string `json:"endDate"`
+		IsFull    bool   `json:"isFull"`
+		membershipResourceMetadata
 	}
+	access := membershipResourceMetadataForPlan(
+		s.currentAppMembershipPlan(r.Context(), userInfo.ID).PlanLevel,
+		"vip",
+		"历史报告已保留，请升级后继续使用",
+	)
 
 	var reports []weeklyReport
 	now := time.Now()
@@ -115,11 +122,13 @@ func (s *Server) appReportList(w http.ResponseWriter, r *http.Request) {
 
 		if msgCount > 0 {
 			reports = append(reports, weeklyReport{
-				ID:        weekID,
-				WeekLabel: weekStart.Format("2006年第") + getWeekOfYear(weekStart) + "周",
-				Summary:   "本周共进行 " + strconv.Itoa(msgCount) + " 次对话",
-				StartDate: weekStart.Format("2006-01-02"),
-				EndDate:   weekEnd.Format("2006-01-02"),
+				ID:                         weekID,
+				WeekLabel:                  weekStart.Format("2006年第") + getWeekOfYear(weekStart) + "周",
+				Summary:                    "本周共进行 " + strconv.Itoa(msgCount) + " 次对话",
+				StartDate:                  weekStart.Format("2006-01-02"),
+				EndDate:                    weekEnd.Format("2006-01-02"),
+				IsFull:                     !membershipContentLocked(access),
+				membershipResourceMetadata: access,
 			})
 		}
 	}
@@ -233,16 +242,32 @@ func (s *Server) appReportDetail(w http.ResponseWriter, r *http.Request, reportI
 		EndDate     string `json:"endDate"`
 		Insights    string `json:"insights"`
 		Suggestions string `json:"suggestions"`
+		IsFull      bool   `json:"isFull"`
+		membershipResourceMetadata
 	}
+	access := membershipResourceMetadataForPlan(
+		s.currentAppMembershipPlan(r.Context(), userInfo.ID).PlanLevel,
+		"vip",
+		"历史报告已保留，请升级后继续使用",
+	)
+	full := !membershipContentLocked(access)
 
 	detail := reportDetail{
-		ID:          reportID,
-		WeekLabel:   targetWeekStart.Format("2006年第") + getWeekOfYear(targetWeekStart) + "周",
-		Summary:     "本周您共发起 " + strconv.Itoa(userMsgCount) + " 次提问，AI 回复 " + strconv.Itoa(aiMsgCount) + " 次",
-		StartDate:   targetWeekStart.Format("2006-01-02"),
-		EndDate:     targetWeekEnd.Format("2006-01-02"),
-		Insights:    "本周您在九型人格的探索中展现出积极的思考态度。持续的对话有助于深化自我认知。",
-		Suggestions: "建议下周尝试更多情境化的提问，例如在具体场景中如何运用九型知识。",
+		ID:                         reportID,
+		WeekLabel:                  targetWeekStart.Format("2006年第") + getWeekOfYear(targetWeekStart) + "周",
+		Summary:                    "本周您共发起 " + strconv.Itoa(userMsgCount) + " 次提问，AI 回复 " + strconv.Itoa(aiMsgCount) + " 次",
+		StartDate:                  targetWeekStart.Format("2006-01-02"),
+		EndDate:                    targetWeekEnd.Format("2006-01-02"),
+		Insights:                   "本周您在九型人格的探索中展现出积极的思考态度。持续的对话有助于深化自我认知。",
+		Suggestions:                "建议下周尝试更多情境化的提问，例如在具体场景中如何运用九型知识。",
+		IsFull:                     full,
+		membershipResourceMetadata: access,
+	}
+	if !full {
+		// Summary, dates and the upgrade metadata are the history preview. The
+		// generated insight and advice are the paid report body.
+		detail.Insights = ""
+		detail.Suggestions = ""
 	}
 
 	httpx.OK(w, detail)

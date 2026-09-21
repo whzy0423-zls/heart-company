@@ -376,6 +376,22 @@ func (s *Store) GetSession(ctx context.Context, appUserID, sessionID int64) (Ses
 	return sess, err
 }
 
+// GetMessageSession resolves the owning chat session for a message. Keeping
+// the user and scene predicates in this lookup gives mutation handlers a
+// single ownership check before they apply card-level entitlements.
+func (s *Store) GetMessageSession(ctx context.Context, appUserID, messageID int64) (Session, error) {
+	sess, err := scanSession(s.db.QueryRowContext(ctx,
+		`SELECT s.id, s.app_user_id, s.card_id, s.title, s.updated_at, s.create_time
+		 FROM app_chat_messages m
+		 JOIN app_chat_sessions s ON s.id = m.session_id
+		 WHERE m.id = $1 AND s.app_user_id = $2 AND s.scene = 'chat'`,
+		messageID, appUserID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return sess, ErrNotFound
+	}
+	return sess, err
+}
+
 // ListMessages 返回会话的全部消息（按时间正序）。
 func (s *Store) ListMessages(ctx context.Context, sessionID int64) ([]Message, error) {
 	rows, err := s.db.QueryContext(ctx,

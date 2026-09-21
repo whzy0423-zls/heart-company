@@ -3,6 +3,7 @@ package server
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -20,6 +21,7 @@ type appMemoryItem struct {
 	SourceTime string `json:"sourceTime,omitempty"`
 	CreateTime string `json:"createTime"`
 	UpdateTime string `json:"updateTime"`
+	membershipResourceMetadata
 }
 
 func appMemoryTime(t time.Time) string {
@@ -30,6 +32,10 @@ func appMemoryTime(t time.Time) string {
 }
 
 func (s *Server) appCardMemories(w http.ResponseWriter, r *http.Request, appUserID int64, idText string) {
+	if r.Method != http.MethodGet {
+		httpx.Fail(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
 	cardID, err := strconv.ParseInt(strings.Trim(idText, "/"), 10, 64)
 	if err != nil || cardID <= 0 {
 		httpx.Fail(w, http.StatusBadRequest, "invalid id")
@@ -37,6 +43,13 @@ func (s *Server) appCardMemories(w http.ResponseWriter, r *http.Request, appUser
 	}
 	if _, err := s.quiz.GetCard(r.Context(), appUserID, cardID); err != nil {
 		httpx.Fail(w, http.StatusNotFound, "card not found")
+		return
+	}
+	access, accessErr := s.cardMembershipResourceMetadata(
+		r.Context(), appUserID, cardID, "历史记忆已保留，请升级后继续使用",
+	)
+	if accessErr != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "membership access unavailable")
 		return
 	}
 	rows, err := s.db.QueryContext(r.Context(),
@@ -70,7 +83,20 @@ func (s *Server) appCardMemories(w http.ResponseWriter, r *http.Request, appUser
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
+	for i := range items {
+		items[i].membershipResourceMetadata = access
+		redactAppMemoryContent(&items[i], access)
+	}
 	httpx.OK(w, items)
+}
+
+// redactAppMemoryContent keeps the memory row and its timestamps available for
+// history management, but never sends the private body for a locked card.
+func redactAppMemoryContent(item *appMemoryItem, access membershipResourceMetadata) {
+	if item == nil || !membershipContentLocked(access) {
+		return
+	}
+	item.Content = ""
 }
 
 func appMemoryIDFromPath(path, suffix string) (int64, bool) {
@@ -93,6 +119,8 @@ func (s *Server) appMemoryDelete(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "invalid memory id")
 		return
 	}
+	// Deletion remains an allowed cleanup action for read-only retained resources.
+	// Only edits/status changes require the card to remain writable.
 	res, err := s.db.ExecContext(r.Context(),
 		`DELETE FROM app_memories WHERE id = $1 AND app_user_id = $2`,
 		id, userInfo.ID)
@@ -117,6 +145,20 @@ func (s *Server) appMemoryStatus(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		httpx.Fail(w, http.StatusBadRequest, "invalid memory id")
 		return
+	}
+	var cardID int64
+	if err := s.db.QueryRowContext(r.Context(), `SELECT card_id FROM app_memories WHERE id=$1 AND app_user_id=$2`, id, userInfo.ID).Scan(&cardID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			httpx.Fail(w, http.StatusNotFound, "memory not found")
+		} else {
+			httpx.Fail(w, http.StatusInternalServerError, "server error")
+		}
+		return
+	}
+	if err := s.ensureCardWritable(r.Context(), userInfo.ID, cardID); err != nil {
+		if writeMembershipAccessError(w, err) {
+			return
+		}
 	}
 	var body struct {
 		Status string `json:"status"`

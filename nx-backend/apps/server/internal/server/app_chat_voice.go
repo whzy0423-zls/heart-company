@@ -64,6 +64,11 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusNotFound, "session not found")
 		return
 	}
+	if err := s.ensureCardWritable(r.Context(), userInfo.ID, sess.CardID); err != nil {
+		if writeMembershipAccessError(w, err) {
+			return
+		}
+	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, voiceChatMaxBytes)
 	if err := r.ParseMultipartForm(voiceChatMaxBytes); err != nil {
