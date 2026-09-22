@@ -28,6 +28,7 @@ export * from './upload';
 export * from './user';
 export * from './video';
 export * from './voice';
+export * from './voice-broadcast';
 export * from './xinzhili-model-config';
 export * from './theory-library';
 export * from './teacher';

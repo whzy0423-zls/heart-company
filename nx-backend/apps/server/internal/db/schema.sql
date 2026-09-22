@@ -56,6 +56,28 @@ CREATE TABLE IF NOT EXISTS site_configs (
   update_time TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ----- 会话文字回复语音播报全局配置：单例、版本化、密钥密文存储 -----
+CREATE TABLE IF NOT EXISTS app_voice_broadcast_configs (
+  id                   SMALLINT PRIMARY KEY CHECK (id = 1),
+  version              BIGINT NOT NULL CHECK (version > 0),
+  enabled              BOOLEAN NOT NULL DEFAULT false,
+  provider             TEXT NOT NULL DEFAULT 'aliyun-bailian',
+  region               TEXT NOT NULL DEFAULT 'cn-beijing',
+  workspace_id         TEXT NOT NULL DEFAULT '',
+  model                TEXT NOT NULL DEFAULT 'qwen3-tts-instruct-flash',
+  default_voice        TEXT NOT NULL DEFAULT 'Cherry',
+  current_voice        TEXT NOT NULL DEFAULT 'Cherry',
+  voices               JSONB NOT NULL DEFAULT '[]'::jsonb,
+  api_key_ciphertext   TEXT NOT NULL DEFAULT '',
+  api_key_suffix       TEXT NOT NULL DEFAULT '',
+  health               JSONB NOT NULL DEFAULT '{"status":"unknown","ok":false,"message":"尚未测试"}'::jsonb,
+  create_time          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_voice_broadcast_configs_update
+  ON app_voice_broadcast_configs(update_time DESC);
+
 CREATE TABLE IF NOT EXISTS app_releases (
   id BIGSERIAL PRIMARY KEY,
   platform TEXT NOT NULL CHECK (platform IN ('android')),

@@ -17,6 +17,7 @@ const routes: RouteRecordRaw[] = [
         'App:SkillLibrary:View',
         'App:StoryManagement:View',
         'App:PlanManagement:View',
+        'App:VoiceBroadcast:Manage',
         'Website:AppReleases:List',
         'Website:Write',
         'Agent:Distribution:View',
@@ -82,6 +83,16 @@ const routes: RouteRecordRaw[] = [
         },
         name: 'AppDistributionPosterManagement',
         path: 'distribution-poster',
+      },
+      {
+        component: () => import('#/views/app/voice-broadcast.vue'),
+        meta: {
+          authority: ['App:VoiceBroadcast:Manage'],
+          icon: 'lucide:volume-2',
+          title: '语音播报配置',
+        },
+        name: 'AppVoiceBroadcastConfig',
+        path: 'voice-broadcast-config',
       },
       {
         component: () => import('#/views/app/plan-management.vue'),

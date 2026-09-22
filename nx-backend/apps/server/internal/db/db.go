@@ -160,6 +160,9 @@ func seed(ctx context.Context, database *sql.DB, adminUser, adminPassword string
 	if err := seedAppPlanManagementMenu(ctx, database); err != nil {
 		return fmt.Errorf("seed app plan management menu: %w", err)
 	}
+	if err := seedVoiceBroadcastMenu(ctx, database); err != nil {
+		return fmt.Errorf("seed voice broadcast menu: %w", err)
+	}
 	if err := seedDistributionMenuBindings(ctx, database); err != nil {
 		return fmt.Errorf("seed distribution menu bindings: %w", err)
 	}

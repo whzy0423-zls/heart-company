@@ -79,6 +79,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/videoproject"
 	"nine-xing/nx-backend/apps/server/internal/videostoryboard"
 	"nine-xing/nx-backend/apps/server/internal/voice"
+	"nine-xing/nx-backend/apps/server/internal/voicebroadcastconfig"
 	"nine-xing/nx-backend/apps/server/internal/wechat"
 	"nine-xing/nx-backend/apps/server/internal/wxpay"
 	"nine-xing/nx-backend/apps/server/internal/xinzhili"
@@ -104,6 +105,8 @@ type Server struct {
 	setBailianCopyConfig       func(voice.BailianConfig)
 	bailianCredentials         bailianCredentialStore
 	bailianRuntime             bailianCredentialRuntimeState
+	voiceBroadcastConfig       voiceBroadcastConfigStore
+	voiceBroadcastProbe        func(context.Context, voicebroadcastconfig.Config, string) voiceBroadcastProbeResult
 	videos                     *video.Store
 	videoConfig                config.VideoConfig
 	videoAnalysis              *videoanalysis.Store
@@ -543,6 +546,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		}
 	}
 	s.xinzhiliVoiceConfig = xinzhili.NewVoiceConfigStore(database, xinzhiliVoiceCodec)
+	s.voiceBroadcastConfig = voicebroadcastconfig.NewStore(database, xinzhiliVoiceCodec)
 	s.theoryAdmin = theoryLibraryAdminStore{db: database}
 	s.enneagramAdmin = newEnneagramLibraryAdminStore(database)
 	s.loginLimiter = newStrRateLimiter(10, time.Minute)
@@ -939,6 +943,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/video/capabilities", s.method(http.MethodGet, s.requirePermission("Video:Generate:Manage", s.videoCapabilities)))
 	s.mux.HandleFunc("/api/xinzhili-model-config", s.requirePermission("System:XinzhiliModel:Config", s.xinzhiliModelConfigHandler))
 	s.mux.HandleFunc("/api/xinzhili-voice-config", s.requirePermission("System:XinzhiliModel:Config", s.xinzhiliVoiceConfigHandler))
+	s.mux.HandleFunc("/api/app/voice-broadcast-config/test", s.requirePermission(voiceBroadcastPermission, s.voiceBroadcastConfigTestHandler))
+	s.mux.HandleFunc("/api/app/voice-broadcast-config", s.requirePermission(voiceBroadcastPermission, s.voiceBroadcastConfigHandler))
 	s.mux.HandleFunc("/api/theory-libraries", s.requirePermission("System:TheoryLibrary:Manage", s.theoryLibrariesHandler))
 	s.mux.HandleFunc("/api/theory-libraries/", s.requirePermission("System:TheoryLibrary:Manage", s.theoryLibraryActionHandler))
 	registerEnneagramLibraryAdminRoutes(s.mux, s.requirePermission, s)
