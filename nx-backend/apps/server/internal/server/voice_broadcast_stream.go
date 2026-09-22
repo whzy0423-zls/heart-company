@@ -125,10 +125,10 @@ func (s *voiceBroadcastStream) Close() error {
 		return nil
 	}
 	s.jobsMu.Lock()
-	defer s.jobsMu.Unlock()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
+		s.jobsMu.Unlock()
 		return s.Wait()
 	}
 	chunks := s.chunker.Flush()
@@ -138,6 +138,7 @@ func (s *voiceBroadcastStream) Close() error {
 		s.recordError(err)
 	}
 	s.closeOnce.Do(func() { close(s.jobs) })
+	s.jobsMu.Unlock()
 	return s.Wait()
 }
 
