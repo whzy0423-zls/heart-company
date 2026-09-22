@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/auth"
+	"nine-xing/nx-backend/apps/server/internal/bailianconfig"
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/voicebroadcastconfig"
 )
@@ -141,6 +142,62 @@ func TestLoadVoiceBroadcastConfigUsesAdminSingleton(t *testing.T) {
 	}
 	if got.Endpoint != voicebroadcastconfig.DefaultEndpoint || got.GroupID != "workspace-1" || got.Voice != "Serena" {
 		t.Fatalf("admin fields were not mapped = %+v", got)
+	}
+}
+
+func TestLoadVoiceBroadcastConfigFallsBackToSharedBailianCredential(t *testing.T) {
+	store := &memoryVoiceBroadcastConfigStore{
+		cfg: voicebroadcastconfig.Config{
+			Version:      2,
+			Enabled:      true,
+			Provider:     voicebroadcastconfig.DefaultProvider,
+			WorkspaceID:  "workspace-1",
+			Model:        voicebroadcastconfig.DefaultModel,
+			CurrentVoice: voicebroadcastconfig.DefaultFemaleVoice,
+		},
+		found: true,
+	}
+	s := &Server{
+		voiceBroadcastConfig: store,
+		bailianCredentials: &memoryBailianCredentialStore{
+			cfg:   bailianconfig.Config{Version: 7, APIKey: "sk-shared-voice"},
+			found: true,
+		},
+	}
+
+	got, err := s.loadVoiceBroadcastConfig(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.APIKey != "sk-shared-voice" {
+		t.Fatalf("APIKey=%q, want shared Bailian credential", got.APIKey)
+	}
+}
+
+func TestLoadVoiceBroadcastConfigPrefersAdminCredentialOverShared(t *testing.T) {
+	s := &Server{
+		voiceBroadcastConfig: &memoryVoiceBroadcastConfigStore{
+			cfg: voicebroadcastconfig.Config{
+				Enabled:      true,
+				Provider:     voicebroadcastconfig.DefaultProvider,
+				Model:        voicebroadcastconfig.DefaultModel,
+				CurrentVoice: voicebroadcastconfig.DefaultFemaleVoice,
+				APIKey:       "sk-admin-voice",
+			},
+			found: true,
+		},
+		bailianCredentials: &memoryBailianCredentialStore{
+			cfg:   bailianconfig.Config{APIKey: "sk-shared-voice"},
+			found: true,
+		},
+	}
+
+	got, err := s.loadVoiceBroadcastConfig(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.APIKey != "sk-admin-voice" {
+		t.Fatalf("APIKey=%q, want admin credential", got.APIKey)
 	}
 }
 

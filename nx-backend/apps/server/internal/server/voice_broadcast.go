@@ -95,6 +95,28 @@ func defaultVoiceBroadcastConfig() voiceBroadcastConfig {
 	}
 }
 
+// voiceBroadcastSharedCredential returns the existing shared Bailian key when
+// the voice-broadcast configuration does not carry its own key. The admin
+// page intentionally allows an empty key so installations that already use
+// the shared credential store do not need to enter the secret twice.
+// Credential resolution is best effort here: a missing/unavailable shared
+// store should make the optional voice channel unavailable without affecting
+// text chat or capability reads.
+func (s *Server) voiceBroadcastSharedCredential(ctx context.Context, cfg voiceBroadcastConfig) string {
+	if s == nil || s.bailianCredentials == nil || strings.TrimSpace(cfg.APIKey) != "" {
+		return strings.TrimSpace(cfg.APIKey)
+	}
+	if normalizeVoiceBroadcastProvider(cfg.Provider) != xinzhili.TTSProviderBailian ||
+		!xinzhili.IsOfficialDashScopeTTSEndpoint(cfg.Endpoint) {
+		return ""
+	}
+	resolved, err := s.resolveBailianCredentials(ctx)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(resolved.APIKey)
+}
+
 type voiceBroadcastCapability struct {
 	Enabled           bool   `json:"enabled"`
 	UserEnabled       bool   `json:"userEnabled"`
@@ -134,6 +156,7 @@ func (s *Server) loadVoiceBroadcastConfig(ctx context.Context) (voiceBroadcastCo
 		}
 		cfg := defaultVoiceBroadcastConfig()
 		if !found {
+			cfg.APIKey = s.voiceBroadcastSharedCredential(ctx, cfg)
 			return cfg, nil
 		}
 		cfg.Enabled = stored.Enabled
@@ -157,7 +180,11 @@ func (s *Server) loadVoiceBroadcastConfig(ctx context.Context) (voiceBroadcastCo
 			cfg.Voice = voiceBroadcastDefaultVoice
 		}
 		cfg.Format = "mp3"
-		cfg.APIKey = strings.TrimSpace(stored.APIKey)
+		cfg.APIKey = s.voiceBroadcastSharedCredential(ctx, voiceBroadcastConfig{
+			Provider: cfg.Provider,
+			Endpoint: cfg.Endpoint,
+			APIKey:   strings.TrimSpace(stored.APIKey),
+		})
 		return cfg, nil
 	}
 	cfg := defaultVoiceBroadcastConfig()
