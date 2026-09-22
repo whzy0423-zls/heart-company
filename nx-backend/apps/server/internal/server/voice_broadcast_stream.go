@@ -8,11 +8,19 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/voice"
 )
 
 const voiceBroadcastQueueSize = 8
+
+// voiceBroadcastCloseGrace is only the terminal ordering grace period. Text
+// persistence starts before this period is observed, so a slow optional TTS
+// provider cannot hold the database write. Fast providers still flush their
+// final segment before the text done event, preserving the original protocol
+// ordering.
+const voiceBroadcastCloseGrace = 300 * time.Millisecond
 
 // voiceBroadcastSegment is an in-process segment. Audio is converted to a
 // base64 string only at the HTTP/WebSocket boundary, never persisted.
@@ -61,6 +69,57 @@ type voiceBroadcastStream struct {
 	mu        sync.Mutex
 	closed    bool
 	firstErr  error
+}
+
+// voiceBroadcastCloseHandle owns the one asynchronous Close call for a
+// stream. Callers can wait briefly for the normal final segment, then abort
+// the optional channel without blocking the text response.
+type voiceBroadcastCloseHandle struct {
+	stream *voiceBroadcastStream
+	done   chan error
+}
+
+func startVoiceBroadcastClose(stream *voiceBroadcastStream) *voiceBroadcastCloseHandle {
+	if stream == nil {
+		return nil
+	}
+	handle := &voiceBroadcastCloseHandle{stream: stream, done: make(chan error, 1)}
+	go func() { handle.done <- stream.Close() }()
+	return handle
+}
+
+func (h *voiceBroadcastCloseHandle) await(timeout time.Duration) (error, bool) {
+	if h == nil {
+		return nil, true
+	}
+	if timeout <= 0 {
+		select {
+		case err := <-h.done:
+			return err, true
+		default:
+			return context.DeadlineExceeded, false
+		}
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-h.done:
+		return err, true
+	case <-timer.C:
+		// Close may still be waiting on a provider that does not honor its
+		// context immediately. Cancel and detach the emitter so the caller can
+		// close its event channel without a late send or a blocked wait.
+		h.abort()
+		return context.DeadlineExceeded, false
+	}
+}
+
+func (h *voiceBroadcastCloseHandle) abort() {
+	if h == nil || h.stream == nil {
+		return
+	}
+	h.stream.Cancel()
+	h.stream.detachEmit()
 }
 
 func newVoiceBroadcastStream(ctx context.Context, replyID string, provider voiceBroadcastSynthesizer, emit func(voiceBroadcastSegment) error) *voiceBroadcastStream {
@@ -176,6 +235,18 @@ func (s *voiceBroadcastStream) recordError(err error) {
 	s.mu.Unlock()
 }
 
+// detachEmit prevents a late provider completion from writing to a pipeline
+// event channel whose owner has already emitted its terminal text event. The
+// emitter call itself is serialized with this mutation below.
+func (s *voiceBroadcastStream) detachEmit() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.emit = nil
+	s.mu.Unlock()
+}
+
 func (s *voiceBroadcastStream) run(ctx context.Context) {
 	defer close(s.done)
 	var pending *voiceBroadcastSegment
@@ -227,6 +298,15 @@ func (s *voiceBroadcastStream) run(ctx context.Context) {
 }
 
 func (s *voiceBroadcastStream) emitSegment(segment voiceBroadcastSegment) error {
+	if s == nil {
+		return nil
+	}
+	// Hold the same mutex used by detachEmit while invoking the callback. A
+	// timeout can therefore either detach before this call starts or wait for
+	// the in-flight callback to observe cancellation; it can never race a
+	// closed events channel.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.emit == nil {
 		return nil
 	}

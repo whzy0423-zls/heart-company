@@ -184,6 +184,9 @@ func TestLoadVoiceBroadcastConfigUsesAdminSingleton(t *testing.T) {
 	if got.Endpoint != voicebroadcastconfig.DefaultEndpoint || got.GroupID != "workspace-1" || got.Voice != "Serena" {
 		t.Fatalf("admin fields were not mapped = %+v", got)
 	}
+	if got.Region != "cn-shanghai" || voiceBroadcastTTSConfig(got).Region != "cn-shanghai" {
+		t.Fatalf("admin region was not carried into runtime TTS config = %+v", got)
+	}
 }
 
 func TestLoadVoiceBroadcastConfigFallsBackToSharedBailianCredential(t *testing.T) {
@@ -353,6 +356,70 @@ func TestAppChatStreamEmitsVoiceSideChannelWithoutChangingTextEvents(t *testing.
 	if strings.Index(body, "event: voice\n") > strings.Index(body, "event: done\n") {
 		t.Fatalf("voice segment arrived after done: %q", body)
 	}
+}
+
+func TestAppChatStreamDoesNotWaitForSlowVoiceClose(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	s := newAppChatStreamServer(store, successfulAppChatGenerator("这是第一句内容，需要播报。"))
+	s.voiceBroadcastPreferences = newMemoryVoiceBroadcastPreferenceStore()
+	if err := s.voiceBroadcastPreferences.Set(context.Background(), 7, true); err != nil {
+		t.Fatal(err)
+	}
+	provider := &blockingVoiceBroadcastProvider{started: make(chan struct{}), release: make(chan struct{})}
+	s.voiceBroadcastConfigLoader = func(context.Context) (voiceBroadcastConfig, error) {
+		return voiceBroadcastConfig{Enabled: true, Provider: voiceBroadcastProviderBailian, APIKey: "test", Model: voiceBroadcastDefaultModel, Voice: voiceBroadcastDefaultVoice}, nil
+	}
+	s.voiceBroadcastSynthesizerFactory = func(context.Context) (voiceBroadcastSynthesizer, error) {
+		return provider, nil
+	}
+	w := newAppChatBlockingStreamWriter()
+	done := make(chan struct{})
+	go func() {
+		s.appChatRouter(w, newAppChatStreamRequest(context.Background()))
+		close(done)
+	}()
+	select {
+	case <-provider.started:
+	case <-time.After(time.Second):
+		t.Fatal("voice provider did not start")
+	}
+	started := time.Now()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		close(provider.release)
+		t.Fatal("text stream remained blocked by slow voice close")
+	}
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("text terminal took too long after voice provider stalled: %s", elapsed)
+	}
+	close(provider.release)
+	body := w.BodyString()
+	if !strings.Contains(body, "event: done\n") || store.saveCallCount() != 1 {
+		t.Fatalf("text terminal/persistence missing after slow voice close: body=%q saves=%d", body, store.saveCallCount())
+	}
+}
+
+func TestVoiceBroadcastCloseHandleBoundsSlowProvider(t *testing.T) {
+	provider := &blockingVoiceBroadcastProvider{started: make(chan struct{}), release: make(chan struct{})}
+	stream := newVoiceBroadcastStream(context.Background(), "reply-timeout", provider, nil)
+	if err := stream.Push("这是第一句内容，需要播报。第二句内容，需要等待语音合成。"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(time.Second):
+		t.Fatal("voice provider did not start")
+	}
+	handle := startVoiceBroadcastClose(stream)
+	started := time.Now()
+	err, completed := handle.await(20 * time.Millisecond)
+	if completed || !errors.Is(err, context.DeadlineExceeded) || time.Since(started) >= time.Second {
+		t.Fatalf("close handle result err=%v completed=%t elapsed=%s", err, completed, time.Since(started))
+	}
+	// abort is part of await's timeout path; releasing the provider also lets
+	// the background Close goroutine finish cleanly for the race detector.
+	close(provider.release)
 }
 
 type memoryVoiceBroadcastPreferenceStore struct {

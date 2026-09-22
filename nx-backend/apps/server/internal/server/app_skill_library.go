@@ -399,6 +399,15 @@ func (s *Server) appSkillSessionAskStream(w http.ResponseWriter, r *http.Request
 	events := make(chan skillStreamEvent, appChatStreamEventBuffer)
 	voiceEnabled := s.voiceBroadcastEnabledForUser(r.Context(), appUserID)
 	var voiceStream *voiceBroadcastStream
+	var voiceClose *voiceBroadcastCloseHandle
+	defer func() {
+		if voiceClose != nil {
+			voiceClose.abort()
+		} else if voiceStream != nil {
+			voiceStream.Cancel()
+			voiceStream.detachEmit()
+		}
+	}()
 	if voiceEnabled {
 		provider, providerErr := s.newVoiceBroadcastSynthesizer(ctx)
 		if providerErr == nil {
@@ -408,6 +417,8 @@ func (s *Server) appSkillSessionAskStream(w http.ResponseWriter, r *http.Request
 					return nil
 				case <-ctx.Done():
 					return ctx.Err()
+				default:
+					return errors.New("voice event queue full")
 				}
 			})
 		} else {
@@ -431,30 +442,19 @@ func (s *Server) appSkillSessionAskStream(w http.ResponseWriter, r *http.Request
 		case <-ctx.Done():
 		}
 	}()
-	var pendingDone *skillStreamEvent
-	var voiceCloseDone <-chan error
 	for {
 		var event skillStreamEvent
+		var ok bool
 		select {
-		case event = <-events:
-		case closeErr := <-voiceCloseDone:
-			voiceCloseDone = nil
-			if pendingDone == nil {
-				continue
-			}
-			if closeErr != nil && !errors.Is(closeErr, context.Canceled) && !errors.Is(closeErr, context.DeadlineExceeded) {
-				_ = writeAppChatSSE(w, flusher, "voice_error", voiceBroadcastErrorPayload{ReplyID: voiceReplyID, Code: "synthesis_failed"})
-			}
-			if pendingDone.err != nil {
-				_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成失败，请重试"})
-			} else {
-				_ = writeAppChatSSE(w, flusher, "done", pendingDone.result)
-			}
-			return
+		case event, ok = <-events:
 		case <-ctx.Done():
 			if voiceStream != nil {
 				voiceStream.Cancel()
+				voiceStream.detachEmit()
 			}
+			return
+		}
+		if !ok {
 			return
 		}
 		switch event.kind {
@@ -465,6 +465,7 @@ func (s *Server) appSkillSessionAskStream(w http.ResponseWriter, r *http.Request
 			if err := writeAppChatSSE(w, flusher, "delta", map[string]string{"content": event.delta}); err != nil {
 				if voiceStream != nil {
 					voiceStream.Cancel()
+					voiceStream.detachEmit()
 				}
 				cancel()
 				return
@@ -477,6 +478,7 @@ func (s *Server) appSkillSessionAskStream(w http.ResponseWriter, r *http.Request
 				if err := writeAppChatSSE(w, flusher, "voice", event.voice.ssePayload()); err != nil {
 					if voiceStream != nil {
 						voiceStream.Cancel()
+						voiceStream.detachEmit()
 					}
 					cancel()
 					return
@@ -488,14 +490,43 @@ func (s *Server) appSkillSessionAskStream(w http.ResponseWriter, r *http.Request
 			}
 		case skillStreamDone:
 			if voiceStream != nil {
-				stream := voiceStream
+				voiceClose = startVoiceBroadcastClose(voiceStream)
 				voiceStream = nil
-				pending := event
-				pendingDone = &pending
-				done := make(chan error, 1)
-				voiceCloseDone = done
-				go func() { done <- stream.Close() }()
-				continue
+				closeErr, completed := voiceClose.await(voiceBroadcastCloseGrace)
+				if completed && closeErr != nil && !errors.Is(closeErr, context.Canceled) && !errors.Is(closeErr, context.DeadlineExceeded) {
+					if err := writeAppChatSSE(w, flusher, "voice_error", voiceBroadcastErrorPayload{ReplyID: voiceReplyID, Code: "synthesis_failed"}); err != nil {
+						return
+					}
+				}
+				// Close completion guarantees that all segments emitted before the
+				// terminal have reached the queue. Drain those frames before done.
+				for {
+					select {
+					case queued, queueOK := <-events:
+						if !queueOK {
+							goto voiceQueueDrained
+						}
+						switch queued.kind {
+						case skillStreamVoice:
+							if queued.voice != nil {
+								if err := writeAppChatSSE(w, flusher, "voice", queued.voice.ssePayload()); err != nil {
+									return
+								}
+							}
+						case skillStreamVoiceError:
+							if queued.voiceError != nil {
+								if err := writeAppChatSSE(w, flusher, "voice_error", queued.voiceError); err != nil {
+									return
+								}
+							}
+						}
+					default:
+						goto voiceQueueDrained
+					}
+				}
+			voiceQueueDrained:
+				voiceClose.abort()
+				voiceClose = nil
 			}
 			if event.err != nil {
 				_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成失败，请重试"})

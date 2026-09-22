@@ -51,9 +51,14 @@ type RealtimeASRConfig struct {
 }
 
 type TTSConfig struct {
-	Provider    string `json:"provider"`
-	Endpoint    string `json:"endpoint"`
-	APIKey      string `json:"apiKey"`
+	Provider string `json:"provider"`
+	Endpoint string `json:"endpoint"`
+	APIKey   string `json:"apiKey"`
+	// Region is forwarded to providers that expose regional routing. Bailian's
+	// public HTTP endpoint is shared across mainland regions, but retaining the
+	// value in the runtime config keeps the admin selection effective and lets
+	// the provider add its routing header without changing the endpoint.
+	Region      string `json:"region,omitempty"`
 	GroupID     string `json:"groupId,omitempty"`
 	Model       string `json:"model"`
 	Voice       string `json:"voice"`
@@ -124,6 +129,7 @@ func (c Config) WithDefaults() (Config, error) {
 	c.TTS.Provider = strings.TrimSpace(c.TTS.Provider)
 	c.TTS.Endpoint = strings.TrimSpace(c.TTS.Endpoint)
 	c.TTS.APIKey = strings.TrimSpace(c.TTS.APIKey)
+	c.TTS.Region = strings.TrimSpace(c.TTS.Region)
 	c.TTS.GroupID = strings.TrimSpace(c.TTS.GroupID)
 	c.TTS.Model = strings.TrimSpace(c.TTS.Model)
 	c.TTS.Voice = strings.TrimSpace(c.TTS.Voice)
@@ -352,6 +358,7 @@ func validateLengths(c Config) error {
 		{"TTS API Key", c.TTS.APIKey, maxAPIKeyRunes},
 		{"实时 ASR provider", c.RealtimeASR.Provider, maxShortRunes},
 		{"实时 ASR region", c.RealtimeASR.Region, maxShortRunes},
+		{"TTS region", c.TTS.Region, maxShortRunes},
 		{"实时 ASR model", c.RealtimeASR.Model, maxShortRunes},
 		{"TTS provider", c.TTS.Provider, maxShortRunes},
 		{"TTS GroupID", c.TTS.GroupID, maxShortRunes},

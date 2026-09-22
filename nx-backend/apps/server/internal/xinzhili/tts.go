@@ -248,6 +248,12 @@ func (p *bailianHostedMiniMaxTTS) Synthesize(ctx context.Context, cfg TTSConfig,
 		return nil, "", errors.New("TTS 请求创建失败")
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(cfg.APIKey))
+	if region := strings.TrimSpace(cfg.Region); region != "" {
+		// DashScope keeps the public Bailian HTTP endpoint stable while using
+		// this optional header for regional routing/observability. Older
+		// endpoints ignore it, so the default Alibaba URL remains compatible.
+		req.Header.Set("X-DashScope-Region", region)
+	}
 	if workspace := strings.TrimSpace(cfg.GroupID); workspace != "" {
 		req.Header.Set("X-DashScope-WorkSpace", workspace)
 	}

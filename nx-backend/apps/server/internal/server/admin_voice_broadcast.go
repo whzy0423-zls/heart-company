@@ -250,7 +250,7 @@ func probeVoiceBroadcastTTS(ctx context.Context, cfg voicebroadcastconfig.Config
 	}
 	ttsConfig := xinzhili.TTSConfig{
 		Provider: xinzhili.TTSProviderBailian, Endpoint: voicebroadcastconfig.DefaultEndpoint,
-		APIKey: cfg.APIKey, GroupID: cfg.WorkspaceID, Model: cfg.Model,
+		APIKey: cfg.APIKey, Region: strings.TrimSpace(cfg.Region), GroupID: cfg.WorkspaceID, Model: cfg.Model,
 		Voice: cfg.CurrentVoice, Format: "mp3",
 	}
 	started := time.Now()

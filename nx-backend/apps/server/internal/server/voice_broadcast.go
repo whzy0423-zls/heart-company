@@ -166,6 +166,9 @@ func (s *Server) loadVoiceBroadcastConfig(ctx context.Context) (voiceBroadcastCo
 		}
 		cfg.Endpoint = voicebroadcastconfig.DefaultEndpoint
 		cfg.Region = strings.TrimSpace(stored.Region)
+		if cfg.Region == "" {
+			cfg.Region = voicebroadcastconfig.DefaultRegion
+		}
 		cfg.WorkspaceID = strings.TrimSpace(stored.WorkspaceID)
 		cfg.GroupID = cfg.WorkspaceID
 		cfg.Model = strings.TrimSpace(stored.Model)
@@ -344,7 +347,7 @@ func voiceBroadcastTTSConfig(cfg voiceBroadcastConfig) xinzhili.TTSConfig {
 	}
 	return xinzhili.TTSConfig{
 		Provider: normalizeVoiceBroadcastProvider(cfg.Provider), Endpoint: endpoint,
-		APIKey: cfg.APIKey, GroupID: cfg.GroupID, Model: cfg.Model, Voice: cfg.Voice,
+		APIKey: cfg.APIKey, Region: strings.TrimSpace(cfg.Region), GroupID: cfg.GroupID, Model: cfg.Model, Voice: cfg.Voice,
 		Format: format, Instruction: cfg.Instruction,
 	}
 }

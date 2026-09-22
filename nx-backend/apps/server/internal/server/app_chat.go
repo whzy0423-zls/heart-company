@@ -805,6 +805,7 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 	}
 
 	var voiceStream *voiceBroadcastStream
+	var voiceClose *voiceBroadcastCloseHandle
 	if input.voiceBroadcast {
 		provider, err := s.newVoiceBroadcastSynthesizer(ctx)
 		if err != nil {
@@ -813,27 +814,35 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 		} else {
 			voiceStream = newVoiceBroadcastStream(ctx, input.voiceReplyID, provider, func(segment voiceBroadcastSegment) error {
 				copy := segment
-				if !send(appChatStreamEvent{kind: appChatStreamVoice, voice: &copy}) {
-					return context.Canceled
+				// Voice is an optional side channel. Never let a burst of audio
+				// segments block text persistence or terminal delivery.
+				select {
+				case events <- appChatStreamEvent{kind: appChatStreamVoice, voice: &copy}:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+					return errors.New("voice event queue full")
 				}
-				return nil
 			})
 		}
 	}
-	finishVoice := func() {
-		if voiceStream == nil {
+	startVoiceClose := func() {
+		if voiceStream == nil || voiceClose != nil {
 			return
 		}
-		err := voiceStream.Close()
+		voiceClose = startVoiceBroadcastClose(voiceStream)
 		voiceStream = nil
-		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-			_ = send(appChatStreamEvent{kind: appChatStreamVoiceError, voiceError: &voiceBroadcastErrorPayload{ReplyID: input.voiceReplyID, Code: "synthesis_failed"}})
-		}
 	}
 	defer func() {
-		if voiceStream != nil {
+		if voiceClose != nil {
+			// The terminal path normally waits for the bounded grace period. If
+			// generation fails before that path, detach immediately so no late
+			// callback can race close(events).
+			voiceClose.abort()
+		} else if voiceStream != nil {
 			voiceStream.Cancel()
-			_ = voiceStream.Wait()
+			voiceStream.detachEmit()
 		}
 	}()
 
@@ -966,7 +975,6 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 	if ctx.Err() != nil {
 		return
 	}
-	finishVoice()
 	ans.Answer = answerhygiene.Clean(input.question, ans.Answer)
 	if s.chatPersistHook != nil {
 		s.chatPersistHook()
@@ -982,7 +990,14 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 		fallback.release()
 		return
 	}
+	// Keep terminal lifecycle notifications independent of the generation
+	// context. Once the save window has been admitted, the pump deliberately
+	// drains these events even if the total provider deadline has fired.
 	events <- appChatStreamEvent{kind: appChatStreamPersistenceStarted}
+	// Start the optional TTS close before SavePair. Persistence does not wait
+	// for synthesis; only the short terminal grace below can affect event
+	// ordering, and it runs after the text has been saved.
+	startVoiceClose()
 	messageID, saveErr := s.saveAppChatPair(ctx, input.sessionID, input.question, ans.Answer, sourcesJSON, knowledgeTrace)
 	if saveErr != nil {
 		fallback.release()
@@ -990,6 +1005,12 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 		return
 	}
 	s.commitAppChatQuota(input.quotaKey)
+	if voiceClose != nil {
+		if closeErr, completed := voiceClose.await(voiceBroadcastCloseGrace); completed && closeErr != nil &&
+			!errors.Is(closeErr, context.Canceled) && !errors.Is(closeErr, context.DeadlineExceeded) {
+			_ = send(appChatStreamEvent{kind: appChatStreamVoiceError, voiceError: &voiceBroadcastErrorPayload{ReplyID: input.voiceReplyID, Code: "synthesis_failed"}})
+		}
+	}
 	// Start the reserved fallback without waiting on the per-user mutation lock,
 	// then publish the committed terminal immediately.
 	fallback.start()
