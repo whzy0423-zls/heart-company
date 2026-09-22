@@ -299,6 +299,36 @@ func TestVoiceBroadcastStreamCancellationInvalidatesQueuedSegments(t *testing.T)
 	}
 }
 
+func TestVoiceBroadcastStreamPushDoesNotBlockWhenProviderIsSlow(t *testing.T) {
+	provider := &blockingVoiceBroadcastProvider{started: make(chan struct{}), release: make(chan struct{})}
+	stream := newVoiceBroadcastStream(context.Background(), "reply-queue", provider, nil)
+	defer func() {
+		stream.Cancel()
+		close(provider.release)
+		_ = stream.Wait()
+	}()
+
+	// The provider holds the first item while the remaining sentences fill the
+	// bounded queue. Push must still return promptly so text generation can
+	// continue independently of optional voice synthesis.
+	text := strings.Repeat("这是一个足够长的测试句子。", voiceBroadcastQueueSize+4)
+	pushed := make(chan error, 1)
+	go func() { pushed <- stream.Push(text) }()
+	select {
+	case <-provider.started:
+	case <-time.After(time.Second):
+		t.Fatal("voice provider did not start")
+	}
+	select {
+	case err := <-pushed:
+		if err != nil {
+			t.Fatalf("Push returned error=%v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Push blocked behind a full voice queue")
+	}
+}
+
 func TestVoiceBroadcastStreamCloseAfterCancelReturnsPromptly(t *testing.T) {
 	provider := &blockingVoiceBroadcastProvider{started: make(chan struct{}), release: make(chan struct{})}
 	stream := newVoiceBroadcastStream(context.Background(), "reply-3", provider, nil)

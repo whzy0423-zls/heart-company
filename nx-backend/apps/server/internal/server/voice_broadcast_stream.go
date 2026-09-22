@@ -170,8 +170,28 @@ func (s *voiceBroadcastStream) enqueue(chunks []string) error {
 	for _, chunk := range chunks {
 		select {
 		case s.jobs <- chunk:
+			// Keep voice generation asynchronous from the text producer. The
+			// provider may be slower than the model, so a bounded queue must not
+			// turn Push into backpressure on the text stream.
 		case <-s.runCtx.Done():
 			return s.runCtx.Err()
+		default:
+			// Prefer the newest sentence when the optional voice queue is full.
+			// Dropping an older queued sentence is preferable to blocking text
+			// delivery; the terminal Close call can still enqueue its final text.
+			select {
+			case <-s.jobs:
+			default:
+			}
+			select {
+			case s.jobs <- chunk:
+			case <-s.runCtx.Done():
+				return s.runCtx.Err()
+			default:
+				// The worker may have won the race between the two non-blocking
+				// operations. Dropping this chunk still preserves the no-blocking
+				// contract.
+			}
 		}
 	}
 	return nil
