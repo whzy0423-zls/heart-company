@@ -313,6 +313,100 @@ func TestXinzhiliRuntimeCredentialTreatsCustomNativeBailianAsPrivateTTS(t *testi
 	}
 }
 
+func TestXinzhiliStartTurnUsesAppVoiceBroadcastConfigWhenEnabled(t *testing.T) {
+	serverWS, _ := newXinzhiliWebsocketPair(t)
+	model := validBailianXinzhiliModelConfigForHandler()
+	model.Version = 14
+	// The legacy Xinzhili TTS block is intentionally incomplete. Once the
+	// app-level channel is enabled, it must be replaced before legacy TTS
+	// credential validation runs.
+	model.TTS = xinzhili.TTSConfig{}
+	session := &recordingXinzhiliTurnSession{}
+	preferences := newMemoryVoiceBroadcastPreferenceStore()
+	if err := preferences.Set(context.Background(), 27, true); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{
+		xinzhiliModelConfig: &fakeXinzhiliModelConfigStore{config: model, found: true},
+		bailianCredentials: &memoryBailianCredentialStore{
+			cfg: bailianconfig.Config{Version: 4, APIKey: "sk-shared-asr"}, found: true,
+		},
+		voiceBroadcastPreferences: preferences,
+		voiceBroadcastConfigLoader: func(context.Context) (voiceBroadcastConfig, error) {
+			return voiceBroadcastConfig{
+				Enabled: true, Provider: voiceBroadcastProviderBailian,
+				Endpoint: voiceBroadcastDefaultEndpoint, APIKey: "sk-app-voice",
+				Model: "qwen3-tts-instruct-flash", Voice: "Serena", Format: "mp3",
+			}, nil
+		},
+	}
+	c := &xinzhiliRealtimeConn{
+		server: s, ws: serverWS, sess: session, userID: 27, sessionID: "xz-app-voice",
+		pendingMode: xinzhili.ModeNormal, turns: make(map[uint64]string), audioSeq: make(map[uint64]uint32),
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+	turnID := "turn-app-voice"
+	c.startTurn(context.Background(), xinzhili.Envelope{
+		TurnID:  &turnID,
+		Payload: json.RawMessage(`{"turnKey":301}`),
+	})
+	if len(session.starts) != 1 {
+		t.Fatalf("started turns=%d want=1", len(session.starts))
+	}
+	got := session.starts[0]
+	if got.DisableTTS {
+		t.Fatalf("app voice enabled but DisableTTS=true")
+	}
+	if got.TTSConfig.Model != "qwen3-tts-instruct-flash" || got.TTSConfig.Voice != "Serena" || got.TTSConfig.APIKey != "sk-app-voice" {
+		t.Fatalf("TTS config=%+v", got.TTSConfig)
+	}
+	if got.ASRConfig.APIKey != "sk-shared-asr" {
+		t.Fatalf("ASR key=%q want shared key", got.ASRConfig.APIKey)
+	}
+}
+
+func TestXinzhiliStartTurnDisablesTTSWhenAppVoiceBroadcastIsOff(t *testing.T) {
+	serverWS, _ := newXinzhiliWebsocketPair(t)
+	model := validBailianXinzhiliModelConfigForHandler()
+	model.Version = 15
+	session := &recordingXinzhiliTurnSession{}
+	preferences := newMemoryVoiceBroadcastPreferenceStore()
+	if err := preferences.Set(context.Background(), 28, true); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{
+		xinzhiliModelConfig: &fakeXinzhiliModelConfigStore{config: model, found: true},
+		bailianCredentials: &memoryBailianCredentialStore{
+			cfg: bailianconfig.Config{Version: 4, APIKey: "sk-shared-asr"}, found: true,
+		},
+		voiceBroadcastPreferences: preferences,
+		voiceBroadcastConfigLoader: func(context.Context) (voiceBroadcastConfig, error) {
+			return voiceBroadcastConfig{
+				Enabled: false, Provider: voiceBroadcastProviderBailian,
+				Endpoint: voiceBroadcastDefaultEndpoint, APIKey: "sk-app-voice",
+				Model: voiceBroadcastDefaultModel, Voice: voiceBroadcastDefaultVoice, Format: "mp3",
+			}, nil
+		},
+	}
+	c := &xinzhiliRealtimeConn{
+		server: s, ws: serverWS, sess: session, userID: 28, sessionID: "xz-app-voice-off",
+		pendingMode: xinzhili.ModeNormal, turns: make(map[uint64]string), audioSeq: make(map[uint64]uint32),
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+	turnID := "turn-app-voice-off"
+	c.startTurn(context.Background(), xinzhili.Envelope{
+		TurnID:  &turnID,
+		Payload: json.RawMessage(`{"turnKey":302}`),
+	})
+	if len(session.starts) != 1 {
+		t.Fatalf("started turns=%d want=1", len(session.starts))
+	}
+	got := session.starts[0]
+	if !got.DisableTTS {
+		t.Fatalf("app voice disabled but DisableTTS=false")
+	}
+}
+
 func startXinzhiliRuntimeCredentialTurn(t *testing.T, c *xinzhiliRealtimeConn, turnID string, turnKey uint64) {
 	t.Helper()
 	c.startTurn(context.Background(), xinzhili.Envelope{

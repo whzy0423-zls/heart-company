@@ -142,6 +142,11 @@ type StartTurnInput struct {
 	KnowledgeMinScore float64
 	TheoryTopK        int
 	TheoryMinScore    float64
+	// DisableTTS keeps ASR and text generation active while suppressing
+	// realtime audio synthesis for this turn. It defaults to false so callers
+	// that predate the optional app-level voice-broadcast switch retain the
+	// existing audio behavior.
+	DisableTTS bool
 }
 
 type PCMFrame struct {
@@ -691,7 +696,7 @@ func (s *session) startStrategyPrompt(turn *activeTurn, textKey string) error {
 	if turn == nil || turn.processing || turn.endpointing {
 		return errors.New("xinzhili: strategy prompt conflicts with active work")
 	}
-	if s.deps.Synthesizer == nil {
+	if !turn.input.DisableTTS && s.deps.Synthesizer == nil {
 		return errors.New("xinzhili: strategy prompt synthesizer missing")
 	}
 	text, err := strategyActionText(textKey)
@@ -705,6 +710,10 @@ func (s *session) startStrategyPrompt(turn *activeTurn, textKey string) error {
 	turn.proactivePrompt = true
 	turn.draft = text
 	turn.answer = text
+	if turn.input.DisableTTS {
+		s.completeTextOnlyTurn(turn, false)
+		return nil
+	}
 	turn.ttsJobs = make(chan ttsStreamJob, 1)
 	s.startSynthesisWorker(turn)
 	s.queueTTSChunk(turn, text)
@@ -784,7 +793,7 @@ func (s *session) startUnclearEnvironmentPrompt(turn *activeTurn) {
 		return
 	}
 	const prompt = "环境有些嘈杂，我没听清，请再说一次"
-	if s.deps.Synthesizer == nil {
+	if !turn.input.DisableTTS && s.deps.Synthesizer == nil {
 		s.sendError(turn, "tts_not_configured", "请配置好语音模型后再重试", false)
 		_ = s.sendAssistantDone(turn)
 		turn.processing = true
@@ -800,6 +809,10 @@ func (s *session) startUnclearEnvironmentPrompt(turn *activeTurn) {
 	turn.terminalPrompt = true
 	turn.draft = prompt
 	turn.answer = prompt
+	if turn.input.DisableTTS {
+		s.completeTextOnlyTurn(turn, false)
+		return
+	}
 	turn.ttsJobs = make(chan ttsStreamJob, 1)
 	s.startSynthesisWorker(turn)
 	s.queueTTSChunk(turn, prompt)
@@ -828,7 +841,7 @@ func (s *session) beginProcessing(turn *activeTurn, text string) {
 		turn.cancel()
 		return
 	}
-	if s.deps.Synthesizer == nil {
+	if !turn.input.DisableTTS && s.deps.Synthesizer == nil {
 		s.sendError(turn, "tts_not_configured", "请配置好语音模型后再重试", false)
 		_ = s.sendAssistantDone(turn)
 		turn.processing = true
@@ -841,6 +854,10 @@ func (s *session) beginProcessing(turn *activeTurn, text string) {
 	}
 	turn.processing = true
 	turn.normalizeOutputToChinese = shouldNormalizeXinzhiliRealtimeOutputToChinese(text)
+	if turn.input.DisableTTS {
+		s.startGeneration(turn, text)
+		return
+	}
 	turn.ttsJobs = make(chan ttsStreamJob, 128)
 	s.startSynthesisWorker(turn)
 	s.startGeneration(turn, text)
@@ -1109,6 +1126,9 @@ func (s *session) handleGenerationDelta(turn *activeTurn, delta string) {
 		return
 	}
 	turn.draft += delta
+	if turn.input.DisableTTS {
+		return
+	}
 	for _, chunk := range turn.chunker.Push(delta) {
 		s.queueTTSChunk(turn, chunk)
 	}
@@ -1130,6 +1150,10 @@ func (s *session) handleGenerationDone(turn *activeTurn, event sessionEvent) {
 	turn.sources = event.sources
 	turn.knowledgeTrace = event.knowledgeTrace
 	turn.generationErr = event.err
+	if turn.input.DisableTTS {
+		s.completeTextOnlyTurn(turn, true)
+		return
+	}
 	if event.err == nil {
 		for _, chunk := range turn.chunker.Flush() {
 			s.queueTTSChunk(turn, chunk)
@@ -1151,8 +1175,11 @@ func (s *session) handleGenerationDone(turn *activeTurn, event sessionEvent) {
 }
 
 func (s *session) queueTTSChunk(turn *activeTurn, chunk string) {
+	if turn == nil || turn.input.DisableTTS || turn.ttsJobs == nil {
+		return
+	}
 	chunk = strings.TrimSpace(chunk)
-	if turn != nil && turn.normalizeOutputToChinese {
+	if turn.normalizeOutputToChinese {
 		chunk = voice.NormalizeStrictChineseTTSInput(chunk)
 	}
 	if chunk == "" {
@@ -1160,6 +1187,63 @@ func (s *session) queueTTSChunk(turn *activeTurn, chunk string) {
 	}
 	turn.ttsJobs <- ttsStreamJob{seq: turn.nextTTSSeq, text: chunk}
 	turn.nextTTSSeq++
+}
+
+// completeTextOnlyTurn closes a turn when the caller intentionally disabled
+// realtime audio synthesis. Text generation, persistence, and the terminal
+// assistant.done control event still run so ASR and conversation semantics do
+// not depend on an audio provider.
+func (s *session) completeTextOnlyTurn(turn *activeTurn, persist bool) {
+	if turn == nil {
+		return
+	}
+	turn.completionDone = true
+	if turn.engine != nil {
+		s.executeStrategyActions(turn, turn.engine.Apply(Signal{Kind: SignalAssistantStopped}))
+	}
+
+	if persist && turn.generationErr == nil && turn.answer != "" && !turn.proactivePrompt && !turn.terminalPrompt {
+		content := normalizeGeneratedContent(turn.answer)
+		if content != "" {
+			messageID, err := s.deps.Conversations.CreateAssistant(turn.ctx, turn.conversation, content, turn.input.Mode)
+			if err != nil {
+				s.sendError(turn, "conversation_save_failed", "回答保存失败，请重试", true)
+			} else {
+				turn.assistantID = messageID
+				sources, _ := json.Marshal(turn.sources)
+				if turn.knowledgeTrace != nil {
+					if store, ok := s.deps.Conversations.(ConversationKnowledgeTraceStore); ok {
+						_ = store.CompleteAssistantWithKnowledgeTrace(turn.ctx, messageID, content, sources, *turn.knowledgeTrace)
+					} else {
+						_ = s.deps.Conversations.CompleteAssistant(turn.ctx, messageID, content, sources)
+					}
+				} else {
+					_ = s.deps.Conversations.CompleteAssistant(turn.ctx, messageID, content, sources)
+				}
+			}
+		}
+	}
+
+	if turn.generationErr != nil {
+		if errors.Is(turn.generationErr, errLayeredKnowledgeRetrieval) {
+			log.Printf("xinzhili knowledge retrieval failed user_id=%d turn_id=%q", turn.input.UserID, turn.input.TurnID)
+			s.sendError(turn, "knowledge_retrieval_failed", "知识检索连接异常，请稍后重试", true)
+		} else {
+			log.Printf("xinzhili generation failed user_id=%d turn_id=%q err=%v", turn.input.UserID, turn.input.TurnID, turn.generationErr)
+			s.sendError(turn, "provider_generation_failed", "会话模型连接异常，请稍后重试", true)
+		}
+	} else if turn.answer == "" {
+		s.sendError(turn, "empty_generation", "会话模型没有返回有效回答，请重试", true)
+	}
+	if err := s.sendAssistantDone(turn); err != nil {
+		turn.cancel()
+	}
+	if turn.proactivePrompt {
+		s.resetProactivePromptDelivery(turn)
+	}
+	if turn.terminalPrompt {
+		turn.cancel()
+	}
 }
 
 func normalizeRealtimeGenerationText(turn *activeTurn, text string) string {

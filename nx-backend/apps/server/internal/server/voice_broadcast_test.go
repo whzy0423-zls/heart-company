@@ -16,6 +16,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/bailianconfig"
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/voicebroadcastconfig"
+	"nine-xing/nx-backend/apps/server/internal/xinzhili"
 )
 
 func TestVoiceBroadcastPreferenceDefaultsOffPersistsAndIsUserScoped(t *testing.T) {
@@ -23,7 +24,7 @@ func TestVoiceBroadcastPreferenceDefaultsOffPersistsAndIsUserScoped(t *testing.T
 	s := &Server{
 		voiceBroadcastPreferences: store,
 		voiceBroadcastConfigLoader: func(context.Context) (voiceBroadcastConfig, error) {
-			return voiceBroadcastConfig{Enabled: true, Provider: voiceBroadcastProviderBailian, Model: "qwen3-tts-instruct-flash", Voice: "Cherry"}, nil
+			return voiceBroadcastConfig{Enabled: true, Provider: voiceBroadcastProviderBailian, APIKey: "sk-test", Model: "qwen3-tts-instruct-flash", Voice: "Cherry"}, nil
 		},
 	}
 
@@ -61,7 +62,7 @@ func TestVoiceBroadcastPreferenceDefaultsOffPersistsAndIsUserScoped(t *testing.T
 		t.Fatalf("default user preference = true, want false")
 	}
 	put(7, true)
-	if got := get(7); !got.UserEnabled || !got.Enabled || got.Voice != "Cherry" {
+	if got := get(7); !got.UserEnabled || !got.Enabled || got.Provider != xinzhili.TTSProviderBailian || got.Voice != "Cherry" {
 		t.Fatalf("persisted capability = %+v", got)
 	}
 	if got := get(8); got.UserEnabled {
@@ -104,6 +105,46 @@ func TestVoiceBroadcastCapabilityReportsProviderUnavailableWithoutSecrets(t *tes
 	}
 	if envelope.Data.Enabled || envelope.Data.ProviderAvailable {
 		t.Fatalf("unavailable capability = %+v", envelope.Data)
+	}
+}
+
+func TestVoiceBroadcastCapabilityNormalizesAdminBailianProvider(t *testing.T) {
+	preferences := newMemoryVoiceBroadcastPreferenceStore()
+	if err := preferences.Set(context.Background(), 8, true); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{
+		voiceBroadcastPreferences: preferences,
+		voiceBroadcastConfigLoader: func(context.Context) (voiceBroadcastConfig, error) {
+			return voiceBroadcastConfig{
+				Enabled: true, Provider: "aliyun-bailian", APIKey: "sk-test",
+				Model: voiceBroadcastDefaultModel, Voice: voiceBroadcastDefaultVoice,
+			}, nil
+		},
+	}
+	capability := s.voiceBroadcastCapabilityForUser(context.Background(), 8)
+	if capability.Provider != xinzhili.TTSProviderBailian || !capability.ProviderAvailable {
+		t.Fatalf("capability=%+v, want normalized available Bailian", capability)
+	}
+}
+
+func TestXinzhiliRealtimeVoiceBroadcastRejectsNonBailianProvider(t *testing.T) {
+	preferences := newMemoryVoiceBroadcastPreferenceStore()
+	if err := preferences.Set(context.Background(), 7, true); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{
+		voiceBroadcastPreferences: preferences,
+		voiceBroadcastConfigLoader: func(context.Context) (voiceBroadcastConfig, error) {
+			return voiceBroadcastConfig{
+				Enabled: true, Provider: "minimax", APIKey: "sk-test",
+				Model: "speech-02", Voice: "female",
+			}, nil
+		},
+	}
+	_, enabled, controlled := s.xinzhiliRealtimeVoiceBroadcastConfig(context.Background(), 7)
+	if !controlled || enabled {
+		t.Fatalf("controlled=%t enabled=%t, want controlled=true enabled=false", controlled, enabled)
 	}
 }
 

@@ -598,6 +598,40 @@ func TestSessionCompletedEndpointWithoutAnyTranscriptUsesDefensivePrompt(t *test
 	}
 }
 
+func TestSessionDisabledTTSCompletesTextWithoutSynthesizing(t *testing.T) {
+	fixture := newSessionFixture(t)
+	input := fixture.input("turn-text-only")
+	input.DisableTTS = true
+	if err := fixture.session.StartTurn(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "请给我一句安慰", Stable: true})
+	fixture.generator.waitCalled(t)
+	done := fixture.sink.waitControl(t, EventAssistantDone)
+	var payload struct {
+		SegmentCount int `json:"segmentCount"`
+	}
+	if err := json.Unmarshal(done.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.SegmentCount != 0 {
+		t.Fatalf("assistant.done segmentCount=%d want=0", payload.SegmentCount)
+	}
+	if got := len(fixture.sink.audio); got != 0 {
+		t.Fatalf("audio frames=%d want=0", got)
+	}
+	if got := fixture.synth.synthesizedTexts(); len(got) != 0 {
+		t.Fatalf("synthesized texts=%v want none", got)
+	}
+	_, assistants, completed := fixture.store.contents()
+	if len(assistants) != 1 || assistants[0] != "先呼吸。再感受脚底。" {
+		t.Fatalf("assistants=%v", assistants)
+	}
+	if completed != "先呼吸。再感受脚底。" {
+		t.Fatalf("completed=%q", completed)
+	}
+}
+
 func TestSessionStrategyStopAssistantEmitsPlaybackInterrupt(t *testing.T) {
 	fixture := newSessionFixture(t)
 	engine := newScriptedStrategyEngine()
