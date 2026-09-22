@@ -6,7 +6,7 @@ import { ensureLogin, getToken, clearToken } from '../../utils/auth'
 import { hiddenCount, previewItems } from '../../utils/listPreview'
 import { clearBookingSession } from '../../utils/bookingSession'
 import { userErrorMessage } from '../../utils/userMessage'
-import { getUserInfoApi, listTestRecordsApi, listBookingsApi } from '../../api'
+import { createWechatPayTestOrderApi, getUserInfoApi, listTestRecordsApi, listBookingsApi } from '../../api'
 
 const logged = ref(false)
 const user = ref(null)
@@ -15,6 +15,7 @@ const bookings = ref([])
 const recordsError = ref('')
 const bookingsError = ref('')
 const logging = ref(false)
+const paymentTesting = ref(false)
 const profileLoading = ref(false)
 const userAvatarFailed = ref(false)
 const profileLogoFailed = ref(false)
@@ -201,6 +202,42 @@ function openLearn() {
 function openTest() {
   uni.navigateTo({ url: '/pages/test/test' })
 }
+
+function requestWechatPayment(pay = {}) {
+  return new Promise((resolve, reject) => {
+    uni.requestPayment({
+      provider: 'wxpay',
+      timeStamp: pay.timeStamp,
+      nonceStr: pay.nonceStr,
+      package: pay.package,
+      signType: pay.signType || 'RSA',
+      paySign: pay.paySign,
+      success: resolve,
+      fail: reject,
+    })
+  })
+}
+
+async function testWechatPayment() {
+  if (paymentTesting.value) return
+  paymentTesting.value = true
+  try {
+    const order = await createWechatPayTestOrderApi()
+    const pay = order?.payParams || {}
+    if (pay.devMode) throw new Error('当前后端是开发模拟支付环境，请切换到已配置微信支付的生产环境')
+    await requestWechatPayment(pay)
+    uni.showToast({ title: '支付已完成，正在确认', icon: 'success' })
+  } catch (error) {
+    const message = String(error?.errMsg || error?.message || '')
+    uni.showToast({
+      title: message.toLowerCase().includes('cancel') ? '已取消支付' : userErrorMessage(error, '支付测试失败'),
+      icon: 'none',
+      duration: 2800,
+    })
+  } finally {
+    paymentTesting.value = false
+  }
+}
 </script>
 
 <template>
@@ -305,6 +342,18 @@ function openTest() {
           <text class="profile-action__title">继续学习</text>
           <text class="profile-action__desc">回到课程与课件</text>
         </view>
+      </view>
+
+      <view class="wechat-pay-test nx-panel ios-card">
+        <view class="section-head">
+          <view>
+            <text class="section-kicker">支付联调</text>
+            <text class="sec-title">测试微信支付</text>
+          </view>
+          <text class="section-count">¥0.10</text>
+        </view>
+        <text class="wechat-pay-test__copy">仅用于验证当前小程序是否能调起微信支付，订单金额固定为 0.10 元。</text>
+        <button class="wechat-pay-test__button ios-button" :loading="paymentTesting" :disabled="paymentTesting" @click="testWechatPayment">{{ paymentTesting ? '正在调起支付…' : '测试微信支付 ¥0.10' }}</button>
       </view>
 
       <view class="history-section nx-panel ios-card">
@@ -442,7 +491,8 @@ function openTest() {
 .user__name { color: var(--nx-surface); font-size: 35rpx; font-weight: 900; display: block; line-height: 1.28; }
 .user__type { color: rgba(255, 255, 255, .72); font-size: 25rpx; display: block; margin-top: 7rpx; }
 .history-section,
-.booking-summary { box-sizing: border-box; width: 100%; padding: 30rpx; background: var(--nx-surface); border-color: var(--nx-border); }
+.booking-summary,
+.wechat-pay-test { box-sizing: border-box; width: 100%; padding: 30rpx; background: var(--nx-surface); border-color: var(--nx-border); }
 .section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20rpx; margin-bottom: 22rpx; }
 .section-kicker { display: block; margin-bottom: 6rpx; color: var(--nx-brand-700); font-size: 24rpx; font-weight: 800; line-height: 1.35; }
 .sec-title { display: block; color: var(--nx-text); font-size: 32rpx; font-weight: 900; line-height: 1.3; }
@@ -472,6 +522,9 @@ function openTest() {
 .booking-summary__retry::after { border: none; }
 .logout { width: 100%; min-height: 88rpx; border-radius: 24rpx; background: transparent; border: 2rpx solid rgba(180, 35, 24, .30); color: var(--nx-danger); font-size: 26rpx; font-weight: 800; }
 .logout::after { border: none; }
+.wechat-pay-test__copy { display: block; color: var(--nx-text-muted); font-size: 24rpx; line-height: 1.6; }
+.wechat-pay-test__button { width: 100%; min-height: 88rpx; margin-top: 22rpx; border-radius: 22rpx; background: var(--nx-brand-900); color: var(--nx-surface); font-size: 26rpx; font-weight: 900; }
+.wechat-pay-test__button::after { border: none; }
 @media (max-width: 360px) {
   .profile-hero,
   .history-section,

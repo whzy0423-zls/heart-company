@@ -40,6 +40,25 @@ func TestDefaultMenusIncludeMiniappHomeManagement(t *testing.T) {
 	}
 }
 
+func TestDefaultMenusIncludeMiniappOrdersUnderMiniappManagement(t *testing.T) {
+	for _, menu := range defaultMenus {
+		if menu.ID != 513 {
+			continue
+		}
+		if menu.PID != 1300 || menu.Name != "MiniappOrders" {
+			t.Fatalf("expected miniapp orders under MiniappManage: %+v", menu)
+		}
+		if menu.Path != "/miniapp/orders" || menu.Component != "/customer/miniapp-orders" {
+			t.Fatalf("unexpected miniapp orders route: %+v", menu)
+		}
+		if menu.AuthCode != "Customer:MiniappOrders:List" || menu.Type != "menu" || menu.Sort != 3 {
+			t.Fatalf("unexpected miniapp orders metadata: %+v", menu)
+		}
+		return
+	}
+	t.Fatal("expected default menu MiniappOrders with fixed id 513")
+}
+
 func TestDefaultMenusIncludeAppPaymentMode(t *testing.T) {
 	for _, menu := range defaultMenus {
 		if menu.Name != "AppPaymentMode" {
@@ -461,7 +480,7 @@ func TestDefaultMenusIncludeTeacherManagement(t *testing.T) {
 			}
 		case "MiniappTeacherManagement":
 			foundManagement = true
-			if menu.PID != 1408 || menu.Path != "/teachers" || menu.Component != "/teacher/index" || menu.AuthCode != "Miniapp:Teacher:Manage" || menu.Type != "menu" {
+			if menu.PID != 1408 || menu.Path != "/teachers/manage" || menu.Component != "/teacher/index" || menu.AuthCode != "Miniapp:Teacher:Manage" || menu.Type != "menu" {
 				t.Fatalf("unexpected teacher management menu: %+v", menu)
 			}
 		}

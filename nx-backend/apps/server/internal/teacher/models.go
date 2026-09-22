@@ -116,10 +116,14 @@ type ContentDraft struct {
 	SeriesID          *int64      `json:"seriesId,omitempty"`
 	Title             string      `json:"title"`
 	Description       string      `json:"description,omitempty"`
+	ContentType       string      `json:"contentType,omitempty"`
 	FeedType          string      `json:"feedType"`
 	ShowAsStandalone  bool        `json:"showAsStandalone"`
 	CoverURL          string      `json:"coverUrl,omitempty"`
 	MediaAssetID      *int64      `json:"mediaAssetId,omitempty"`
+	MediaStatus       string      `json:"mediaStatus,omitempty"`
+	Status            string      `json:"status,omitempty"`
+	DurationSeconds   int         `json:"durationSeconds,omitempty"`
 	ReviewStatus      ReviewState `json:"reviewStatus"`
 	ReviewReason      string      `json:"reviewReason,omitempty"`
 	ReplacesContentID *int64      `json:"replacesContentId,omitempty"`

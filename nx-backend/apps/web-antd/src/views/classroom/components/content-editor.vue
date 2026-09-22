@@ -244,8 +244,8 @@ watch(
       </Radio.Group>
     </Form.Item>
     <Space style="width: 100%" :size="16" wrap>
-      <Form.Item label="点赞数"><InputNumber v-model:value="likeCount" :min="0" /></Form.Item>
-      <Form.Item label="收藏数"><InputNumber v-model:value="favoriteCount" :min="0" /></Form.Item>
+      <Form.Item label="点赞数"><InputNumber v-model:value="likeCount" :min="0" placeholder="请输入点赞数" /></Form.Item>
+      <Form.Item label="收藏数"><InputNumber v-model:value="favoriteCount" :min="0" placeholder="请输入收藏数" /></Form.Item>
     </Space>
     <Form.Item label="所属老师视频系列">
       <Select

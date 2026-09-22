@@ -341,7 +341,7 @@ onMounted(() => {
         <text id="quote-panel-heading" class="panel-title">老师语录</text>
         <view v-if="quoteEntries.length" class="quote-list">
           <article v-for="quoteEntry in quoteEntries" :key="quoteEntry.key" class="quote-card">
-            <text class="quote-card__mark">”</text>
+            <text class="quote-card__mark" aria-hidden="true">”</text>
             <text class="quote-card__text">{{ quoteEntry.text }}</text>
           </article>
         </view>

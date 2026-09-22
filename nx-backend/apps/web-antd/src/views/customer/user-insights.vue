@@ -35,7 +35,7 @@ import {
 const memberLevelOptions = [
   { label: '普通用户', value: 'free' },
   { label: 'VIP 会员', value: 'vip' },
-  { label: '超级会员', value: 'svip' },
+  { label: 'SVIP', value: 'svip' },
 ];
 
 const statusOptions = [
@@ -45,7 +45,7 @@ const statusOptions = [
 
 const memberLevelLabels: Record<string, string> = {
   free: '普通用户',
-  svip: '超级会员',
+  svip: 'SVIP',
   vip: 'VIP 会员',
 };
 

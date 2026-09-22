@@ -38,16 +38,30 @@ type appPlanConfig struct {
 }
 
 func defaultAppPlans() []appPlanConfig {
-	return []appPlanConfig{
+	plans := []appPlanConfig{
 		{Code: "free", PlanLevel: "free", BillingCycle: "none", Name: "免费版", Subtitle: "每日基础陪伴", Features: []string{"每日 5 轮基础对话", "首次 1 篇人生故事", "最多 1 张人物卡", "经典海报"}, Enabled: true, DailyChatLimit: 5, StoryMonthlyLimit: 1, CardLimit: 1, FeatureFlags: map[string]bool{"deepChat": false, "companion": false, "memberPoster": false}, Limits: map[string]int{"cardLimit": 1, "dailyChatLimit": 5, "storyMonthlyLimit": 1}},
-		{Code: "vip_month", PlanLevel: "vip", BillingCycle: "month", Name: "月卡会员", Subtitle: "灵活体验完整成长陪伴", PriceCents: 2900, Badge: "灵活", Features: []string{"深度对话与专业陪伴", "每月 3 篇人生故事", "最多 3 张人物卡", "2 款会员海报"}, Enabled: true, SortOrder: 10, DurationDays: 30, DailyChatLimit: -1, StoryMonthlyLimit: 3, CardLimit: 3, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true}, Limits: map[string]int{"cardLimit": 3, "dailyChatLimit": -1, "storyMonthlyLimit": 3}},
-		{Code: "vip_quarter", PlanLevel: "vip", BillingCycle: "quarter", Name: "季卡会员", Subtitle: "约 ¥26.3/月，适合持续成长", PriceCents: 7900, OriginalPriceCents: 8700, Badge: "推荐", Features: []string{"深度对话与专业陪伴", "每月 5 篇人生故事", "最多 3 张人物卡", "2 款会员海报"}, Enabled: true, SortOrder: 20, DurationDays: 90, DailyChatLimit: -1, StoryMonthlyLimit: 5, CardLimit: 3, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true}, Limits: map[string]int{"cardLimit": 3, "dailyChatLimit": -1, "storyMonthlyLimit": 5}},
-		{Code: "vip_year", PlanLevel: "vip", BillingCycle: "year", Name: "年卡会员", Subtitle: "约 ¥16.6/月，适合长期自我探索", PriceCents: 19900, OriginalPriceCents: 34800, Badge: "最划算", Features: []string{"深度对话与专业陪伴", "每月 12 篇人生故事", "最多 3 张人物卡", "2 款会员海报"}, Enabled: true, SortOrder: 30, DurationDays: 365, DailyChatLimit: -1, StoryMonthlyLimit: 12, CardLimit: 3, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true}, Limits: map[string]int{"cardLimit": 3, "dailyChatLimit": -1, "storyMonthlyLimit": 12}},
-		// S VIP is intentionally disabled until an administrator sets its price
-		// and commercial terms. The canonical level and quotas are still exposed
-		// so clients and migrations can distinguish it from the legacy annual VIP.
-		{Code: "svip", PlanLevel: "svip", BillingCycle: "year", Name: "S VIP", Subtitle: "深度陪伴与优先权益", Features: []string{"深度对话与专业陪伴", "每月 12 篇人生故事", "最多 10 张人物卡", "全部高级内容"}, Enabled: false, SortOrder: 40, DurationDays: 365, DailyChatLimit: -1, StoryMonthlyLimit: 12, CardLimit: 10, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true}, Limits: map[string]int{"cardLimit": 10, "dailyChatLimit": -1, "storyMonthlyLimit": 12}},
+		{Code: "vip_month", PlanLevel: "vip", BillingCycle: "month", Name: "VIP 月卡", Subtitle: "灵活体验完整成长陪伴", PriceCents: 2900, Badge: "灵活", Features: []string{"深度对话与专业陪伴", "每月 3 篇人生故事", "最多 3 张人物卡", "2 款会员海报"}, Enabled: true, SortOrder: 10, DurationDays: 30, DailyChatLimit: -1, StoryMonthlyLimit: 3, CardLimit: 3, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true, "growthPortrait": false, "trendAnalysis": false, "relationshipInsight": false, "prioritySupport": false}, Limits: map[string]int{"cardLimit": 3, "dailyChatLimit": -1, "storyMonthlyLimit": 3}},
+		{Code: "vip_quarter", PlanLevel: "vip", BillingCycle: "quarter", Name: "VIP 季卡", Subtitle: "适合持续成长", PriceCents: 7900, OriginalPriceCents: 8700, Badge: "推荐", Features: []string{"深度对话与专业陪伴", "每月 3 篇人生故事", "最多 3 张人物卡", "2 款会员海报"}, Enabled: true, SortOrder: 20, DurationDays: 90, DailyChatLimit: -1, StoryMonthlyLimit: 3, CardLimit: 3, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true}, Limits: map[string]int{"cardLimit": 3, "dailyChatLimit": -1, "storyMonthlyLimit": 3}},
+		{Code: "vip_year", PlanLevel: "vip", BillingCycle: "year", Name: "VIP 年卡", Subtitle: "适合长期自我探索", PriceCents: 19900, OriginalPriceCents: 34800, Badge: "最划算", Features: []string{"深度对话与专业陪伴", "每月 3 篇人生故事", "最多 3 张人物卡", "2 款会员海报"}, Enabled: true, SortOrder: 30, DurationDays: 365, DailyChatLimit: -1, StoryMonthlyLimit: 3, CardLimit: 3, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true}, Limits: map[string]int{"cardLimit": 3, "dailyChatLimit": -1, "storyMonthlyLimit": 3}},
+		{Code: "svip_month", PlanLevel: "svip", BillingCycle: "month", Name: "SVIP 月卡", Subtitle: "深度画像与高级关系洞察", PriceCents: 5900, Badge: "高级权益", Features: []string{"完整成长画像与趋势分析", "深度合盘与关系洞察", "每月 12 篇人生故事", "最多 10 张人物卡"}, Enabled: true, SortOrder: 40, DurationDays: 30, DailyChatLimit: -1, StoryMonthlyLimit: 12, CardLimit: 10, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true, "growthPortrait": true, "trendAnalysis": true, "relationshipInsight": true, "prioritySupport": true}, Limits: map[string]int{"cardLimit": 10, "dailyChatLimit": -1, "storyMonthlyLimit": 12}},
+		{Code: "svip_quarter", PlanLevel: "svip", BillingCycle: "quarter", Name: "SVIP 季卡", Subtitle: "深度陪伴与长期洞察", PriceCents: 15900, OriginalPriceCents: 17700, Badge: "推荐", Features: []string{"完整成长画像与趋势分析", "深度合盘与关系洞察", "每月 12 篇人生故事", "最多 10 张人物卡"}, Enabled: true, SortOrder: 50, DurationDays: 90, DailyChatLimit: -1, StoryMonthlyLimit: 12, CardLimit: 10, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true}, Limits: map[string]int{"cardLimit": 10, "dailyChatLimit": -1, "storyMonthlyLimit": 12}},
+		{Code: "svip_year", PlanLevel: "svip", BillingCycle: "year", Name: "SVIP 年卡", Subtitle: "完整高级会员体验", PriceCents: 49900, OriginalPriceCents: 70800, Badge: "最划算", Features: []string{"完整成长画像与趋势分析", "深度合盘与关系洞察", "每月 12 篇人生故事", "最多 10 张人物卡"}, Enabled: true, SortOrder: 60, DurationDays: 365, DailyChatLimit: -1, StoryMonthlyLimit: 12, CardLimit: 10, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true}, Limits: map[string]int{"cardLimit": 10, "dailyChatLimit": -1, "storyMonthlyLimit": 12}},
 	}
+	for i := range plans {
+		plans[i].FeatureFlags = membershipFeatureFlags(plans[i].PlanLevel, plans[i].FeatureFlags)
+	}
+	return plans
+}
+
+func membershipFeatureFlags(level string, base map[string]bool) map[string]bool {
+	flags := make(map[string]bool, len(base)+4)
+	for key, value := range base {
+		flags[key] = value
+	}
+	for _, key := range []string{"growthPortrait", "trendAnalysis", "relationshipInsight", "prioritySupport"} {
+		flags[key] = normalizeMembershipLevel(level) == "svip"
+	}
+	return flags
 }
 
 // defaultMembershipLevelPlan is the canonical level policy. The legacy SKU
@@ -59,7 +73,7 @@ func defaultMembershipLevelPlan(level string) appPlanConfig {
 	case "vip":
 		return appPlanConfig{Code: "vip", PlanLevel: "vip", BillingCycle: "month", Name: "VIP", Features: []string{"深度对话与专业陪伴", "每月 3 篇人生故事", "最多 3 张人物卡"}, Enabled: true, DurationDays: 30, DailyChatLimit: -1, StoryMonthlyLimit: 3, CardLimit: 3, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true}, Limits: map[string]int{"cardLimit": 3, "dailyChatLimit": -1, "storyMonthlyLimit": 3}}
 	case "svip":
-		return appPlanConfig{Code: "svip", PlanLevel: "svip", BillingCycle: "year", Name: "S VIP", Features: []string{"深度对话与专业陪伴", "每月 12 篇人生故事", "最多 10 张人物卡"}, Enabled: true, DurationDays: 365, DailyChatLimit: -1, StoryMonthlyLimit: 12, CardLimit: 10, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true}, Limits: map[string]int{"cardLimit": 10, "dailyChatLimit": -1, "storyMonthlyLimit": 12}}
+		return appPlanConfig{Code: "svip", PlanLevel: "svip", BillingCycle: "year", Name: "SVIP", Features: []string{"深度对话与专业陪伴", "每月 12 篇人生故事", "最多 10 张人物卡"}, Enabled: false, DurationDays: 365, DailyChatLimit: -1, StoryMonthlyLimit: 12, CardLimit: 10, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true}, Limits: map[string]int{"cardLimit": 10, "dailyChatLimit": -1, "storyMonthlyLimit": 12}}
 	default:
 		return appPlanConfig{Code: "free", PlanLevel: "free", BillingCycle: "none", Name: "免费版", Enabled: true, DailyChatLimit: 5, StoryMonthlyLimit: 1, CardLimit: 1, FeatureFlags: map[string]bool{"deepChat": false, "companion": false, "memberPoster": false}, Limits: map[string]int{"cardLimit": 1, "dailyChatLimit": 5, "storyMonthlyLimit": 1}}
 	}
@@ -69,7 +83,7 @@ func normalizeMembershipLevel(level string) string {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "vip", "vip_month", "vip_quarter", "vip_year":
 		return "vip"
-	case "svip":
+	case "svip", "svip_month", "svip_quarter", "svip_year":
 		return "svip"
 	default:
 		return "free"
@@ -86,7 +100,11 @@ func normalizeBillingCycle(level, sku string) string {
 		return "quarter"
 	case "vip_year":
 		return "year"
-	case "svip":
+	case "svip_month":
+		return "month"
+	case "svip_quarter":
+		return "quarter"
+	case "svip_year", "svip":
 		return "year"
 	}
 	if level == "free" || level == "" {
@@ -105,7 +123,7 @@ func normalizeAppPlanCode(code string) string {
 	case "vip":
 		return "vip_month"
 	case "svip":
-		// S VIP is a first-class membership level, not an alias for the
+		// SVIP is a first-class membership level, not an alias for the
 		// historical annual VIP SKU. Keep the canonical code addressable so
 		// entitlement and admin APIs can distinguish the two.
 		return "svip"
@@ -116,7 +134,7 @@ func normalizeAppPlanCode(code string) string {
 
 func supportedAppPlanCode(code string) bool {
 	switch strings.ToLower(strings.TrimSpace(code)) {
-	case "free", "vip", "svip", "vip_month", "vip_quarter", "vip_year":
+	case "free", "vip", "svip", "vip_month", "vip_quarter", "vip_year", "svip_month", "svip_quarter", "svip_year":
 		return true
 	default:
 		return false
@@ -146,7 +164,7 @@ func validateAppPlan(plan appPlanConfig) error {
 		return errors.New("套餐价格不能为负数")
 	}
 	if plan.Code != "free" && (plan.PriceCents <= 0 || plan.DurationDays <= 0) {
-		// The canonical S VIP seed is intentionally unpublished until an
+		// The canonical SVIP seed is intentionally unpublished until an
 		// administrator sets commercial terms. It is still a valid plan row;
 		// once enabled, normal paid-plan validation applies.
 		if !(plan.Code == "svip" && !plan.Enabled && plan.PriceCents == 0) {
@@ -183,12 +201,26 @@ func defaultAppPlan(code string) appPlanConfig {
 			return plan
 		}
 	}
-	if code != "free" && code != "vip_month" && code != "vip_quarter" && code != "vip_year" && code != "vip" && code != "svip" {
+	if code != "free" && code != "vip_month" && code != "vip_quarter" && code != "vip_year" && code != "svip_month" && code != "svip_quarter" && code != "svip_year" && code != "vip" && code != "svip" {
 		return appPlanConfig{Code: code, PlanLevel: "vip", BillingCycle: "month", Name: "会员版", Subtitle: "完整成长陪伴", Enabled: true, DurationDays: 30, DailyChatLimit: -1, StoryMonthlyLimit: 3, CardLimit: 3, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true}, Limits: map[string]int{"cardLimit": 3, "dailyChatLimit": -1, "storyMonthlyLimit": 3}}
 	}
 	plan := defaultMembershipLevelPlan(normalizeMembershipLevel(code))
 	plan.Code = code
+	if strings.HasPrefix(code, "svip_") {
+		plan.Enabled = true
+	}
 	plan.BillingCycle = normalizeBillingCycle(plan.PlanLevel, code)
+	if strings.HasPrefix(code, "svip_") {
+		plan.Name = appProductTitle(code)
+	}
+	switch plan.BillingCycle {
+	case "month":
+		plan.DurationDays = 30
+	case "quarter":
+		plan.DurationDays = 90
+	case "year":
+		plan.DurationDays = 365
+	}
 	return plan
 }
 
@@ -265,7 +297,7 @@ func normalizeLoadedAppPlan(plan appPlanConfig) appPlanConfig {
 	}
 	// Card capacity is a tier entitlement, not a billing-cycle entitlement.
 	// Keep the legacy flat column for old clients, but make both runtime values
-	// agree with the canonical policy (free 1, VIP 3, S VIP 10).
+	// agree with the canonical policy (free 1, VIP 3, SVIP 10).
 	canonical := defaultMembershipLevelPlan(plan.PlanLevel)
 	plan.CardLimit = canonical.CardLimit
 	plan.Limits["cardLimit"] = canonical.CardLimit
@@ -326,7 +358,7 @@ func (s *Server) loadAppPlanCapabilities(ctx context.Context, plan *appPlanConfi
 }
 
 func (s *Server) appPlan(ctx context.Context, code string) appPlanConfig {
-	// Keep the canonical S VIP plan addressable for admin/configuration reads.
+	// Keep the canonical SVIP plan addressable for admin/configuration reads.
 	// Callers that need the historical annual VIP SKU must address vip_year
 	// explicitly; svip remains a distinct membership level throughout the API.
 	if !strings.EqualFold(strings.TrimSpace(code), "svip") {

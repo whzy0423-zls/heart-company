@@ -144,23 +144,28 @@ for (const file of ['src/pages/relation/relation.vue', 'src/pages/test/test.vue'
 const indexPage = readFileSync('src/pages/index/index.vue', 'utf8')
 const indexTemplate = indexPage.match(/<template>[\s\S]*?<\/template>/)?.[0] || ''
 const teacherCoursewareSource = readFileSync('src/utils/teacherCourseware.js', 'utf8')
+const classroomCoursewareSource = readFileSync('src/utils/classroomCourseware.js', 'utf8')
 assert.match(indexPage, /getStoredSiteConfig/, 'home page should render stored site config before refreshing')
 assert.match(indexPage, /refreshSiteConfig/, 'home page should refresh site config in the background')
 assert.match(indexPage, /normalizeTeachers/, 'home page should normalize teacher data including teacherTeaser')
-assert.match(indexPage, /normalizeCoursewareItems/, 'home page should normalize enriched course and material data')
+assert.match(indexPage, /listClassroomRecentApi/, 'home page should load published classroom data from the public classroom API')
+assert.match(indexPage, /mapPublishedClassroomItems/, 'home page should normalize published classroom data for course and material cards')
 assert.match(indexPage, /const\s+TEACHER_SECTION_PATHS\s*=\s*\[[\s\S]*?teacherTeaser[\s\S]*?\]/, 'home page should explicitly enumerate teacher section sources')
-assert.match(indexPage, /const\s+COURSE_SECTION_PATHS\s*=\s*\[[\s\S]*?courseware[\s\S]*?materials[\s\S]*?lessons[\s\S]*?courses[\s\S]*?\]/, 'home page should explicitly enumerate course section sources')
 assert.match(indexPage, /Object\.prototype\.hasOwnProperty\.call/, 'home section detection should distinguish missing fields from explicit empty fields')
 assert.match(indexPage, /function\s+hasTeacherSection\(config\)/, 'home page should expose teacher section-presence detection')
-assert.match(indexPage, /function\s+hasCourseSection\(config\)/, 'home page should expose course section-presence detection')
 assert.match(indexPage, /if\s*\(!preserveMissing\s*\|\|\s*hasTeacherSection\(config\)\)\s*\{[\s\S]*?teachers\.value\s*=\s*normalizeTeachers\(config\)/, 'partial refreshes missing teacher fields should preserve the currently displayed teacher')
-assert.match(indexPage, /if\s*\(!preserveMissing\s*\|\|\s*hasCourseSection\(config\)\)\s*\{[\s\S]*?courses\.value\s*=\s*normalizeCoursewareItems\(config\)/, 'partial refreshes missing course fields should preserve the currently displayed courses')
-assert.match(indexPage, /applyContent\(config,\s*\{\s*preserveMissing:\s*true\s*\}\)/, 'successful background refresh should merge only explicitly present teacher/course sections')
+assert.match(indexPage, /const\s+courses\s*=\s*ref\(\[\]\)/, 'home page should not render unpublished or placeholder courses before the classroom API responds')
+assert.match(indexPage, /listClassroomRecentApi\(\{\s*limit:\s*6,\s*offset:\s*0\s*\}\)/, 'home page should request the six most recent published classroom items')
+assert.match(indexPage, /courses\.value\s*=\s*mapPublishedClassroomItems\(classroom\?\.items\)/, 'home page should map the public classroom response into its course cards')
+assert.doesNotMatch(indexPage, /normalizeCoursewareItems|COURSE_SECTION_PATHS|hasCourseSection/, 'home page should not fall back to legacy site-config course data')
+assert.match(classroomCoursewareSource, /export\s+function\s+mapPublishedClassroomItems\(items\)/, 'published classroom mapping should remain an independently tested utility')
+assert.match(indexPage, /applyContent\(config,\s*\{\s*preserveMissing:\s*true\s*\}\)/, 'successful background refresh should merge the explicitly present teacher section')
 assert.match(indexPage, /let\s+loadTicket\s*=\s*0/, 'home page should guard against stale refresh responses')
 assert.match(indexPage, /ticket\s*!==\s*loadTicket/, 'home page should ignore a stale refresh response')
 assert.match(indexPage, /v-if=["']loading["']/, 'home page should expose an explicit loading state')
 assert.match(indexPage, /v-if=["']loadError["']/, 'home page should expose a non-blocking refresh error')
-assert.match(indexPage, /@click=["']activateAction\(loadContent,\s*\$event\)["']/, 'home refresh failure should provide a cross-platform retry action')
+assert.match(indexPage, /@tap=["']loadContent["']/, 'home refresh failure should provide a mini-program-safe retry action')
+assert.match(indexPage, /@keydown=["']onActionKeydown\(\$event,\s*loadContent\)["']/, 'home refresh failure should support Enter and Space')
 assert.match(indexPage, /资料整理中/, 'explicit empty teacher or course sections should render a local empty state')
 
 const teacherHeroImage = indexPage.match(/<image\b[^>]*class=["'][^"']*teacher-hero__image[^"']*["'][^>]*>/)?.[0] || ''
@@ -169,7 +174,8 @@ assert.match(teacherHeroImage, /role=["']img["']/, 'teacher image host should ex
 assert.match(teacherHeroImage, /:aria-label=["']teacherImageLabel["']/, 'teacher portrait should expose a meaningful accessible label')
 assert.match(teacherHeroImage, /@error=["']onTeacherImageError["']/, 'teacher portrait should provide a local image fallback')
 assert.doesNotMatch(teacherHeroImage, /lazy-load/, 'dominant above-fold teacher portrait should load eagerly')
-assert.match(indexPage, /resolveContentAsset\(teacher\.value\?\.avatar,\s*TEACHER_FALLBACK\)/, 'teacher image should resolve backend content before rendering')
+assert.match(indexPage, /const\s+portrait\s*=\s*teacher\.value\?\.avatar\s*===\s*['"]\/static\/avatars\/9\.png['"]\s*\?\s*['"]["']\s*:\s*teacher\.value\?\.avatar/, 'home should reject the obsolete generic teacher avatar')
+assert.match(indexPage, /resolveContentAsset\(portrait,\s*TEACHER_FALLBACK\)/, 'teacher image should resolve backend content before rendering')
 assert.match(indexPage, /teacherImageFallbackUsed/, 'teacher fallback should be applied only once')
 assert.match(indexPage, /teacher\.name/, 'teacher hero should render the teacher name')
 assert.match(indexPage, /teacher\.title/, 'teacher hero should render teacher identity')
@@ -185,19 +191,20 @@ assert.match(teacherToggle, /role=["']button["']/, 'teacher intro toggle should 
 assert.match(teacherToggle, /tabindex=["']0["']/, 'teacher intro toggle should be keyboard focusable')
 assert.match(teacherToggle, /:aria-expanded=["']teacherExpanded["']/, 'teacher intro toggle should expose expanded state')
 assert.match(teacherToggle, /aria-controls=["']teacher-bio["']/, 'teacher intro toggle should identify the controlled biography')
-assert.match(teacherToggle, /@click=["']activateAction\(toggleTeacher,\s*\$event\)["']/, 'teacher intro toggle should support click and mini-program tap')
+assert.match(teacherToggle, /@tap=["']toggleTeacher["']/, 'teacher intro toggle should support mini-program tap')
 assert.match(teacherToggle, /@keydown=["']onActionKeydown\(\$event,\s*toggleTeacher\)["']/, 'teacher intro toggle should support Enter and Space')
 assert.match(indexPage, /\.teacher-toggle\s*\{[^}]*min-height:\s*88rpx/, 'teacher intro toggle should keep an 88rpx touch target')
 
 const serviceEntries = indexPage.match(/<view\b[^>]*class=["'][^"']*service-entry[^"']*["'][^>]*>/g) || []
-assert.equal(serviceEntries.length, 4, 'home should expose exactly four primary service entries')
-for (const copy of ['课程学习', '课件资料', '九型测试', '关系合盘']) {
-  assert.equal((indexPage.match(new RegExp(copy, 'g')) || []).length, 1, `home should expose one ${copy} service entry`)
+const serviceGrid = indexPage.match(/<nav\b[^>]*class=["'][^"']*service-grid[^"']*["'][^>]*>[\s\S]*?<\/nav>/)?.[0] || ''
+assert.equal(serviceEntries.length, 6, 'home should expose exactly six primary service entries')
+for (const copy of ['成长课堂', '课件资料', '性格测试', '关系合盘', '预约咨询', '认识九型']) {
+  assert.match(serviceGrid, new RegExp(copy), `home should expose one ${copy} service entry`)
 }
 for (const action of serviceEntries) {
   assert.match(action, /role=["']button["']/, 'service entries should expose button semantics')
   assert.match(action, /tabindex=["']0["']/, 'service entries should be keyboard focusable')
-  assert.match(action, /@click=["']activateAction\(/, 'service entries should preserve tap and click activation')
+  assert.match(action, /@tap=["'][^"']+["']/, 'service entries should preserve mini-program tap activation')
   assert.match(action, /@keydown=["']onActionKeydown\(/, 'service entries should support Enter and Space')
 }
 
@@ -228,7 +235,7 @@ assert.equal((indexPage.match(/推荐课程/g) || []).length, 1, 'home should la
 const moreCoursesAction = indexPage.match(/<view\b[^>]*class=["'][^"']*section-link--course[^"']*["'][^>]*>/)?.[0] || ''
 assert.match(moreCoursesAction, /role=["']button["']/, 'more courses should be an accessible action')
 assert.match(moreCoursesAction, /tabindex=["']0["']/, 'more courses should be keyboard focusable')
-assert.match(moreCoursesAction, /@click=["']activateAction\(goCourse,\s*\$event\)["']/, 'more courses should open the course category')
+assert.match(moreCoursesAction, /@tap=["']goCourse["']/, 'more courses should open the course category')
 assert.match(moreCoursesAction, /@keydown=["']onActionKeydown\(\$event,\s*goCourse\)["']/, 'more courses should support Enter and Space')
 assert.doesNotMatch(indexPage, /material-shelf|material-card|v-for=["']\(course,\s*index\) in materialCourses/, 'home page should not render a course shelf or additional course list')
 const courseCoverImages = indexPage.match(/<image\b[^>]*class=["'][^"']*featured-course__cover[^"']*["'][^>]*>/g) || []
@@ -249,12 +256,12 @@ assert.match(indexPage, /class=["'][^"']*latest-material[^"']*["']/, 'home shoul
 const allMaterialsAction = indexPage.match(/<view\b[^>]*class=["'][^"']*section-link--material[^"']*["'][^>]*>/)?.[0] || ''
 assert.match(allMaterialsAction, /role=["']button["']/, 'all materials should be an accessible action')
 assert.match(allMaterialsAction, /tabindex=["']0["']/, 'all materials should be keyboard focusable')
-assert.match(allMaterialsAction, /@click=["']activateAction\(goMaterial,\s*\$event\)["']/, 'all materials should open the material category')
+assert.match(allMaterialsAction, /@tap=["']goMaterial["']/, 'all materials should open the material category')
 assert.match(allMaterialsAction, /@keydown=["']onActionKeydown\(\$event,\s*goMaterial\)["']/, 'all materials should support Enter and Space')
-assert.equal((indexPage.match(/预约咨询/g) || []).length, 1, 'home should expose one lightweight booking prompt')
 assert.match(indexPage, /class=["'][^"']*booking-prompt[^"']*["']/, 'home should render booking as a lightweight prompt')
+assert.match(indexPage, /class=["'][^"']*booking-prompt[^"']*["'][\s\S]*?预约咨询/, 'home booking prompt should retain its consultation label')
 assert.match(indexPage, /function\s+goBooking\(\)\s*\{\s*uni\.switchTab\(\{\s*url:\s*['"]\/pages\/booking\/booking['"]\s*\}\)\s*\}/, 'home consultation entry should switch to the booking tab')
-assert.match(indexPage, /@click=["']activateAction\(goBooking,\s*\$event\)["']/, 'home consultation entry should activate booking on click or tap')
+assert.match(indexPage, /class=["'][^"']*booking-prompt[^"']*["'][^>]*@tap=["']goBooking["']/, 'home consultation entry should activate booking on tap')
 assert.match(indexPage, /@keydown=["']onActionKeydown\(\$event,\s*goBooking\)["']/, 'home consultation entry should activate booking from Enter or Space')
 const roleButtonViews = indexPage.match(/<view\b(?=[^>]*role=["']button["'])[^>]*>/g) || []
 for (const action of roleButtonViews) {
@@ -263,11 +270,11 @@ for (const action of roleButtonViews) {
 assert.doesNotMatch(indexPage, /@keydown\./, 'keydown modifiers must not intercept Tab or compile duplicate WXML attributes')
 assert.match(indexPage, /\.service-entry\s*\{[^}]*min-height:\s*(?:8[8-9]|9\d|[1-9]\d{2,})rpx/, 'service entries should keep at least an 88rpx touch target')
 assert.match(indexPage, /\.service-entry:focus-visible[\s\S]*\.booking-prompt:focus-visible[\s\S]*outline:/, 'home controls should expose a visible keyboard focus state')
-assert.match(indexPage, /--home-bg:\s*#F5F6F4/i, 'home should use a light WeUI-like page background')
-assert.match(indexPage, /--home-surface:\s*#FFFFFF/i, 'home should use white service blocks')
-assert.match(indexPage, /--home-ink:\s*#20252B/i, 'home should use the approved restrained ink color')
-assert.match(indexPage, /--home-green:\s*#335B4A/i, 'home should use the approved restrained green accent')
-assert.match(indexPage, /--home-muted:\s*#4F5A54/i, 'home should define a darker readable muted text color')
+for (const token of ['--nx-mist-bg', '--nx-mist-surface', '--nx-mist-brand', '--nx-mist-soft', '--nx-mist-border']) {
+  assert.match(appleMobileStyle, new RegExp(`${token}:`), `shared mobile styles should define ${token} for the refreshed home page`)
+}
+assert.match(indexPage, /\.home\s*\{[^}]*background:\s*var\(--nx-mist-bg\)[^}]*color:\s*var\(--nx-text\)/, 'home should use the shared light page background and ink tokens')
+assert.match(indexPage, /\.teacher-welcome,[\s\S]*?\.home-empty\s*\{[^}]*border-color:\s*var\(--nx-mist-border\);\s*background:\s*var\(--nx-mist-surface\)/, 'home content blocks should use the shared surface and border tokens')
 
 function channelLuminance(channel) {
   const normalized = channel / 255
@@ -285,7 +292,7 @@ function contrastRatio(foreground, background) {
   return (lighter + 0.05) / (darker + 0.05)
 }
 
-for (const background of ['#FFFFFF', '#F5F6F4']) {
+for (const background of ['#FFFDF8', '#F5F3ED']) {
   assert.ok(contrastRatio('#4F5A54', background) >= 4.5, `muted home text should meet AA contrast on ${background}`)
   assert.ok(contrastRatio('#335B4A', background) >= 4.5, `green home actions should meet AA contrast on ${background}`)
 }
@@ -295,15 +302,18 @@ for (const [selector, message] of [
   ['course-desc', 'course descriptions'],
   ['booking-action', 'booking action text'],
 ]) {
-  assert.match(indexPage, new RegExp(`\\.${selector}\\s*\\{(?=[^}]*font-size:\\s*(?:2[4-9]|[3-9]\\d|\\d{3,})rpx)(?=[^}]*color:\\s*(?:var\\(--home-muted\\)|var\\(--home-green\\)))[^}]*\\}`), `${message} should use at least 24rpx readable AA text`)
+  assert.match(indexPage, new RegExp(`\\.${selector}\\s*\\{(?=[^}]*font-size:\\s*(?:2[4-9]|[3-9]\\d|\\d{3,})rpx)(?=[^}]*color:\\s*(?:#4F5A54|#335B4A|var\\(--nx-text-muted\\)|var\\(--nx-mist-brand\\)))[^}]*\\}`, 'i'), `${message} should use at least 24rpx readable AA text`)
 }
-assert.match(indexPage, /\.section-note,\s*\.section-link\s*\{(?=[^}]*font-size:\s*(?:2[4-9]|[3-9]\d|\d{3,})rpx)(?=[^}]*color:\s*var\(--home-muted\))[^}]*\}/, 'section helper and link base text should use readable muted styling')
-assert.match(indexPage, /\.course-meta,\s*\.material-meta,\s*\.booking-desc\s*\{(?=[^}]*font-size:\s*(?:2[4-9]|[3-9]\d|\d{3,})rpx)(?=[^}]*color:\s*var\(--home-muted\))[^}]*\}/, 'home metadata should use at least 24rpx readable muted text')
+assert.match(indexPage, /\.section-note,\s*\.section-link\s*\{(?=[^}]*font-size:\s*(?:2[4-9]|[3-9]\d|\d{3,})rpx)(?=[^}]*color:\s*#4F5A54)[^}]*\}/i, 'section helper and link base text should use readable muted styling')
+assert.match(indexPage, /\.course-meta,\s*\.material-meta,\s*\.booking-desc\s*\{(?=[^}]*font-size:\s*(?:2[4-9]|[3-9]\d|\d{3,})rpx)(?=[^}]*color:\s*#4F5A54)[^}]*\}/i, 'home metadata should use at least 24rpx readable muted text')
 assert.match(indexPage, /\.sync-note,\s*\.home-error\s*\{(?=[^}]*font-size:\s*(?:2[4-9]|[3-9]\d|\d{3,})rpx)[^}]*\}/, 'home loading and error status text should use at least 24rpx')
 assert.match(indexPage, /\.teacher-eyebrow,\s*\.teacher-identity\s*\{(?=[^}]*font-size:\s*(?:2[4-9]|[3-9]\d|\d{3,})rpx)[^}]*\}/, 'teacher helper and identity text should use at least 24rpx')
 assert.doesNotMatch(indexTemplate, /home-primary|开始学习|teacher-hero__portrait|home-masthead|editorial-kicker|portrait-mark|featured-course__spine|material-shelf|material-card|home-bento|float-token|texture|pattern|CURRICULUM|FEATURED|TEACHER|SELF TEST|RELATIONSHIP|学习专刊/, 'home should omit the old long-page hero, main button, and decorative promotional layers')
-assert.doesNotMatch(indexPage, /(?:repeating-)?(?:linear|radial)-gradient|background-image|box-shadow|@keyframes|animation\s*:|backdrop-filter|filter\s*:/, 'home should use a plain background with no texture, normal shadow, filter, or entry animation')
-assert.doesNotMatch(indexPage, /border-radius:\s*(?:[3-9]\d|\d{3,})rpx/, 'home radii should stay within the restrained 16-24rpx range')
+assert.doesNotMatch(indexPage, /(?:repeating-)?(?:linear|radial)-gradient|background-image|@keyframes|animation\s*:|backdrop-filter|filter\s*:/, 'home should avoid gradients, textures, filters, and entry animation')
+const oversizedHomeRadii = [...indexPage.matchAll(/border-radius:\s*(\d+)rpx/g)]
+  .map((match) => Number(match[1]))
+  .filter((radius) => radius > 28 && radius !== 999)
+assert.deepEqual(oversizedHomeRadii, [], 'home radii should stay at or below 28rpx except for intentional pill labels')
 
 
 assert.match(appleMobileStyle, /\.page-stack\s*\{[\s\S]*safe-area-inset-bottom/, 'page-stack should reserve bottom safe area globally')
@@ -337,7 +347,7 @@ for (const file of collectVueFiles('src/pages')) {
 const bookingPage = readFileSync('src/pages/booking/booking.vue', 'utf8')
 assert.match(bookingPage, /userErrorMessage/, 'booking page should surface normalized request errors')
 assert.match(bookingPage, /title:\s*userErrorMessage\(e,\s*'提交失败，请重试'\)/, 'booking submit should keep a fallback while showing specific API errors')
-assert.match(bookingPage, /<button\s+class=["'][^"']*btn-primary[^"']*ios-button[^"']*["'][^>]*@click=["']submit["']/, 'booking submit action should opt into iOS button styling')
+assert.match(bookingPage, /<button\s+class=["'][^"']*booking-submit[^"']*ios-button[^"']*["'][^>]*:loading=["']submitting["'][^>]*:disabled=["']submitting["'][^>]*@click=["']submit["']/, 'booking submit action should preserve its loading guard and iOS button styling')
 assert.match(bookingPage, /fieldErrors/, 'booking page should expose inline field validation errors')
 assert.match(bookingPage, /v-if=["']fieldErrors\.contactName["']/, 'booking contact name should render an inline validation error')
 assert.match(bookingPage, /v-if=["']fieldErrors\.phone["']/, 'booking phone should render an inline validation error')
@@ -387,7 +397,8 @@ for (const category of ['课程', '课件', '语录']) {
 }
 assert.match(learnPage, /onShow\(consumeNavigationIntent\)/, 'learning center should consume home navigation intent every time the tab is shown')
 assert.match(learnPage, /readLearningNavIntent\(\)/, 'learning center should use the one-time read-and-clear navigation intent')
-assert.match(learnPage, /resolveLearningCategory\(activeCategory\.value,\s*readLearningNavIntent\(\)\)/, 'missing intent should retain the current valid learning category')
+assert.match(learnPage, /function\s+selectCategory\(category\)\s*\{[\s\S]*?resolveLearningCategory\(activeCategory\.value,\s*category\)/, 'category selection should retain the current valid learning category when no intent is provided')
+assert.match(learnPage, /function\s+consumeNavigationIntent\(\)\s*\{\s*selectCategory\(readLearningNavIntent\(\)\)\s*\}/, 'navigation intent should flow through the shared category visibility rules')
 
 const learnTeacherImage = learnPage.match(/<image\b[^>]*class=["'][^"']*learn-teacher__image[^"']*["'][^>]*>/)?.[0] || ''
 assert.match(learnTeacherImage, /:src=["']teacherImage["']/, 'teacher portrait should use a resolved render source')
@@ -395,7 +406,8 @@ assert.match(learnTeacherImage, /role=["']img["']/, 'teacher portrait should exp
 assert.match(learnTeacherImage, /:aria-label=["']teacherImageLabel["']/, 'teacher portrait should expose a meaningful accessible label')
 assert.match(learnTeacherImage, /@error=["']onTeacherImageError["']/, 'teacher portrait should provide a local fallback')
 assert.doesNotMatch(learnTeacherImage, /lazy-load/, 'dominant teacher portrait should load eagerly')
-assert.match(learnPage, /resolveContentAsset\(teacher\.value\?\.avatar,\s*TEACHER_FALLBACK\)/, 'teacher portrait should resolve backend content before rendering')
+assert.match(learnPage, /const\s+portrait\s*=\s*teacher\.value\?\.avatar\s*===\s*['"]\/static\/avatars\/9\.png['"]\s*\?\s*['"]["']\s*:\s*teacher\.value\?\.avatar/, 'learning center should reject the obsolete generic teacher avatar')
+assert.match(learnPage, /resolveContentAsset\(portrait,\s*TEACHER_FALLBACK\)/, 'teacher portrait should resolve sanitized backend content before rendering')
 assert.match(learnPage, /teacherImageFallbackUsed/, 'teacher portrait fallback should be applied only once')
 assert.match(learnPage, /\.learn-teacher__portrait\s*\{[^}]*aspect-ratio:\s*4\s*\/\s*5/, 'teacher portrait should reserve an editorial 4:5 frame')
 
@@ -416,13 +428,15 @@ assert.ok(learnPage.includes('\\/static\\/wheel\\.png'), 'learn page should reco
 assert.match(learnPage, /resolveContentAsset\(learnCourseCover\(course,\s*courseKey\),\s*courseFallback\(courseKey\)\)/, 'course covers should resolve mapped content assets from stable identity')
 assert.match(learnPage, /courseImageFallbackUsed/, 'course cover fallback should be applied only once per stable course key')
 assert.match(learnPage, /courseImages\.value\[courseKey\]/, 'course image state should be keyed by stable course identity rather than array position')
-assert.doesNotMatch(learnPage, /class=["'][^"']*course-row[^"']*["'][^>]*role=["']button["']/, 'course rows should remain display-only until a course route exists')
+assert.match(learnPage, /function\s+openPublishedCourse\(course\)\s*\{[\s\S]*?classroomContentRoute\(/, 'course rows should use the canonical classroom detail route')
+assert.match(learnTemplate, /<article\b(?=[^>]*class=["'][^"']*course-row[^"']*["'])(?=[^>]*role=["']button["'])(?=[^>]*@tap=["']openPublishedCourse\(courseEntry\.item\)["'])[^>]*>/, 'published course rows should open their classroom detail')
+assert.match(learnTemplate, /<article\b(?=[^>]*class=["'][^"']*material-row[^"']*["'])(?=[^>]*role=["']button["'])(?=[^>]*@tap=["']openPublishedMaterial\(material\)["'])[^>]*>/, 'published material rows should open their classroom detail')
 
 assert.match(learnTemplate, /activeCategory\s*===\s*'course'[\s\S]*?class=["'][^"']*course-list/, 'course category should render the course list')
 assert.match(learnTemplate, /activeCategory\s*===\s*'material'[\s\S]*?v-for=["']material in materialItems["']/, 'material category should render every flattened material row')
 assert.match(learnTemplate, /activeCategory\s*===\s*'quote'[\s\S]*?v-for=["']quoteEntry in quoteEntries["']/, 'quote category should render all teacher quotes with stable entries')
 assert.match(learnPage, /flattenLearningMaterials\(coursewareItems\.value\)/, 'material category should derive rows from normalized courses')
-assert.match(learnPage, /课程内容整理中/, 'course category should provide a dedicated empty state')
+assert.match(learnPage, /课程正在准备中/, 'course category should provide a dedicated empty state')
 assert.match(learnPage, /课件资料整理中/, 'material category should provide a dedicated empty state')
 assert.match(learnPage, /老师语录整理中/, 'quote category should provide a dedicated empty state')
 for (const category of ['course', 'material', 'quote']) {
@@ -435,15 +449,18 @@ assert.match(learnPage, /\.material-row__type\s*\{[^}]*font-size:\s*(?:2[2-9]|[3
 assert.match(learnPage, /\.course-row__duration\s*\{[^}]*font-size:\s*(?:2[2-9]|[3-9]\d|\d{3,})rpx/, 'duration metadata should remain readable at 22rpx or larger')
 assert.match(learnPage, /\.type-index__item\s*\{[^}]*font-size:\s*(?:2[2-9]|[3-9]\d|\d{3,})rpx/, 'type index text should remain readable at 22rpx or larger')
 assert.doesNotMatch(learnPage, /font-size:\s*19rpx/, 'learn page should not use 19rpx content text')
-assert.doesNotMatch(learnPage, /\.type-index__item\s*\{[^}]*min-height:\s*(?:8[8-9]|9\d|[1-9]\d{2,})rpx/, 'display-only type index chips should not become dominant touch cards')
+assert.match(learnTemplate, /<view\b(?=[^>]*class=["'][^"']*type-index__item[^"']*["'])(?=[^>]*role=["']button["'])(?=[^>]*@click=["']openTypeDetail\(type\.id\)["'])[^>]*>/, 'type index entries should open their matching type detail')
 assert.doesNotMatch(learnPage, /class=["'][^"']*ios-card[^"']*["']/, 'learn editorial sections should not fall back to generic ios-card surfaces')
 assert.doesNotMatch(learnTemplate, /learn-masthead|publication-section|publication-card|老师专访|PROFILE|PERSONAL VOICE|COURSEWARE PUBLICATION|REFERENCE|TEACHER'S NOTE|馆藏资料|0\{\{\s*index/, 'learn template should omit the complex publication shelf, chapter numbering, and English labels')
-assert.doesNotMatch(learnPage, /(?:repeating-)?(?:linear|radial)-gradient|background-image|box-shadow|@keyframes|animation\s*:|(?:backdrop-)?filter\s*:/, 'learn page should use a plain background without texture, gradients, shadows, filters, or animation')
-assert.doesNotMatch(learnPage, /border-radius:\s*(?:[3-9]\d|\d{3,})rpx/, 'learn radii should stay within the restrained 16-24rpx range')
-assert.match(learnPage, /--learn-bg:\s*#F6F1E7/i, 'learn page should use the approved warm plain background')
-assert.match(learnPage, /--learn-surface:\s*#FFFDF8/i, 'learn page should use a warm white content surface')
-assert.match(learnPage, /--learn-ink:\s*#20252B/i, 'learn page should use restrained charcoal text')
-assert.match(learnPage, /--learn-green:\s*#335B4A/i, 'learn page should use restrained dark green accents')
+assert.doesNotMatch(learnPage, /background-image|@keyframes|animation\s*:|(?:backdrop-)?filter\s*:/, 'learn page should avoid textures, filters, and entry animation')
+assert.match(learnPage, /\.learn-header\s*\{[^}]*background:\s*linear-gradient\(145deg,\s*var\(--nx-brand-900\),\s*var\(--nx-brand-700\)\)/, 'learn header should use the shared brand gradient')
+const oversizedLearnRadii = [...learnPage.matchAll(/border-radius:\s*(\d+)rpx/g)]
+  .map((match) => Number(match[1]))
+  .filter((radius) => radius > 28 && radius !== 999)
+assert.deepEqual(oversizedLearnRadii, [], 'learn radii should stay at or below 28rpx except for intentional pill labels')
+assert.match(learnPage, /\.learn\s*\{[^}]*background:\s*var\(--nx-page-bg\)[^}]*color:\s*var\(--nx-text\)/, 'learn page should use the shared page and text tokens')
+assert.match(learnPage, /\.learn-teacher\s*\{[^}]*background:\s*var\(--nx-surface\)/, 'learn teacher section should use the shared surface token')
+assert.match(learnPage, /\.learn-tab--active\s*\{[^}]*background:\s*var\(--nx-brand-900\)/, 'active learning tab should use the shared brand token')
 
 assert.match(indexPage, /老师|导师/, 'home page should emphasize teacher guidance')
 assert.match(indexPage, /课件|课程/, 'home page should emphasize courseware and courses')
@@ -491,6 +508,7 @@ assert.doesNotMatch(learnPage, /\.course-list\s*\{[^}]*grid-template-columns:\s*
 assert.doesNotMatch(learnPage, /min-width:\s*(?:7[5-9]\d|[89]\d{2}|\d{4,})rpx/, 'learning center should not force horizontal overflow at phone widths')
 
 const profilePage = readFileSync('src/pages/profile/profile.vue', 'utf8')
+const profileEditPage = readFileSync('src/pages/profile-edit/profile-edit.vue', 'utf8')
 assert.match(profilePage, /profileLoading/, 'profile page should expose a loading state for non-blocking history fetch')
 assert.match(profilePage, /v-if="profileLoading"/, 'profile page should render loading placeholder before empty states')
 assert.match(profilePage, /loadTicket/, 'profile page should ignore stale concurrent loads')
@@ -564,11 +582,12 @@ assert.match(learnPage, /getStoredSiteConfig/, 'learn page should render stored 
 assert.match(learnPage, /refreshSiteConfig/, 'learn page should refresh site config in the background')
 assert.match(learnPage, /silent/, 'learn background refresh should avoid replacing cached content with a blocking state')
 
-assert.match(profilePage, /wechatLoginReady/, 'profile page should expose a WeChat login integration slot')
-assert.match(profilePage, /open-type="chooseAvatar"/, 'profile page should keep WeChat avatar slot')
-assert.match(profilePage, /type="nickname"/, 'profile page should keep WeChat nickname slot')
-assert.doesNotMatch(profilePage, /open-type="getPhoneNumber"/, '未接通后端前，手机号授权入口不能对用户露出')
-assert.doesNotMatch(profilePage, /@getphonenumber="onGetPhoneNumber"/, '未接通后端前，不应绑定可见手机号授权占位事件')
+assert.match(profilePage, /await\s+ensureLogin\(\)/, 'profile page should use the shared WeChat login integration')
+assert.match(profilePage, /uni\.navigateTo\(\{\s*url:\s*['"]\/pages\/profile-edit\/profile-edit['"]\s*\}\)/, 'profile page should open the dedicated profile editor')
+assert.match(profileEditPage, /open-type="chooseAvatar"/, 'profile editor should keep the WeChat avatar slot')
+assert.match(profileEditPage, /type="nickname"/, 'profile editor should keep the WeChat nickname slot')
+assert.doesNotMatch(`${profilePage}\n${profileEditPage}`, /open-type="getPhoneNumber"/, '未接通后端前，手机号授权入口不能对用户露出')
+assert.doesNotMatch(`${profilePage}\n${profileEditPage}`, /@getphonenumber="onGetPhoneNumber"/, '未接通后端前，不应绑定可见手机号授权占位事件')
 assert.match(profilePage, /#ifdef H5[\s\S]*请在微信小程序内登录[\s\S]*#endif/, 'H5 profile login entry should be a disabled miniapp guidance instead of a failing WeChat login CTA')
 assert.doesNotMatch(profilePage, /后端暂未开通|前端占位|占位/, '用户侧文案不能暴露手机号授权后端占位状态')
 assert.doesNotMatch(profilePage, /openChatPage|goChat|clearChatMessages|问 AI|AI 对话/, 'profile page must not expose or reset removed AI chat state')
@@ -592,10 +611,10 @@ assert.match(relationPage, /stage\.value\s*=\s*'redirecting'/, 'relation invalid
 assert.match(relationPage, /v-else-if="stage === 'result'"/, 'relation result view should be explicit so redirecting can show a safe placeholder')
 assert.match(relationPage, /型号参数无效/, 'relation page should explain invalid query type before navigation')
 assert.match(relationPage, /\/pages\/test\/test/, 'relation page should return to the test page for invalid query type')
-assert.match(relationPage, /\.chip\s*\{[\s\S]*min-height:\s*88rpx/, 'relation type chips should keep an 88rpx touch target')
-assert.match(relationPage, /<button\b[\s\S]*v-for=["']t in allTypes["'][\s\S]*class=["']chip["'][\s\S]*:aria-label=/, 'relation type chips should use button semantics with accessibility labels')
-assert.match(relationPage, /hover-class=["']chip--hover["']/, 'relation type chips should expose a hover/press visual state')
-assert.match(relationPage, /\.chip--hover\s*\{[\s\S]*(?:opacity|transform)/, 'relation chip hover state should have visible feedback')
+assert.match(relationPage, /\.type-chip\s*\{[\s\S]*min-height:\s*(?:8[8-9]|9\d|[1-9]\d{2,})rpx/, 'relation type chips should keep at least an 88rpx touch target')
+assert.match(relationPage, /<button\b[\s\S]*v-for=["']t in allTypes["'][\s\S]*class=["']type-chip nx-focusable["'][\s\S]*:aria-label=/, 'relation type chips should use button semantics with accessibility labels')
+assert.match(relationPage, /hover-class=["']type-chip--pressed["']/, 'relation type chips should expose a hover/press visual state')
+assert.match(relationPage, /\.type-chip--pressed\s*\{[\s\S]*(?:opacity|transform)/, 'relation chip pressed state should have visible feedback')
 
 assert.match(
   resultPage,

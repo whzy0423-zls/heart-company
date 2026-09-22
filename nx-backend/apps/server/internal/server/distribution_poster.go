@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,6 +20,14 @@ import (
 
 const distributionPosterKey = "distribution_poster"
 const defaultPosterLandingURL = "https://xn--9iq9az5uo8fz16d.com/app"
+
+// The admin upload endpoint requires a backend JWT. The app distribution
+// surface uses an app JWT, so poster assets are exposed through a dedicated
+// route after the URL has been checked against the active poster config.
+const (
+	distributionPosterAssetPrefix  = "/api/app/distribution/poster-assets/"
+	distributionPosterUploadPrefix = "/api/app/distribution/poster-uploads/"
+)
 
 type posterTemplate struct {
 	ID             string `json:"id"`
@@ -169,19 +179,127 @@ func activePosterTemplates(cfg posterConfig) []posterTemplate {
 	return items
 }
 
-func (s *Server) appPosterTemplates(ctx context.Context) []posterTemplate {
-	if s.db == nil {
-		return nil
+func appDistributionPosterAssetURL(raw string) string {
+	return publicConfigAssetURL(raw, distributionPosterAssetPrefix, distributionPosterUploadPrefix)
+}
+
+func posterConfigReferencesUploadAsset(cfg posterConfig, id int64) bool {
+	if id <= 0 {
+		return false
+	}
+	for _, template := range activePosterTemplates(cfg) {
+		if valueReferencesUploadAsset(template.TemplateURL, id) ||
+			valueReferencesUploadAsset(template.QRImageURL, id) {
+			return true
+		}
+	}
+	return false
+}
+
+func posterConfigReferencesLocalUpload(cfg posterConfig, privateURL string) bool {
+	privateURL = strings.TrimSpace(privateURL)
+	if privateURL == "" {
+		return false
+	}
+	for _, template := range activePosterTemplates(cfg) {
+		if valueReferencesLocalUpload(template.TemplateURL, privateURL) ||
+			valueReferencesLocalUpload(template.QRImageURL, privateURL) {
+			return true
+		}
+	}
+	return false
+}
+
+func posterImageContentType(raw string) (string, bool) {
+	contentType := strings.TrimSpace(raw)
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil || !strings.HasPrefix(strings.ToLower(mediaType), "image/") {
+		return "", false
+	}
+	return contentType, true
+}
+
+func (s *Server) readDistributionPosterConfig(ctx context.Context) (posterConfig, error) {
+	cfg := defaultPosterConfig()
+	if s == nil || s.db == nil {
+		return cfg, nil
 	}
 	var raw []byte
-	if err := s.db.QueryRowContext(ctx, "SELECT config FROM site_configs WHERE key=$1", distributionPosterKey).Scan(&raw); err != nil {
+	err := s.db.QueryRowContext(ctx, "SELECT config FROM site_configs WHERE key=$1", distributionPosterKey).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return cfg, nil
+	}
+	if err != nil {
+		return cfg, err
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return cfg, err
+	}
+	return normalizePosterConfig(cfg), nil
+}
+
+func (s *Server) appPosterTemplates(ctx context.Context) []posterTemplate {
+	cfg, err := s.readDistributionPosterConfig(ctx)
+	if err != nil {
 		return nil
 	}
-	var cfg posterConfig
-	if json.Unmarshal(raw, &cfg) != nil {
-		return nil
+	items := activePosterTemplates(cfg)
+	for i := range items {
+		items[i].TemplateURL = appDistributionPosterAssetURL(items[i].TemplateURL)
+		items[i].QRImageURL = appDistributionPosterAssetURL(items[i].QRImageURL)
 	}
-	return activePosterTemplates(cfg)
+	return items
+}
+
+// appDistributionPosterAsset serves only image upload assets referenced by an
+// enabled distribution poster template. It intentionally does not expose the
+// general upload preview endpoint to app tokens.
+func (s *Server) appDistributionPosterAsset(w http.ResponseWriter, r *http.Request) {
+	idText := strings.TrimPrefix(r.URL.Path, distributionPosterAssetPrefix)
+	id, err := strconv.ParseInt(strings.Trim(idText, "/"), 10, 64)
+	if err != nil || id <= 0 || s == nil || s.uploads == nil {
+		http.NotFound(w, r)
+		return
+	}
+	cfg, err := s.readDistributionPosterConfig(r.Context())
+	if err != nil || !posterConfigReferencesUploadAsset(cfg, id) {
+		http.NotFound(w, r)
+		return
+	}
+	asset, err := s.uploads.Find(r.Context(), id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	contentType, ok := posterImageContentType(asset.ContentType)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(asset.Data)))
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	w.Header().Set("Vary", "Authorization")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	_, _ = w.Write(asset.Data)
+}
+
+// appDistributionPosterUpload serves legacy local files referenced by an
+// enabled poster template. New uploads normally use upload_assets, but older
+// configurations may still point at /api/uploads/ paths.
+func (s *Server) appDistributionPosterUpload(w http.ResponseWriter, r *http.Request) {
+	rel := publicUploadRelativePath(r.URL.Path, distributionPosterUploadPrefix)
+	if rel == "" || s == nil {
+		http.NotFound(w, r)
+		return
+	}
+	privateURL := "/api/uploads/" + rel
+	cfg, err := s.readDistributionPosterConfig(r.Context())
+	if err != nil || !posterConfigReferencesLocalUpload(cfg, privateURL) {
+		http.NotFound(w, r)
+		return
+	}
+	s.servePublicLocalUpload(w, r, rel)
 }
 
 func (s *Server) distributionPosterConfig(w http.ResponseWriter, r *http.Request) {
@@ -194,18 +312,11 @@ func (s *Server) distributionPosterConfig(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if r.Method == http.MethodGet {
-		cfg := defaultPosterConfig()
-		var raw []byte
-		err := s.db.QueryRowContext(r.Context(), "SELECT config FROM site_configs WHERE key=$1", distributionPosterKey).Scan(&raw)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		cfg, err := s.readDistributionPosterConfig(r.Context())
+		if err != nil {
 			httpx.Fail(w, 500, "读取海报配置失败")
 			return
 		}
-		if err == nil && json.Unmarshal(raw, &cfg) != nil {
-			httpx.Fail(w, 500, "海报配置格式错误")
-			return
-		}
-		cfg = normalizePosterConfig(cfg)
 		httpx.OK(w, cfg)
 		return
 	}

@@ -59,7 +59,7 @@ func TestLegacyBillingCyclesUseCanonicalMembershipCardLimits(t *testing.T) {
 	}
 	plan := normalizeLoadedAppPlan(defaultAppPlan("svip"))
 	if plan.PlanLevel != "svip" || plan.CardLimit != 10 || plan.Limits["cardLimit"] != 10 {
-		t.Fatalf("defaultAppPlan(svip) = level=%q cardLimit=%d limits=%v, want S VIP/10", plan.PlanLevel, plan.CardLimit, plan.Limits)
+		t.Fatalf("defaultAppPlan(svip) = level=%q cardLimit=%d limits=%v, want SVIP/10", plan.PlanLevel, plan.CardLimit, plan.Limits)
 	}
 }
 
@@ -145,7 +145,7 @@ func TestMembershipSchemaContainsPlanAndResourceAccessMigration(t *testing.T) {
 	dropIndex := strings.Index(schema, "ALTER TABLE app_plans DROP CONSTRAINT IF EXISTS app_plans_code_check")
 	svipSeedIndex := strings.Index(schema, "('svip','svip','year'")
 	if dropIndex < 0 || svipSeedIndex < 0 || svipSeedIndex < dropIndex {
-		t.Fatalf("S VIP seed must run after legacy plan constraints are replaced (drop=%d seed=%d)", dropIndex, svipSeedIndex)
+		t.Fatalf("SVIP seed must run after legacy plan constraints are replaced (drop=%d seed=%d)", dropIndex, svipSeedIndex)
 	}
 }
 

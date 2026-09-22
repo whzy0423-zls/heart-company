@@ -350,12 +350,12 @@ onMounted(load);
       <Alert v-if="error && activeTab === 'profiles'" type="error" :message="error" show-icon />
       <Alert v-if="reviewError && activeTab === 'reviews'" type="error" :message="reviewError" show-icon />
       <template v-if="activeTab === 'profiles'">
-        <Space class="toolbar" wrap>
-          <Input v-model:value="query.keyword" allow-clear placeholder="搜索老师姓名或标识" @press-enter="loadTeachers" />
+        <div class="toolbar">
+          <Input v-model:value="query.keyword" allow-clear class="toolbar-search" placeholder="搜索老师姓名或标识" @press-enter="loadTeachers" />
           <Select v-model:value="query.enabled" allow-clear placeholder="全部状态" :options="[{ label: '启用', value: 'true' }, { label: '停用', value: 'false' }]" @change="loadTeachers" />
           <Button type="primary" @click="loadTeachers">查询</Button>
           <Button v-if="canWrite" type="primary" @click="openCreate">新增老师</Button>
-        </Space>
+        </div>
         <Table :columns="profileColumns" :data-source="teachers" :loading="loading" row-key="key" :pagination="{ current: query.page, pageSize: query.pageSize, total: teacherTotal }" @change="(p: any) => handleProfilePageChange(p.current ?? 1, p.pageSize ?? 20)">
           <template #bodyCell="{ column, record }">
             <template v-if="column.dataIndex === 'enabled'"><Tag :color="record.enabled ? 'green' : 'default'">{{ record.enabled ? '启用' : '停用' }}</Tag></template>
@@ -364,12 +364,12 @@ onMounted(load);
         </Table>
       </template>
       <template v-else>
-        <Space class="toolbar" wrap>
+        <div class="toolbar">
           <Select v-model:value="reviewQuery.teacherKey" allow-clear placeholder="老师筛选" :options="teachers.map((item) => ({ label: item.name, value: item.key }))" @change="loadReviews" />
           <Select v-model:value="reviewQuery.feedType" allow-clear placeholder="内容类型" :options="[{ label: '正式课程', value: 'course' }, { label: '日常动态', value: 'daily' }]" @change="loadReviews" />
           <Select v-model:value="reviewQuery.reviewStatus" placeholder="审核状态" :options="reviewStatusOptions" @change="loadReviews" />
           <Button @click="loadReviews">刷新队列</Button>
-        </Space>
+        </div>
         <Table :columns="reviewColumns" :data-source="reviews" :loading="reviewLoading" row-key="id" :pagination="{ current: reviewQuery.page, pageSize: reviewQuery.pageSize, total: reviewTotal }" @change="(p: any) => handleReviewPageChange(p.current ?? 1, p.pageSize ?? 20)">
           <template #bodyCell="{ column, record }">
             <template v-if="column.dataIndex === 'feedType'">{{ record.feedType === 'daily' ? '日常动态' : '正式课程' }}</template>
@@ -382,7 +382,7 @@ onMounted(load);
     </Card>
 
     <Modal v-model:open="profileModalOpen" :confirm-loading="saving" :title="editingKey ? '编辑老师资料' : '新增老师'" width="min(860px, calc(100vw - 32px))" @ok="saveProfile">
-      <Form layout="vertical"><Row :gutter="16"><Col :md="12" :xs="24"><Form.Item label="老师标识"><Input v-model:value="form.key" :disabled="!!editingKey" placeholder="例如 han" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="姓名"><Input v-model:value="form.name" placeholder="请输入老师姓名" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="身份"><Input v-model:value="form.title" placeholder="例如 九型导师" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="排序"><InputNumber v-model:value="form.sortOrder" :min="0" style="width: 100%" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="头像"><ImagePathInput v-model:value="form.avatar" dir="teacher-avatars" empty-text="未设置头像" upload-text="上传头像" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="封面"><ImagePathInput v-model:value="form.cover" dir="teacher-covers" empty-text="未设置封面" upload-text="上传封面" /></Form.Item></Col><Col :xs="24"><Form.Item label="列表简介"><Input v-model:value="form.shortIntro" /></Form.Item></Col><Col :xs="24"><Form.Item label="详细介绍"><Textarea v-model:value="form.bio" :rows="4" /></Form.Item></Col><Col :xs="24"><Form.Item label="介绍视频"><Input v-model:value="form.introVideoUrl" placeholder="视频地址（可选）" /></Form.Item></Col><Col :xs="24"><Form.Item label="擅长标签（逗号分隔）"><Input :value="form.tags.join('、')" @update:value="(value: string) => { form.tags = splitTags(value); }" /></Form.Item></Col><Col :md="8" :xs="24"><Form.Item label="首页展示"><Switch v-model:checked="form.showOnHome" /></Form.Item></Col><Col :md="8" :xs="24"><Form.Item label="侧边栏展示"><Switch v-model:checked="form.showInDrawer" /></Form.Item></Col><Col :md="8" :xs="24"><Form.Item label="启用老师"><Switch v-model:checked="form.enabled" /></Form.Item></Col><Col :xs="24"><Form.Item label="客服配置"><Input v-model:value="form.customerServiceConfig!.wechat" placeholder="客服微信号" /><Input v-model:value="form.customerServiceConfig!.workTime" class="nested-field" placeholder="客服工作时间（可选）" /><Textarea v-model:value="form.customerServiceConfig!.description" :rows="2" placeholder="客服说明" /><ImagePathInput v-model:value="form.customerServiceConfig!.qrCode" dir="teacher-contact" variant="input" empty-text="未设置客服二维码" upload-text="上传客服二维码" /></Form.Item></Col><Col :xs="24"><Form.Item label="线下服务"><Switch v-model:checked="form.offlineServiceConfig!.enabled" /><Input v-model:value="form.offlineServiceConfig!.city" class="nested-field" placeholder="服务城市" /><Input :value="(form.offlineServiceConfig!.types ?? []).join('、')" class="nested-field" placeholder="服务类型（逗号分隔）" @update:value="(value: string) => { form.offlineServiceConfig!.types = splitTags(value); }" /><Textarea v-model:value="form.offlineServiceConfig!.description" :rows="2" placeholder="线下服务/合作说明" /></Form.Item></Col></Row><Alert type="info" show-icon message="管理员修改优先" description="老师端草稿不会覆盖管理员维护的正式资料，所有修改会记录操作日志。" /></Form>
+      <Form layout="vertical"><Row :gutter="16"><Col :md="12" :xs="24"><Form.Item label="老师标识"><Input v-model:value="form.key" :disabled="!!editingKey" placeholder="例如 han" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="姓名"><Input v-model:value="form.name" placeholder="请输入老师姓名" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="身份"><Input v-model:value="form.title" placeholder="例如 九型导师" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="排序"><InputNumber v-model:value="form.sortOrder" :min="0" placeholder="请输入排序值" style="width: 100%" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="头像"><ImagePathInput v-model:value="form.avatar" dir="teacher-avatars" empty-text="未设置头像" upload-text="上传头像" /></Form.Item></Col><Col :md="12" :xs="24"><Form.Item label="封面"><ImagePathInput v-model:value="form.cover" dir="teacher-covers" empty-text="未设置封面" upload-text="上传封面" /></Form.Item></Col><Col :xs="24"><Form.Item label="列表简介"><Input v-model:value="form.shortIntro" placeholder="请输入列表简介" /></Form.Item></Col><Col :xs="24"><Form.Item label="详细介绍"><Textarea v-model:value="form.bio" :rows="4" placeholder="请输入老师详细介绍" /></Form.Item></Col><Col :xs="24"><Form.Item label="介绍视频"><Input v-model:value="form.introVideoUrl" placeholder="视频地址（可选）" /></Form.Item></Col><Col :xs="24"><Form.Item label="擅长标签（逗号分隔）"><Input :value="form.tags.join('、')" placeholder="请输入擅长标签（逗号分隔）" @update:value="(value: string) => { form.tags = splitTags(value); }" /></Form.Item></Col><Col :md="8" :xs="24"><Form.Item label="首页展示"><Switch v-model:checked="form.showOnHome" /></Form.Item></Col><Col :md="8" :xs="24"><Form.Item label="侧边栏展示"><Switch v-model:checked="form.showInDrawer" /></Form.Item></Col><Col :md="8" :xs="24"><Form.Item label="启用老师"><Switch v-model:checked="form.enabled" /></Form.Item></Col><Col :xs="24"><Form.Item label="客服配置"><Input v-model:value="form.customerServiceConfig!.wechat" placeholder="客服微信号" /><Input v-model:value="form.customerServiceConfig!.workTime" class="nested-field" placeholder="客服工作时间（可选）" /><Textarea v-model:value="form.customerServiceConfig!.description" :rows="2" placeholder="客服说明" /><ImagePathInput v-model:value="form.customerServiceConfig!.qrCode" dir="teacher-contact" variant="input" empty-text="未设置客服二维码" upload-text="上传客服二维码" /></Form.Item></Col><Col :xs="24"><Form.Item label="线下服务"><Switch v-model:checked="form.offlineServiceConfig!.enabled" /><Input v-model:value="form.offlineServiceConfig!.city" class="nested-field" placeholder="服务城市" /><Input :value="(form.offlineServiceConfig!.types ?? []).join('、')" class="nested-field" placeholder="服务类型（逗号分隔）" @update:value="(value: string) => { form.offlineServiceConfig!.types = splitTags(value); }" /><Textarea v-model:value="form.offlineServiceConfig!.description" :rows="2" placeholder="线下服务/合作说明" /></Form.Item></Col></Row><Alert type="info" show-icon message="管理员修改优先" description="老师端草稿不会覆盖管理员维护的正式资料，所有修改会记录操作日志。" /></Form>
     </Modal>
     <Modal v-model:open="bindingModalOpen" :confirm-loading="saving" title="绑定 App 用户为老师" @ok="saveBinding">
       <Form layout="vertical">
@@ -416,12 +416,14 @@ onMounted(load);
 .teacher-shell { min-height: 520px; }
 .toolbar {
   align-items: center;
-  display: flex !important;
+  column-gap: 8px;
+  display: flex;
   flex-wrap: wrap;
   margin: 16px 0 20px;
   row-gap: 12px;
   width: 100%;
 }
+.toolbar-search { width: 240px; }
+.toolbar :deep(.ant-select) { min-width: 128px; }
 .nested-field { margin-top: 8px; }
-:deep(.ant-table-wrapper) { margin-top: 12px !important; }
 </style>

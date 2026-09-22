@@ -10,7 +10,7 @@ await writeFile(
   contentAssetPath,
   (await readFile(new URL('./contentAsset.js', import.meta.url), 'utf8'))
     .replace(
-      /import \{ API_BASE(?:, DEFAULT_API_BASE)? \} from '\.\.\/config'/,
+      /import \{ API_BASE(?:, DEFAULT_API_BASE)? \} from '\.\.\/config(?:\.js)?'/,
       "const API_BASE = 'https://api.example.test/api'; const DEFAULT_API_BASE = API_BASE",
     ),
 )
@@ -68,7 +68,7 @@ assert.deepEqual(
   {
     name: '韩常青（老韩）',
     title: '九型芯之力首席导师',
-    avatar: '/assets/teacher-poster.jpg',
+    avatar: 'https://api.example.test/assets/teacher-poster.jpg',
     bio: '北京九型成长平台、芯之力创始人。',
     tags: [],
   },

@@ -87,7 +87,7 @@ func registerSkillLibraryAdminRoutes(mux *http.ServeMux, requirePermission func(
 	mux.HandleFunc("/api/skill-library-management/books/import", requirePermission("App:SkillLibrary:Edit", s.importSkillBook))
 	mux.HandleFunc("/api/skill-library-management", requirePermission("App:SkillLibrary:View", s.skillLibraryAdminRouter))
 	mux.HandleFunc("/api/skill-library-management/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPatch && r.Method != http.MethodPost {
+		if r.Method != http.MethodPatch && r.Method != http.MethodPost && r.Method != http.MethodDelete {
 			httpx.Fail(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
@@ -104,7 +104,7 @@ func registerSkillLibraryAdminRoutes(mux *http.ServeMux, requirePermission func(
 func parseSkillLibraryAdminActionPath(path string) (int64, string, bool) {
 	rest := strings.Trim(strings.TrimPrefix(path, "/api/skill-library-management/skills/"), "/")
 	parts := strings.Split(rest, "/")
-	if len(parts) != 2 || (parts[1] != "publish" && parts[1] != "unpublish" && parts[1] != "enable" && parts[1] != "disable") {
+	if len(parts) != 2 || (parts[1] != "publish" && parts[1] != "unpublish" && parts[1] != "enable" && parts[1] != "disable" && parts[1] != "delete") {
 		return 0, "", false
 	}
 	id, err := strconv.ParseInt(parts[0], 10, 64)
@@ -137,7 +137,7 @@ func (s *Server) skillLibraryAdminRouter(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	resource, id, ok := parseSkillLibraryAdminPath(r.URL.Path)
-	if r.Method == http.MethodPost {
+	if r.Method == http.MethodPost || r.Method == http.MethodDelete {
 		var action string
 		if actionID, parsedAction, actionOK := parseSkillLibraryAdminActionPath(r.URL.Path); actionOK {
 			id, action, ok = actionID, parsedAction, true
@@ -404,6 +404,24 @@ func (s *Server) updateManagedSkillLifecycle(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		httpx.OK(w, map[string]any{"id": id, "status": "disabled", "published": false})
+		return
+	}
+	if action == "delete" {
+		result, err := tx.ExecContext(r.Context(), `UPDATE app_skills SET status='archived',latest_published_version_id=NULL,update_time=now() WHERE id=$1 AND status='disabled' AND category_id IN (SELECT category.id FROM app_skill_categories category JOIN app_skill_libraries library ON library.id=category.library_id WHERE library.key=$2)`, id, managedSkillLibraryKey)
+		if err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "技能删除失败")
+			return
+		}
+		rows, _ := result.RowsAffected()
+		if rows == 0 {
+			httpx.Fail(w, http.StatusConflict, "请先下架技能后再删除")
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "技能删除失败")
+			return
+		}
+		httpx.OK(w, map[string]any{"id": id, "status": "archived", "deleted": true})
 		return
 	}
 	if action == "enable" {

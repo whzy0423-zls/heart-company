@@ -14,7 +14,7 @@ try {
     contentAssetPath,
     (await readFile(new URL('./contentAsset.js', import.meta.url), 'utf8'))
       .replace(
-        /import \{ API_BASE(?:, DEFAULT_API_BASE)? \} from '\.\.\/config'/,
+        /import \{ API_BASE(?:, DEFAULT_API_BASE)? \} from '\.\.\/config(?:\.js)?'/,
         "const API_BASE = 'https://api.example.test/api'; const DEFAULT_API_BASE = API_BASE",
       ),
   )

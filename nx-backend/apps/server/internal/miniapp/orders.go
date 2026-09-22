@@ -35,6 +35,7 @@ const (
 	ProductMember           = "member"
 	ProductClassroomSeries  = "classroom_series"
 	ProductClassroomContent = "classroom_content"
+	ProductWechatPayTest    = "wechat_pay_test"
 )
 
 var (
@@ -312,6 +313,8 @@ func (s *Store) MarkOrderPaidDetailed(ctx context.Context, outTradeNo, transacti
 	}
 
 	switch product {
+	case ProductWechatPayTest:
+		// Test payments only verify the payment channel. They intentionally grant no entitlement.
 	case ProductReport:
 		if refID > 0 {
 			if _, err := tx.ExecContext(c,

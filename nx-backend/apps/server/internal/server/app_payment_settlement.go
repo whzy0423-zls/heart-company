@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -59,13 +60,16 @@ func settleAppOrderTx(ctx context.Context, tx *sql.Tx, input appOrderSettlementI
 	}
 	var orderID, appUserID int64
 	var durationDays int
-	var productID, status string
+	var productID, status, upgradeFromPlan string
 	var orderAmount int64
 	var currentActivation, currentMembershipExpiry sql.NullTime
+	var upgradeSnapshot []byte
 	err := tx.QueryRowContext(ctx, `
-		SELECT id, app_user_id, product_id, status, duration_days, activation_at, membership_expires_at, amount
+		SELECT id, app_user_id, product_id, status, duration_days, activation_at, membership_expires_at, amount,
+		       COALESCE(upgrade_from_plan,''), COALESCE(upgrade_quote_snapshot,'{}'::jsonb)
 		FROM app_orders WHERE id=$1 FOR UPDATE`, input.OrderID).Scan(
-		&orderID, &appUserID, &productID, &status, &durationDays, &currentActivation, &currentMembershipExpiry, &orderAmount)
+		&orderID, &appUserID, &productID, &status, &durationDays, &currentActivation, &currentMembershipExpiry, &orderAmount,
+		&upgradeFromPlan, &upgradeSnapshot)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return appOrderSettlementResult{}, errXZNCallbackNotFound
@@ -95,18 +99,38 @@ func settleAppOrderTx(ctx context.Context, tx *sql.Tx, input appOrderSettlementI
 	if currentExpiresAt.Valid {
 		currentExpiry = &currentExpiresAt.Time
 	}
-	period, err := calculateMembershipPeriodDays(durationDays, activationAt, currentExpiry)
-	if err != nil {
-		return appOrderSettlementResult{}, err
-	}
-	startedAt := period.Start
-	if currentExpiresAt.Valid && currentExpiresAt.Time.After(activationAt) && currentStartedAt.Valid {
-		startedAt = currentStartedAt.Time
+	startedAt := activationAt
+	var expiresAt time.Time
+	if strings.TrimSpace(upgradeFromPlan) != "" {
+		var snapshot struct {
+			SameCycle bool `json:"sameCycle"`
+		}
+		_ = json.Unmarshal(upgradeSnapshot, &snapshot)
+		if snapshot.SameCycle && currentExpiresAt.Valid {
+			startedAt = nullableTimeValue(currentStartedAt, currentActivation)
+			expiresAt = currentExpiresAt.Time
+		} else {
+			period, periodErr := calculateMembershipPeriodDays(durationDays, activationAt, nil)
+			if periodErr != nil {
+				return appOrderSettlementResult{}, periodErr
+			}
+			expiresAt = period.Expires
+		}
+	} else {
+		period, periodErr := calculateMembershipPeriodDays(durationDays, activationAt, currentExpiry)
+		if periodErr != nil {
+			return appOrderSettlementResult{}, periodErr
+		}
+		startedAt = period.Start
+		if currentExpiresAt.Valid && currentExpiresAt.Time.After(activationAt) && currentStartedAt.Valid {
+			startedAt = currentStartedAt.Time
+		}
+		expiresAt = period.Expires
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE app_users
 		SET member_level=$1, member_started_at=$2, member_expires_at=$3, update_time=now()
-		WHERE id=$4`, productID, startedAt, period.Expires, appUserID); err != nil {
+		WHERE id=$4`, productID, startedAt, expiresAt, appUserID); err != nil {
 		return appOrderSettlementResult{}, fmt.Errorf("settlement user update: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -118,14 +142,14 @@ func settleAppOrderTx(ctx context.Context, tx *sql.Tx, input appOrderSettlementI
 		    transaction_id=CASE WHEN $6<>'' THEN $6 ELSE transaction_id END,
 		    member_level_before=$7, member_started_at_before=$8, member_expires_at_before=$9,
 		    payment_error='', update_time=now()
-		WHERE id=$1`, orderID, activationAt, period.Expires, input.ProviderTrade, input.ProviderStatus, input.TransactionID,
+		WHERE id=$1`, orderID, activationAt, expiresAt, input.ProviderTrade, input.ProviderStatus, input.TransactionID,
 		memberLevel, nullableTimeArgument(currentStartedAt), nullableTimeArgument(currentExpiresAt)); err != nil {
 		return appOrderSettlementResult{}, fmt.Errorf("settlement order update: %w", err)
 	}
 	if err := generateDistributionCommissionsTx(ctx, tx, orderID, appUserID, orderAmount); err != nil {
 		return appOrderSettlementResult{}, fmt.Errorf("distribution commission: %w", err)
 	}
-	return appOrderSettlementResult{OrderID: orderID, PlanCode: productID, StartedAt: startedAt, ExpiresAt: period.Expires}, nil
+	return appOrderSettlementResult{OrderID: orderID, PlanCode: productID, StartedAt: startedAt, ExpiresAt: expiresAt}, nil
 }
 
 func nullableTimeArgument(value sql.NullTime) any {

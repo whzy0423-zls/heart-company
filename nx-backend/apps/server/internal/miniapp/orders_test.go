@@ -140,6 +140,19 @@ func TestMarkOrderPaidDuplicateCallbackIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestMarkOrderPaidAcceptsWechatPayTestWithoutGrantingEntitlement(t *testing.T) {
+	state := &orderTestState{paidProduct: ProductWechatPayTest}
+	store := newOrderTestStore(t, state)
+
+	changed, err := store.MarkOrderPaid(context.Background(), "wxpay-test-order", "wx-transaction")
+	if err != nil || !changed {
+		t.Fatalf("test payment should be recorded without an entitlement, changed=%v err=%v", changed, err)
+	}
+	if state.orderPaidCount != 1 || state.membershipGrantCount != 0 || state.classroomGrantCount != 0 {
+		t.Fatalf("unexpected test payment effects: %+v", state)
+	}
+}
+
 func TestMarkOrderPaidRejectsTerminalUnpaidOrders(t *testing.T) {
 	for _, status := range []string{"refunded", "closed"} {
 		t.Run(status, func(t *testing.T) {

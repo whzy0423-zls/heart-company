@@ -62,10 +62,10 @@ describe('App plan management contract', () => {
   it('keeps free plan validation visible in the editor', () => {
     const source = readFileSync(resolve(here, 'plan-management.vue'), 'utf8');
     expect(source).toContain('免费版只能使用 none 周期');
-    expect(source).toContain('付费套餐必须选择 VIP 或 S VIP');
+    expect(source).toContain('付费套餐必须选择 VIP 或 SVIP');
   });
 
-  it('keeps legacy annual products at VIP unless the API declares S VIP', () => {
+  it('keeps legacy annual products at VIP unless the API declares SVIP', () => {
     const source = readFileSync(resolve(here, 'plan-management.vue'), 'utf8');
     expect(source).toContain("plan.code === 'free' ? 'free' : 'vip'");
     expect(source).not.toContain("plan.code === 'vip_year' ? 'svip'");

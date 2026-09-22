@@ -195,10 +195,25 @@ func publicSourceMetadata(raw []byte) json.RawMessage {
 		RiskNotices       []string `json:"riskNotices"`
 		SourceNeeded      bool     `json:"sourceNeeded"`
 		CompilerPolicy    string   `json:"compilerPolicy,omitempty"`
+		OverviewMarkdown  string   `json:"overviewMarkdown,omitempty"`
+		CoreMarkdown      string   `json:"coreMarkdown,omitempty"`
+		WhenToUse         []string `json:"whenToUse"`
+		Workflow          []string `json:"workflow"`
+		Topics            []string `json:"topics"`
+		Distillation      string   `json:"distillation,omitempty"`
 	}
 	_ = json.Unmarshal(raw, &value)
 	if value.RiskNotices == nil {
 		value.RiskNotices = []string{}
+	}
+	if value.WhenToUse == nil {
+		value.WhenToUse = []string{}
+	}
+	if value.Workflow == nil {
+		value.Workflow = []string{}
+	}
+	if value.Topics == nil {
+		value.Topics = []string{}
 	}
 	out, _ := json.Marshal(value)
 	return out

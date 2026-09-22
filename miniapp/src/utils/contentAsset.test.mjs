@@ -9,7 +9,7 @@ try {
   const rawSource = await readFile(new URL('./contentAsset.js', import.meta.url), 'utf8')
   let source = rawSource
   source = source.replace(
-    /import \{ API_BASE(?:, DEFAULT_API_BASE)? \} from '\.\.\/config'/,
+    /import \{ API_BASE(?:, DEFAULT_API_BASE)? \} from '\.\.\/config(?:\.js)?'/,
     "const API_BASE = 'http://127.0.0.1:5320/api'; const DEFAULT_API_BASE = 'https://api.example.test/api'",
   )
   await writeFile(modulePath, source)
@@ -72,7 +72,7 @@ try {
   await writeFile(
     lanModulePath,
     rawSource.replace(
-      /import \{ API_BASE(?:, DEFAULT_API_BASE)? \} from '\.\.\/config'/,
+      /import \{ API_BASE(?:, DEFAULT_API_BASE)? \} from '\.\.\/config(?:\.js)?'/,
       "const API_BASE = 'http://192.168.1.20:5320/api'; const DEFAULT_API_BASE = 'https://api.example.test/api'",
     ),
   )

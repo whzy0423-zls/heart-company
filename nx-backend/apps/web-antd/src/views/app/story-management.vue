@@ -300,13 +300,13 @@ onMounted(async () => {
       <Form layout="vertical">
         <div class="form-grid model-grid">
           <Form.Item label="启用故事专用模型"><Switch v-model:checked="modelForm.enabled" /></Form.Item>
-          <Form.Item label="协议"><Select v-model:value="modelForm.provider" :options="[{ label: 'OpenAI 兼容', value: 'openai-compatible' }, { label: 'Anthropic 兼容', value: 'anthropic-compatible' }]" /></Form.Item>
+          <Form.Item label="协议"><Select v-model:value="modelForm.provider" :options="[{ label: 'OpenAI 兼容', value: 'openai-compatible' }, { label: 'Anthropic 兼容', value: 'anthropic-compatible' }]" placeholder="请选择模型协议" /></Form.Item>
           <Form.Item label="API Base"><Input v-model:value="modelForm.apiBase" placeholder="https://api.example.com/v1" /></Form.Item>
           <Form.Item label="模型名称"><Input v-model:value="modelForm.model" placeholder="例如 gpt-4o-mini" /></Form.Item>
           <Form.Item label="API Key"><Input.Password v-model:value="modelForm.apiKey" :placeholder="modelKeySet ? '留空沿用已配置密钥' : '请输入 API Key'" /></Form.Item>
-          <Form.Item label="Temperature"><InputNumber v-model:value="modelForm.temperature" :max="2" :min="0.1" :step="0.1" style="width: 100%" /></Form.Item>
-          <Form.Item label="最大输出 Token"><InputNumber v-model:value="modelForm.maxTokens" :max="16000" :min="1000" style="width: 100%" /></Form.Item>
-          <Form.Item label="超时（秒）"><InputNumber v-model:value="modelForm.timeoutSeconds" :max="90" :min="1" style="width: 100%" /></Form.Item>
+          <Form.Item label="Temperature"><InputNumber v-model:value="modelForm.temperature" :max="2" :min="0.1" :step="0.1" placeholder="例如 0.7" style="width: 100%" /></Form.Item>
+          <Form.Item label="最大输出 Token"><InputNumber v-model:value="modelForm.maxTokens" :max="16000" :min="1000" placeholder="例如 4000" style="width: 100%" /></Form.Item>
+          <Form.Item label="超时（秒）"><InputNumber v-model:value="modelForm.timeoutSeconds" :max="90" :min="1" placeholder="例如 30" style="width: 100%" /></Form.Item>
         </div>
         <Form.Item label="系统提示词"><Input.TextArea v-model:value="modelForm.systemPrompt" :auto-size="{ minRows: 3, maxRows: 8 }" placeholder="可选：补充故事生成规则" /></Form.Item>
         <div class="model-actions">
@@ -366,7 +366,7 @@ onMounted(async () => {
 
     <Modal v-model:open="editorOpen" :confirm-loading="saving" :title="editorMode === 'create' ? '上传故事 Skill' : '编辑故事 Skill'" width="680px" @ok="save">
       <Form layout="vertical">
-        <Form.Item label="故事类型" required><Select v-model:value="form.category" :options="categoryOptions" /></Form.Item>
+        <Form.Item label="故事类型" required><Select v-model:value="form.category" :options="categoryOptions" placeholder="请选择故事类型" /></Form.Item>
         <div class="form-grid">
           <Form.Item label="技能名称" required><Input v-model:value="form.name" placeholder="例如：英雄旅程" /></Form.Item>
           <Form.Item label="技能标识" required><Input v-model:value="form.key" placeholder="hero-journey" /></Form.Item>

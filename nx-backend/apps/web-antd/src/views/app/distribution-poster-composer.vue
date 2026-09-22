@@ -338,8 +338,8 @@ onBeforeUnmount(() => {
             <Upload accept="image/png,image/jpeg,image/webp" :show-upload-list="false" :disabled="uploading || saving" :before-upload="file => upload(file, 'template')"><Button :loading="uploading">上传海报模板</Button></Upload>
           </Form.Item>
           <Form.Item label="官网 App 下载页（二维码自动生成）"><Input v-model:value="landingUrl" placeholder="https://xn--9iq9az5uo8fz16d.com/app" :maxlength="2048" /></Form.Item>
-          <Form.Item label="二维码位置（X / Y）"><Space><InputNumber v-model:value="qrX" :min="0" :max="720 - qrSize" :precision="0" /><InputNumber v-model:value="qrY" :min="0" :max="1280 - qrSize" :precision="0" /></Space></Form.Item>
-          <Form.Item label="邀请码位置（X / Y）"><Space><InputNumber v-model:value="inviteX" :min="0" :max="720 - inviteWidth" :precision="0" /><InputNumber v-model:value="inviteY" :min="0" :max="1268 - inviteFontSize" :precision="0" /></Space></Form.Item>
+          <Form.Item label="二维码位置（X / Y）"><Space><InputNumber v-model:value="qrX" :min="0" :max="720 - qrSize" :precision="0" placeholder="二维码 X 坐标" /><InputNumber v-model:value="qrY" :min="0" :max="1280 - qrSize" :precision="0" placeholder="二维码 Y 坐标" /></Space></Form.Item>
+          <Form.Item label="邀请码位置（X / Y）"><Space><InputNumber v-model:value="inviteX" :min="0" :max="720 - inviteWidth" :precision="0" placeholder="邀请码 X 坐标" /><InputNumber v-model:value="inviteY" :min="0" :max="1268 - inviteFontSize" :precision="0" placeholder="邀请码 Y 坐标" /></Space></Form.Item>
           <Form.Item label="邀请码字号"><Slider v-model:value="inviteFontSize" :min="16" :max="64" /></Form.Item>
           <Form.Item label="邀请码区域宽度"><Slider v-model:value="inviteWidth" :min="120" :max="600" /></Form.Item>
           <Form.Item label="二维码尺寸"><Slider v-model:value="qrSize" :min="MIN_QR_SIZE" :max="220" :step="4" /></Form.Item>

@@ -1,3 +1,5 @@
+import { resolveContentAsset } from './contentAsset.js'
+
 export const DEFAULT_TEACHERS = [
   {
     name: '韩老师',
@@ -55,6 +57,14 @@ function firstText(source, keys) {
   return ''
 }
 
+function firstAsset(source, keys, fallback) {
+  for (const key of keys) {
+    const resolved = resolveContentAsset(firstText(source, [key]))
+    if (resolved) return resolved
+  }
+  return fallback
+}
+
 function normalizeTags(value) {
   if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean).slice(0, 4)
   if (typeof value === 'string') return value.split(/[、,，/\s]+/).map((item) => item.trim()).filter(Boolean).slice(0, 4)
@@ -95,7 +105,7 @@ function hasTeacherContent(source) {
   const title = firstText(source, ['title'])
   return !!firstText(source, [
     'name', 'teacherName', 'nickname',
-    'avatar', 'photo', 'image', 'cover', 'bio', 'description', 'desc', 'intro', 'summary', 'lead',
+    'avatar', 'photo', 'image', 'cover', 'fallbackImage', 'bio', 'description', 'desc', 'intro', 'summary', 'lead',
   ]) || /[|｜（）()]/.test(title) || normalizeTags(source.tags || source.badges || source.specialties || source.skills).length > 0
 }
 
@@ -110,28 +120,35 @@ function uniqueByTitle(items) {
 }
 
 export function normalizeTeachers(config) {
-  const sources = [
+  const structuredSources = [
     config?.teacher,
     config?.teachers,
     config?.home?.teacher,
     config?.home?.teachers,
-    config?.home?.teacherTeaser,
   ]
-  const candidates = sources.flatMap(asArray).filter(hasTeacherContent)
-
-  const teachers = candidates.map((item) => {
+  const normalizeTeacher = (item) => {
     const source = item || {}
     const identity = teacherNameAndTitle(source)
     return {
       name: identity.name,
       title: identity.title,
-      avatar: firstText(source, ['avatar', 'photo', 'image', 'cover']) || '/static/avatars/9.png',
+      avatar: firstAsset(source, ['avatar', 'photo', 'image', 'cover', 'fallbackImage'], '/static/avatars/9.png'),
       bio: firstText(source, ['bio', 'description', 'desc', 'intro', 'summary', 'lead']) || '带你用九型人格看见真实动机，把课程内容落到每天可练习的沟通与成长里。',
       tags: normalizeTags(source.tags || source.badges || source.specialties || source.skills),
     }
-  }).filter((item) => item.name || item.bio)
+  }
+
+  const teachers = structuredSources
+    .flatMap(asArray)
+    .filter(hasTeacherContent)
+    .map(normalizeTeacher)
 
   if (teachers.length > 0) return teachers
+
+  const teaser = config?.home?.teacherTeaser
+  if (hasTeacherContent(teaser)) return [normalizeTeacher(teaser)]
+
+  const sources = [...structuredSources, teaser]
   return sources.some(hasExplicitSection) ? [] : DEFAULT_TEACHERS
 }
 
@@ -167,10 +184,12 @@ function normalizeCoursewareSource(item, index) {
   if (!title && !description) return null
   const editorial = courseEditorial(title, index)
   const materialTypes = normalizeTextList(source.materialTypes || source.mediaTypes || source.formats)
+  const coverKeys = ['cover', 'image', 'thumb', 'poster', 'avatar']
+  const originalCover = firstText(source, coverKeys)
   return {
     title: title || '课程资料',
     description: description || '老师整理的九型人格学习资料，适合课前预习和课后复盘。',
-    cover: firstText(source, ['cover', 'image', 'thumb', 'poster', 'avatar']) || editorial.cover,
+    cover: firstAsset(source, coverKeys, originalCover || editorial.cover),
     badge: firstText(source, ['badge', 'tag', 'type', 'label']) || '课程',
     duration: firstText(source, ['duration', 'time', 'minutes', 'length']) || editorial.duration,
     materialTypes: materialTypes.length > 0 ? materialTypes : editorial.materialTypes,

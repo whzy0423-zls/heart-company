@@ -15,6 +15,8 @@ export * from './game-results';
 export * from './menu';
 export * from './message';
 export * from './miniapp-customer';
+export * from './miniapp-order';
+export * from './miniapp-analytics';
 export * from './mind-quotes';
 export * from './model-config';
 export * from './push';

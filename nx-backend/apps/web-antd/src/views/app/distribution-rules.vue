@@ -234,6 +234,7 @@ onMounted(load);
                   :max="100"
                   :precision="2"
                   :step="0.5"
+                  :aria-label="`${levelLabels[level]}百分比`"
                   addon-after="%"
                   class="rate-input"
                 />
@@ -247,6 +248,7 @@ onMounted(load);
                   :precision="2"
                   addon-before="¥"
                   class="rate-input"
+                  placeholder="例如 99.00"
                 />
                 <small>用于预估各级佣金</small>
               </label>

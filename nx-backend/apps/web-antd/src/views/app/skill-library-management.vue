@@ -34,6 +34,7 @@ import {
   unpublishSkillLibrarySkillApi,
   enableSkillLibrarySkillApi,
   disableSkillLibrarySkillApi,
+  deleteSkillLibrarySkillApi,
   updateSkillLibraryApi,
   updateSkillLibraryCategoryApi,
   updateSkillLibrarySkillApi,
@@ -65,7 +66,7 @@ async function importBook() {
   importing.value = true;
   try {
     const result = await importSkillBookApi({ file: bookFile.value, name: bookForm.name.trim(), summary: bookForm.summary.trim(), categoryId: bookForm.categoryId });
-    message.success(`已提取 ${result.characters} 字并生成技能草稿，请检查名称与分类后点击发布，手机刷新技能库即可看到`);
+    message.success(`已提取 ${result.characters} 字，当前 AI 已完成 book-to-skill 转换并生成技能草稿，请检查后点击发布`);
     importOpen.value = false;
     bookFile.value = undefined;
     if (bookFileInput.value) bookFileInput.value.value = '';
@@ -310,6 +311,18 @@ function disableSkill(item: SkillRecord) {
   });
 }
 
+function deleteSkill(item: SkillRecord) {
+  Modal.confirm({
+    title: `删除“${item.name}”？`,
+    content: '仅允许删除已下架技能。删除会从后台和 App 列表移除，但保留历史版本记录。',
+    okText: '确认删除',
+    okButtonProps: { danger: true },
+    async onOk() {
+      await runSkillAction(item, () => deleteSkillLibrarySkillApi(item.id), '技能已删除');
+    },
+  });
+}
+
 onMounted(load);
 </script>
 
@@ -429,6 +442,16 @@ onMounted(load);
                   >
                     <IconifyIcon icon="lucide:pause" />停用
                   </Button>
+                  <Button
+                    v-if="record.status === 'disabled'"
+                    :loading="actionLoadingId === record.id"
+                    danger
+                    size="small"
+                    type="link"
+                    @click="deleteSkill(record as SkillRecord)"
+                  >
+                    <IconifyIcon icon="lucide:trash-2" />删除
+                  </Button>
                   <Button type="link" size="small" @click="editSkillRecord(record)">编辑</Button>
                 </Space>
               </template>
@@ -484,29 +507,29 @@ onMounted(load);
           <Input v-model:value="form.key" disabled />
         </Form.Item>
         <Form.Item :label="editorKind === 'skill' ? '技能名称' : '名称'" required>
-          <Input v-model:value="form.name" :maxlength="100" />
+          <Input v-model:value="form.name" :maxlength="100" :placeholder="editorKind === 'skill' ? '请输入技能名称' : '请输入名称'" />
         </Form.Item>
         <Form.Item v-if="editorKind === 'skill'" label="所属分类" required>
-          <Select v-model:value="form.categoryId" :options="categoryOptions" />
+          <Select v-model:value="form.categoryId" :options="categoryOptions" placeholder="请选择所属分类" />
         </Form.Item>
         <Form.Item v-if="editorKind === 'skill'" label="技能简介" required>
-          <Input.TextArea v-model:value="form.summary" :maxlength="500" :rows="3" show-count />
+          <Input.TextArea v-model:value="form.summary" :maxlength="500" :rows="3" placeholder="请输入技能简介" show-count />
         </Form.Item>
         <Form.Item v-if="editorKind !== 'category'" label="详细说明">
-          <Input.TextArea v-model:value="form.description" :maxlength="2000" :rows="4" show-count />
+          <Input.TextArea v-model:value="form.description" :maxlength="2000" :rows="4" placeholder="请输入详细说明（可选）" show-count />
         </Form.Item>
         <div class="grid grid-cols-1 gap-x-4 md:grid-cols-2">
           <Form.Item label="图标">
             <Input v-model:value="form.iconKey" placeholder="例如 menu_book" />
           </Form.Item>
           <Form.Item v-if="editorKind !== 'library'" label="颜色">
-            <Select v-model:value="form.colorToken" :options="colorOptions" />
+            <Select v-model:value="form.colorToken" :options="colorOptions" placeholder="请选择颜色" />
           </Form.Item>
           <Form.Item label="排序">
-            <InputNumber v-model:value="form.sortOrder" class="w-full" :min="0" :precision="0" />
+            <InputNumber v-model:value="form.sortOrder" class="w-full" :min="0" :precision="0" placeholder="请输入排序值" />
           </Form.Item>
           <Form.Item label="启用状态">
-            <Select v-model:value="form.status" :options="statusOptions" />
+            <Select v-model:value="form.status" :options="statusOptions" placeholder="请选择启用状态" />
           </Form.Item>
         </div>
         <Alert
@@ -524,9 +547,9 @@ onMounted(load);
           <input ref="bookFileInput" type="file" accept=".txt,.md,.markdown,.docx,.epub,.pdf" @change="selectBook" />
           <div class="mt-2 text-xs text-gray-500">支持 UTF-8 TXT / Markdown、DOCX、EPUB、文字型 PDF，最大 200 MB。扫描版请先 OCR；导入不等同于 AI 蒸馏或内容审核。</div>
         </Form.Item>
-        <Form.Item label="手机显示名称" required><Input v-model:value="bookForm.name" :maxlength="100" /></Form.Item>
-        <Form.Item label="所属分类" required><Select v-model:value="bookForm.categoryId" :options="categoryOptions" /></Form.Item>
-        <Form.Item label="技能简介"><Input.TextArea v-model:value="bookForm.summary" :maxlength="500" :rows="3" /></Form.Item>
+        <Form.Item label="手机显示名称" required><Input v-model:value="bookForm.name" :maxlength="100" placeholder="请输入手机端显示名称" /></Form.Item>
+        <Form.Item label="所属分类" required><Select v-model:value="bookForm.categoryId" :options="categoryOptions" placeholder="请选择所属分类" /></Form.Item>
+        <Form.Item label="技能简介"><Input.TextArea v-model:value="bookForm.summary" :maxlength="500" :rows="3" placeholder="请输入技能简介（可选）" /></Form.Item>
       </Form>
     </Modal>
   </Page>

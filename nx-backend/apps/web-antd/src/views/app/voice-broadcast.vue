@@ -32,6 +32,8 @@ const saving = ref(false);
 const testing = ref(false);
 const loadError = ref('');
 const apiKey = ref('');
+const workspaceInputReadonly = ref(true);
+const apiKeyInputReadonly = ref(true);
 const config = ref<VoiceBroadcastConfigView>(emptyView());
 const form = reactive<VoiceBroadcastConfigPayload>(emptyPayload());
 
@@ -114,6 +116,8 @@ function applyView(next: VoiceBroadcastConfigView) {
     workspaceId: next.workspaceId,
   });
   apiKey.value = '';
+  workspaceInputReadonly.value = true;
+  apiKeyInputReadonly.value = true;
 }
 
 async function load() {
@@ -219,7 +223,7 @@ async function testSynthesis() {
           show-icon
           :type="config.enabled ? 'success' : 'info'"
         />
-        <Form layout="vertical">
+        <Form autocomplete="off" layout="vertical">
           <Form.Item label="全局启用">
             <Switch
               v-model:checked="form.enabled"
@@ -232,19 +236,30 @@ async function testSynthesis() {
             <Input v-model:value="form.provider" disabled />
           </Form.Item>
           <Form.Item label="地域">
-            <Input v-model:value="form.region" data-testid="voice-broadcast-region" />
+            <Input v-model:value="form.region" data-testid="voice-broadcast-region" placeholder="例如 cn-beijing" />
           </Form.Item>
           <Form.Item label="Workspace ID">
-            <Input v-model:value="form.workspaceId" />
+            <Input
+              v-model:value="form.workspaceId"
+              autocomplete="off"
+              name="voice-broadcast-workspace-id"
+              placeholder="请输入阿里百炼 Workspace ID"
+              :readonly="workspaceInputReadonly"
+              @focus="workspaceInputReadonly = false"
+            />
           </Form.Item>
           <Form.Item label="TTS 模型">
-            <Input v-model:value="form.model" />
+            <Input v-model:value="form.model" placeholder="例如 qwen-audio-3.0-tts-flash" />
           </Form.Item>
           <Form.Item label="阿里百炼 API Key">
             <Input.Password
               v-model:value="apiKey"
+              autocomplete="new-password"
               data-testid="voice-broadcast-api-key"
+              name="voice-broadcast-api-key"
               placeholder="留空表示保留现有 Key"
+              :readonly="apiKeyInputReadonly"
+              @focus="apiKeyInputReadonly = false"
             />
             <div class="form-tip">当前状态：{{ keyStatus }}。密钥只写入，不会回显。</div>
           </Form.Item>
@@ -256,6 +271,7 @@ async function testSynthesis() {
               v-model:value="form.currentVoice"
               :options="voiceOptions"
               data-testid="voice-broadcast-current-voice"
+              placeholder="请选择当前启用音色"
               show-search
             />
           </Form.Item>

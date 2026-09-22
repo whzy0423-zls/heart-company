@@ -1,11 +1,14 @@
 export function memberPlanLabel(level?: string) {
   const labels: Record<string, string> = {
     free: '普通用户',
-    svip: '年包会员',
-    vip: '月包会员',
-    vip_month: '月包会员',
-    vip_quarter: '季包会员',
-    vip_year: '年包会员',
+    svip: 'SVIP',
+    vip: 'VIP',
+    vip_month: 'VIP 月卡',
+    vip_quarter: 'VIP 季卡',
+    vip_year: 'VIP 年卡',
+    svip_month: 'SVIP 月卡',
+    svip_quarter: 'SVIP 季卡',
+    svip_year: 'SVIP 年卡',
   };
   return labels[level || ''] || level || '-';
 }

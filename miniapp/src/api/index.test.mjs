@@ -31,6 +31,16 @@ assert.doesNotMatch(
   /url:\s*['"]\/api\/app\/auth/,
   "API paths must not include /api because API_BASE already ends with /api",
 );
+assert.match(
+  source,
+  /url:\s*["']\/miniapp\/wechat-pay-test\/order["']/,
+  "wechat payment test must use the authenticated backend order endpoint",
+);
+assert.match(
+  source,
+  /export function createWechatPayTestOrderApi\(\)/,
+  "wechat payment test API must not accept a client amount",
+);
 
 const dir = await mkdtemp(join(tmpdir(), "nx-miniapp-classroom-api-"));
 try {

@@ -11,6 +11,74 @@ type membershipPeriod struct {
 	Expires time.Time
 }
 
+// membershipUpgradeQuoteInput contains prices captured from the plan catalog
+// and the user's currently remaining membership time. Callers should obtain
+// these values while holding the same order/user lock used to create the
+// upgrade order.
+type membershipUpgradeQuoteInput struct {
+	CurrentPlan         string
+	TargetPlan          string
+	CurrentPriceCents   int
+	TargetPriceCents    int
+	CurrentDurationDays int
+	RemainingDays       int
+}
+
+type membershipUpgradeQuote struct {
+	CurrentPlan   string `json:"currentPlan"`
+	TargetPlan    string `json:"targetPlan"`
+	SameCycle     bool   `json:"sameCycle"`
+	RemainingDays int    `json:"remainingDays"`
+	CreditCents   int    `json:"creditCents"`
+	PayableCents  int    `json:"payableCents"`
+}
+
+// calculateMembershipUpgradeQuote prices an upgrade without mutating state.
+// Same-cycle changes charge only the remaining share of the price difference;
+// cross-cycle changes credit the rounded remaining value of the old plan.
+func calculateMembershipUpgradeQuote(input membershipUpgradeQuoteInput) (membershipUpgradeQuote, error) {
+	if strings.TrimSpace(input.CurrentPlan) == "" || strings.TrimSpace(input.TargetPlan) == "" {
+		return membershipUpgradeQuote{}, fmt.Errorf("membership plans are required")
+	}
+	if input.CurrentPriceCents < 0 || input.TargetPriceCents < 0 || input.CurrentDurationDays <= 0 {
+		return membershipUpgradeQuote{}, fmt.Errorf("invalid membership quote prices or duration")
+	}
+	remainingDays := input.RemainingDays
+	if remainingDays <= 0 {
+		remainingDays = 1
+	}
+	if remainingDays > input.CurrentDurationDays {
+		remainingDays = input.CurrentDurationDays
+	}
+	currentCycle := normalizeBillingCycle(normalizeMembershipLevel(input.CurrentPlan), input.CurrentPlan)
+	targetCycle := normalizeBillingCycle(normalizeMembershipLevel(input.TargetPlan), input.TargetPlan)
+	sameCycle := currentCycle == targetCycle
+	creditCents := 0
+	if sameCycle {
+		delta := input.TargetPriceCents - input.CurrentPriceCents
+		if delta > 0 {
+			creditCents = roundDivide(delta*remainingDays, input.CurrentDurationDays)
+		}
+	} else if input.CurrentPriceCents > 0 {
+		creditCents = roundDivide(input.CurrentPriceCents*remainingDays, input.CurrentDurationDays)
+	}
+	if creditCents > input.TargetPriceCents {
+		creditCents = input.TargetPriceCents
+	}
+	return membershipUpgradeQuote{
+		CurrentPlan: input.CurrentPlan, TargetPlan: input.TargetPlan,
+		SameCycle: sameCycle, RemainingDays: remainingDays,
+		CreditCents: creditCents, PayableCents: input.TargetPriceCents - creditCents,
+	}, nil
+}
+
+func roundDivide(numerator, denominator int) int {
+	if denominator <= 0 || numerator <= 0 {
+		return 0
+	}
+	return (numerator + denominator/2) / denominator
+}
+
 // resolvedMembershipPlan is the canonical view used by new entitlement and
 // resource-access code. SKU/code remains available for old clients and orders.
 type resolvedMembershipPlan struct {
@@ -59,6 +127,9 @@ type appMembershipBenefit struct {
 
 func appMembershipBenefits(plan string) appMembershipBenefit {
 	configured := defaultAppPlan(plan)
+	if normalized := normalizeAppPlanCode(plan); strings.HasPrefix(normalized, "svip_") {
+		configured.Name = appProductTitle(normalized)
+	}
 	return appMembershipBenefit{PlanName: configured.Name, CardLimit: configured.CardLimit, StoryMonthlyLimit: configured.StoryMonthlyLimit}
 }
 

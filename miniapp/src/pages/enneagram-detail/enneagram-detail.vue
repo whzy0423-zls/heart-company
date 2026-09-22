@@ -23,7 +23,7 @@ function openOverview() { uni.navigateTo({ url: '/pages/enneagram/enneagram' }) 
     <view class="detail-shell">
       <button class="back-button" hover-class="back-button--pressed" @click="openOverview">‹ <text>返回九型地图</text></button>
       <view class="detail-hero" :class="`detail-hero--${info.color}`">
-        <image class="detail-hero__image" :src="`/static/enneagram/${typeId}.webp`" mode="aspectFill" />
+        <image class="detail-hero__image" :src="`/static/enneagram/${typeId}.png`" mode="aspectFill" />
         <view class="detail-hero__copy">
           <text class="detail-hero__number">0{{ typeId }} TYPE</text>
           <text class="detail-hero__title">{{ info.name }}</text>

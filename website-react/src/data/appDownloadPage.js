@@ -65,8 +65,8 @@ export const APP_INSTALL_STEPS = [
 ]
 
 export const APP_INSTALL_VIDEO = {
-  src: '/assets/app/install-guide.mp4',
-  poster: '/assets/app/install-guide-poster.webp',
+  src: '/assets/app/install-guide-strict-redacted.mp4',
+  poster: '/assets/app/install-guide-poster-strict-redacted.webp',
   captions: '/assets/app/install-guide.zh-CN.vtt',
   duration: '3 分 31 秒',
 }

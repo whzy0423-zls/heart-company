@@ -67,6 +67,85 @@ type appProductResp struct {
 	DurationDays        int      `json:"durationDays"`
 }
 
+type appUpgradeQuoteReq struct {
+	TargetProductID string `json:"targetProductId"`
+}
+
+type appUpgradeQuoteResp struct {
+	CurrentPlan       string `json:"currentPlan"`
+	TargetPlan        string `json:"targetPlan"`
+	CurrentLevel      string `json:"currentLevel"`
+	TargetLevel       string `json:"targetLevel"`
+	CurrentExpiresAt  string `json:"currentExpiresAt,omitempty"`
+	RemainingDays     int    `json:"remainingDays"`
+	CurrentPriceCents int    `json:"currentPriceCents"`
+	TargetPriceCents  int    `json:"targetPriceCents"`
+	CreditCents       int    `json:"creditCents"`
+	PayableCents      int    `json:"payableCents"`
+	SameCycle         bool   `json:"sameCycle"`
+	QuoteExpiresAt    string `json:"quoteExpiresAt"`
+}
+
+func (s *Server) appBillingUpgradeQuote(w http.ResponseWriter, r *http.Request) {
+	userInfo, ok := appUserFromContext(r)
+	if !ok {
+		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	var body appUpgradeQuoteReq
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&body); err != nil || strings.TrimSpace(body.TargetProductID) == "" {
+		httpx.Fail(w, http.StatusBadRequest, "targetProductId required")
+		return
+	}
+	targetID := strings.TrimSpace(body.TargetProductID)
+	target := s.appPlan(r.Context(), targetID)
+	if target.Code != targetID || !target.Enabled || target.PriceCents <= 0 || target.DurationDays <= 0 {
+		httpx.Fail(w, http.StatusBadRequest, "invalid target product")
+		return
+	}
+	var memberLevel string
+	var expiresAt sql.NullTime
+	if err := s.db.QueryRowContext(r.Context(), `SELECT member_level,member_expires_at FROM app_users WHERE id=$1 AND status='active'`, userInfo.ID).Scan(&memberLevel, &expiresAt); err != nil {
+		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	currentLevel := normalizeMembershipLevel(memberLevel)
+	targetLevel := normalizeMembershipLevel(target.PlanLevel)
+	if currentLevel != "vip" || targetLevel != "svip" {
+		httpx.Fail(w, http.StatusConflict, "仅支持 VIP 升级 SVIP")
+		return
+	}
+	if !expiresAt.Valid || !expiresAt.Time.After(time.Now()) {
+		httpx.Fail(w, http.StatusConflict, "当前会员已到期")
+		return
+	}
+	currentID := appPlanCode(memberLevel)
+	current := s.appPlan(r.Context(), currentID)
+	if current.PriceCents <= 0 || current.DurationDays <= 0 {
+		httpx.Fail(w, http.StatusConflict, "当前套餐缺少有效价格配置")
+		return
+	}
+	remaining := int(time.Until(expiresAt.Time).Hours() / 24)
+	quote, err := calculateMembershipUpgradeQuote(membershipUpgradeQuoteInput{
+		CurrentPlan: current.Code, TargetPlan: target.Code,
+		CurrentPriceCents: current.PriceCents, TargetPriceCents: target.PriceCents,
+		CurrentDurationDays: current.DurationDays, RemainingDays: remaining,
+	})
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "无法计算升级报价")
+		return
+	}
+	now := time.Now()
+	httpx.OK(w, appUpgradeQuoteResp{
+		CurrentPlan: quote.CurrentPlan, TargetPlan: quote.TargetPlan,
+		CurrentLevel: currentLevel, TargetLevel: targetLevel,
+		CurrentExpiresAt: expiresAt.Time.Format(time.RFC3339), RemainingDays: quote.RemainingDays,
+		CurrentPriceCents: current.PriceCents, TargetPriceCents: target.PriceCents,
+		CreditCents: quote.CreditCents, PayableCents: quote.PayableCents,
+		SameCycle: quote.SameCycle, QuoteExpiresAt: now.Add(10 * time.Minute).Format(time.RFC3339),
+	})
+}
+
 type appPaymentChannel struct {
 	Code              string `json:"code"`
 	Name              string `json:"name"`
@@ -80,6 +159,7 @@ const (
 	appOrderPendingConfirmation    = "pending_confirmation"
 	appCustomerServiceQRURL        = "/api/public/customer-service-qr"
 	appPaymentProviderXZN          = "xzn"
+	appOrderExpirationMessage      = "订单超过15分钟未完成，已自动取消"
 )
 
 func appCardLimit(memberLevel string) int {
@@ -94,8 +174,8 @@ func appPlanCode(memberLevel string) string {
 	case "vip":
 		return "vip_month"
 	case "svip":
-		// Keep S VIP as its own canonical plan. `vip_year` is the legacy
-		// annual VIP SKU and carries the normalized VIP tier, not S VIP.
+		// Keep SVIP as its own canonical plan. `vip_year` is the legacy
+		// annual VIP SKU and carries the normalized VIP tier, not SVIP.
 		return "svip"
 	default:
 		return memberLevel
@@ -173,7 +253,7 @@ func (s *Server) appBillingEntitlements(w http.ResponseWriter, r *http.Request) 
 		canonical := defaultMembershipLevelPlan("svip")
 		// Overlay every capability field used by this response. A disabled,
 		// zero-priced seed row is intentionally valid for configuration, but it
-		// must not make an already-active S VIP member look like a free user.
+		// must not make an already-active SVIP member look like a free user.
 		plan.Code = canonical.Code
 		plan.PlanLevel = canonical.PlanLevel
 		plan.BillingCycle = canonical.BillingCycle
@@ -283,7 +363,9 @@ func (s *Server) appBillingProducts(w http.ResponseWriter, r *http.Request) {
 	}
 	products := make([]appProductResp, 0, 3)
 	for _, plan := range plans {
-		if plan.Code == "free" {
+		// `svip` is the legacy canonical level marker. Purchases use the
+		// explicit cycle SKUs so the App never presents a duplicate annual card.
+		if plan.Code == "free" || plan.Code == "svip" {
 			continue
 		}
 		products = append(products, appProductForPaymentMode(mode, cfg, appProductFromPlan(plan)))
@@ -364,8 +446,9 @@ func appXZNProductWithStatus(product appProductResp, status, reason string) appP
 }
 
 type appOrderCreateReq struct {
-	ProductID  string `json:"productId"`
-	PayChannel string `json:"payChannel"`
+	ProductID       string `json:"productId"`
+	PayChannel      string `json:"payChannel"`
+	UpgradeFromPlan string `json:"upgradeFromPlan"`
 }
 
 type appOrderResp struct {
@@ -394,18 +477,27 @@ type appOrderResp struct {
 	DurationDays         int            `json:"durationDays"`
 	CurrentExpiresAt     string         `json:"currentExpiresAt,omitempty"`
 	EstimatedExpiresAt   string         `json:"estimatedExpiresAt,omitempty"`
+	UpgradeFromPlan      string         `json:"upgradeFromPlan,omitempty"`
+	UpgradeCreditCents   int            `json:"upgradeCreditCents,omitempty"`
+	UpgradeQuoteSnapshot map[string]any `json:"upgradeQuoteSnapshot,omitempty"`
 }
 
 func appProductTitle(productID string) string {
 	switch productID {
 	case "vip_month":
-		return "月卡会员"
+		return "VIP 月卡"
 	case "vip_quarter":
-		return "季卡会员"
+		return "VIP 季卡"
 	case "vip_year":
-		return "年卡会员"
+		return "VIP 年卡"
+	case "svip_month":
+		return "SVIP 月卡"
+	case "svip_quarter":
+		return "SVIP 季卡"
+	case "svip_year":
+		return "SVIP 年卡"
 	case "svip":
-		return "S VIP"
+		return "SVIP"
 	default:
 		return ""
 	}
@@ -419,8 +511,14 @@ func appProductAmount(productID string) int {
 		return 7900
 	case "vip_year":
 		return 19900
+	case "svip_month":
+		return 5900
+	case "svip_quarter":
+		return 15900
+	case "svip_year":
+		return 49900
 	case "svip":
-		// S VIP is seeded unpublished and therefore has no fallback price.
+		// SVIP is seeded unpublished and therefore has no fallback price.
 		// A configured plan is priced from app_plans; this helper only serves
 		// legacy callers that need a deterministic amount.
 		return 0
@@ -536,6 +634,41 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 	productID := strings.TrimSpace(body.ProductID)
 	plan := s.appPlan(r.Context(), productID)
 	title, amount, durationDays := plan.Name, plan.PriceCents, plan.DurationDays
+	var upgradeFrom string
+	var upgradeCredit int
+	var upgradeSnapshot []byte
+	if strings.TrimSpace(body.UpgradeFromPlan) != "" {
+		upgradeFrom = strings.TrimSpace(body.UpgradeFromPlan)
+		var memberLevel string
+		var expiresAt sql.NullTime
+		if err := s.db.QueryRowContext(r.Context(), `SELECT member_level,member_expires_at FROM app_users WHERE id=$1 AND status='active'`, userInfo.ID).Scan(&memberLevel, &expiresAt); err != nil || !expiresAt.Valid || !expiresAt.Time.After(time.Now()) {
+			httpx.Fail(w, http.StatusConflict, "当前会员状态已变化，请重新获取升级报价")
+			return
+		}
+		current := s.appPlan(r.Context(), appPlanCode(memberLevel))
+		if normalizeMembershipLevel(memberLevel) != "vip" || normalizeMembershipLevel(plan.PlanLevel) != "svip" || current.PriceCents <= 0 || current.DurationDays <= 0 {
+			httpx.Fail(w, http.StatusConflict, "当前套餐不支持升级")
+			return
+		}
+		remaining := int(time.Until(expiresAt.Time).Hours() / 24)
+		quote, err := calculateMembershipUpgradeQuote(membershipUpgradeQuoteInput{
+			CurrentPlan: current.Code, TargetPlan: plan.Code,
+			CurrentPriceCents: current.PriceCents, TargetPriceCents: plan.PriceCents,
+			CurrentDurationDays: current.DurationDays, RemainingDays: remaining,
+		})
+		if err != nil {
+			httpx.Fail(w, http.StatusConflict, "升级报价已失效，请重新获取")
+			return
+		}
+		amount = quote.PayableCents
+		upgradeCredit = quote.CreditCents
+		upgradeSnapshot, _ = json.Marshal(map[string]any{
+			"currentPlan": quote.CurrentPlan, "targetPlan": quote.TargetPlan,
+			"remainingDays": quote.RemainingDays, "creditCents": quote.CreditCents,
+			"payableCents": quote.PayableCents, "sameCycle": quote.SameCycle,
+			"currentExpiresAt": expiresAt.Time.Format(time.RFC3339),
+		})
+	}
 	if productID == "free" || plan.Code != productID || !plan.Enabled || title == "" || amount <= 0 || durationDays <= 0 {
 		httpx.Fail(w, http.StatusBadRequest, "invalid product")
 		return
@@ -586,9 +719,9 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 	outTradeNo := fmt.Sprintf("app%d-%s-%d", userInfo.ID, productID, time.Now().UnixNano())
 	if online {
 		if _, err := s.db.ExecContext(r.Context(), `
-				INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, duration_days, status, purchase_mode, payment_provider, pay_channel, gateway_id)
-				VALUES ($1, $2, $3, $4, $5, $6, 'pending', 'xzn', 'xzn', $7, $8)`,
-			outTradeNo, userInfo.ID, productID, title, amount, durationDays, payChannel, gatewayID); err != nil {
+				INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, duration_days, status, purchase_mode, payment_provider, pay_channel, gateway_id, upgrade_from_plan, upgrade_credit_cents, upgrade_quote_snapshot)
+				VALUES ($1, $2, $3, $4, $5, $6, 'pending', 'xzn', 'xzn', $7, $8, $9, $10, COALESCE($11::jsonb, '{}'::jsonb))`,
+			outTradeNo, userInfo.ID, productID, title, amount, durationDays, payChannel, gatewayID, upgradeFrom, upgradeCredit, nullableJSONArgument(upgradeSnapshot)); err != nil {
 			if existing, found, findErr := s.findPendingAppOrder(r.Context(), userInfo.ID); findErr == nil && found {
 				if enriched, enrichErr := s.enrichCustomerServiceOrder(r.Context(), userInfo.ID, existing); enrichErr == nil {
 					httpx.OK(w, enriched)
@@ -651,6 +784,13 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 	httpx.Fail(w, http.StatusServiceUnavailable, "支付暂不可用")
 }
 
+func nullableJSONArgument(value []byte) any {
+	if len(value) == 0 {
+		return nil
+	}
+	return string(value)
+}
+
 func (s *Server) createCustomerServiceAppOrder(w http.ResponseWriter, r *http.Request, appUserID int64, productID, title string, amount, durationDays int) {
 	outTradeNo := fmt.Sprintf("app%d-%s-%d", appUserID, productID, time.Now().UnixNano())
 	if _, err := s.db.ExecContext(r.Context(),
@@ -694,6 +834,10 @@ func (s *Server) appBillingOrderStatus(w http.ResponseWriter, r *http.Request) {
 	outTradeNo := strings.TrimSpace(r.URL.Query().Get("outTradeNo"))
 	if outTradeNo == "" {
 		httpx.Fail(w, http.StatusBadRequest, "outTradeNo required")
+		return
+	}
+	if err := s.expireStaleAppOrders(r.Context(), userInfo.ID); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
 	var resp appOrderResp
@@ -786,6 +930,9 @@ func (s *Server) appBillingCancelOrder(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) findPendingAppOrder(ctx context.Context, appUserID int64) (appOrderResp, bool, error) {
+	if err := s.expireStaleAppOrders(ctx, appUserID); err != nil {
+		return appOrderResp{}, false, err
+	}
 	var resp appOrderResp
 	err := s.db.QueryRowContext(ctx, `
 		SELECT p.out_trade_no, p.product_id, p.title, p.amount, p.status
@@ -807,6 +954,27 @@ func (s *Server) findPendingAppOrder(ctx context.Context, appUserID int64) (appO
 	}
 	s.loadAppOrderPaymentMeta(ctx, appUserID, resp.OutTradeNo, &resp)
 	return resp, true, nil
+}
+
+func (s *Server) expireStaleAppOrders(ctx context.Context, appUserID int64) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE app_orders
+		SET status='closed',
+		    provider_status=CASE
+		      WHEN payment_provider='xzn' AND COALESCE(provider_status,'') IN ('','WAIT_BUYER_PAY') THEN 'TRADE_CLOSED'
+		      ELSE provider_status
+		    END,
+		    payment_error=CASE
+		      WHEN COALESCE(payment_error,'')='' THEN $2
+		      ELSE payment_error
+		    END,
+		    update_time=now()
+		WHERE app_user_id=$1
+		  AND create_time <= now() - INTERVAL '15 minutes'
+		  AND (status='pending_confirmation' OR (payment_provider='xzn' AND status IN ('pending','paying')))`,
+		appUserID, appOrderExpirationMessage,
+	)
+	return err
 }
 
 func (s *Server) enrichCustomerServiceOrder(ctx context.Context, appUserID int64, resp appOrderResp) (appOrderResp, error) {
@@ -957,6 +1125,8 @@ func appCustomerServiceOrder(resp appOrderResp) appOrderResp {
 		resp.Message = "会员已由客服确认开通"
 	} else if resp.Status == "refunded" {
 		resp.Message = "订单已退款，会员权益已同步回退"
+	} else if resp.Status == "closed" {
+		resp.Message = appOrderExpirationMessage
 	} else {
 		resp.Message = "请添加客服微信并提供手机号和订单号，转账后由客服确认开通"
 	}

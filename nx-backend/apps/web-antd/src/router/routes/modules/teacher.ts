@@ -13,12 +13,13 @@ const routes: RouteRecordRaw[] = [
     },
     name: 'TeacherManagement',
     path: '/teachers',
+    redirect: '/teachers/manage',
     children: [
       {
         component: () => import('#/views/teacher/index.vue'),
         meta: { title: '老师资料与审核' },
         name: 'TeacherManagementIndex',
-        path: '',
+        path: 'manage',
       },
     ],
   },

@@ -1,14 +1,17 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/httpx"
+	"nine-xing/nx-backend/apps/server/internal/storage"
 	"nine-xing/nx-backend/apps/server/internal/teacher"
 )
 
@@ -202,6 +205,7 @@ func (s *Server) appTeacherMe(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		items, _ := s.teachers.ListContent(r.Context(), roles.TeacherKey, "", "", false)
+		s.decorateTeacherContentCovers(r.Context(), items)
 		httpx.OK(w, map[string]any{"teacher": item, "contents": items})
 		return
 	case http.MethodPut:
@@ -242,12 +246,17 @@ func (s *Server) appTeacherContentMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/app/teacher/me/content"), "/")
+	if parts := strings.Split(path, "/"); len(parts) >= 2 && parts[1] == "uploads" {
+		s.appTeacherUploadRouter(w, r, roles, path)
+		return
+	}
 	if path == "" && r.Method == http.MethodGet {
 		items, err := s.teachers.ListContent(r.Context(), roles.TeacherKey, "", "", false)
 		if err != nil {
 			httpx.Fail(w, http.StatusInternalServerError, "list teacher content failed")
 			return
 		}
+		s.decorateTeacherContentCovers(r.Context(), items)
 		httpx.OK(w, map[string]any{"items": items})
 		return
 	}
@@ -262,6 +271,7 @@ func (s *Server) appTeacherContentMe(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		s.decorateTeacherContentCover(r.Context(), &item)
 		httpx.OK(w, item)
 		return
 	}
@@ -277,6 +287,7 @@ func (s *Server) appTeacherContentMe(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusBadRequest, "content cannot be submitted")
 			return
 		}
+		s.decorateTeacherContentCover(r.Context(), &item)
 		httpx.OK(w, item)
 		return
 	}
@@ -286,6 +297,7 @@ func (s *Server) appTeacherContentMe(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusNotFound, "content not found")
 			return
 		}
+		s.decorateTeacherContentCover(r.Context(), &item)
 		httpx.OK(w, item)
 		return
 	}
@@ -305,10 +317,43 @@ func (s *Server) appTeacherContentMe(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		s.decorateTeacherContentCover(r.Context(), &updated)
 		httpx.OK(w, updated)
 		return
 	}
 	httpx.Fail(w, http.StatusNotFound, "not found")
+}
+
+// decorateTeacherContentCovers resolves generated video covers for the private
+// teacher workspace. The object key stays server-side; clients receive only a
+// short-lived signed URL, matching the public classroom cover behavior.
+func (s *Server) decorateTeacherContentCovers(ctx context.Context, items []teacher.ContentDraft) {
+	for i := range items {
+		s.decorateTeacherContentCover(ctx, &items[i])
+	}
+}
+
+func (s *Server) decorateTeacherContentCover(ctx context.Context, item *teacher.ContentDraft) {
+	if item == nil || strings.TrimSpace(item.CoverURL) != "" || item.MediaAssetID == nil || *item.MediaAssetID <= 0 || s.db == nil || s.classroomPlaybackSigner == nil {
+		return
+	}
+	var generatedKey string
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(cover_object_key,'') FROM classroom_media_assets WHERE id=$1`, *item.MediaAssetID).Scan(&generatedKey); err != nil {
+		return
+	}
+	_ = signTeacherGeneratedCover(ctx, item, generatedKey, s.classroomPlaybackSigner, s.classroomCoverTTL())
+}
+
+func signTeacherGeneratedCover(ctx context.Context, item *teacher.ContentDraft, objectKey string, signer storage.ObjectSigner, ttl time.Duration) error {
+	if item == nil || signer == nil || strings.TrimSpace(objectKey) == "" {
+		return nil
+	}
+	url, err := signer.PresignGetURL(ctx, strings.TrimSpace(objectKey), ttl)
+	if err != nil {
+		return err
+	}
+	item.CoverURL = url
+	return nil
 }
 
 func appUserID(r *http.Request) int64 { u, _ := appUserFromContext(r); return u.ID }

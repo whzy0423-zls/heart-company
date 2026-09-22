@@ -212,7 +212,7 @@ onMounted(load);
       <Input v-model:value="draftChapter" class="mb-3" placeholder="来源章节" />
       <div v-for="item in draftItems" :key="item.contentKey" class="mb-4">
         <div class="mb-1 text-sm text-gray-500">{{ item.contentKey }}</div>
-        <Input.TextArea v-model:value="item.text" :auto-size="{ minRows: 3, maxRows: 8 }" />
+        <Input.TextArea v-model:value="item.text" :auto-size="{ minRows: 3, maxRows: 8 }" placeholder="请输入该条人格内容" />
       </div>
       <template #footer><Button :loading="actionLoading" type="primary" @click="saveDraft">保存草稿</Button></template>
     </Drawer>

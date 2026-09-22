@@ -1,4 +1,4 @@
-import { API_BASE, DEFAULT_API_BASE } from '../config'
+import { API_BASE, DEFAULT_API_BASE } from '../config.js'
 
 const MAX_DECODE_PASSES = 6
 const REMOTE_ASSET_PREFIXES = [

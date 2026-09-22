@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -11,6 +12,20 @@ import (
 	"testing"
 	"time"
 )
+
+func TestPublicSourceMetadataIncludesBookToSkillFields(t *testing.T) {
+	raw := publicSourceMetadata([]byte(`{"overviewMarkdown":"概览","coreMarkdown":"核心","whenToUse":["场景"],"workflow":["步骤"],"topics":["主题"],"sourceContentHash":"secret"}`))
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["overviewMarkdown"] != "概览" || got["coreMarkdown"] != "核心" {
+		t.Fatalf("book-to-skill fields missing: %s", raw)
+	}
+	if _, ok := got["sourceContentHash"]; ok {
+		t.Fatal("private source hash leaked")
+	}
+}
 
 func TestPublicCatalogQueriesRequireEnabledAndPublishedRows(t *testing.T) {
 	store := NewStore(openCatalogBoundaryDB(t))

@@ -49,7 +49,7 @@ func TestMembershipMetadataForCardHonorsOverflowAndUpgradeStates(t *testing.T) {
 		Reason:            "超出额度",
 	}, true, "历史趋势")
 	if overflow.State != resourceAccessReadOnlyOverLimit || overflow.RequiredPlanLevel != "svip" || !overflow.UpgradeRequired || overflow.Reason != "超出额度" {
-		t.Fatalf("overflow card = %+v, want retained S VIP gate", overflow)
+		t.Fatalf("overflow card = %+v, want retained SVIP gate", overflow)
 	}
 
 	// A stale active row must not bypass a downgrade; conversely, an upgraded

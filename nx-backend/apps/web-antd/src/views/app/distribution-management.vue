@@ -611,6 +611,7 @@ onBeforeUnmount(() => {
             <DatePicker.RangePicker
               v-model:value="customDateRange"
               :allow-clear="false"
+              :placeholder="['开始日期', '结束日期']"
               @change="datePreset = 'custom'; loadAnalytics()"
             />
             <Button :loading="analyticsLoading" @click="loadAnalytics">刷新数据</Button>

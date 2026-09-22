@@ -118,8 +118,15 @@ export function disableSkillLibrarySkillApi(id: number) {
   return skillLifecycleApi(id, 'disable');
 }
 
+export function deleteSkillLibrarySkillApi(id: number) {
+  return requestClient.request<{ id: number; deleted: boolean }>(
+    `/skill-library-management/skills/${id}/delete`,
+    { method: 'DELETE' },
+  );
+}
+
 export function importSkillBookApi(input: { file: File; name: string; summary: string; categoryId: number }) {
-  return requestClient.upload<{ id: number; key: string; name: string; characters: number; status: string }>(
+  return requestClient.upload<{ id: number; key: string; name: string; characters: number; status: string; generated: string }>(
     '/skill-library-management/books/import',
     { ...input, categoryId: String(input.categoryId) },
     { timeout: 120_000 },

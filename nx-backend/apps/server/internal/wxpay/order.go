@@ -10,10 +10,45 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// QueryOrder queries the authoritative transaction state from WeChat Pay.
+func (c *Client) QueryOrder(ctx context.Context, outTradeNo string) (CallbackResult, error) {
+	outTradeNo = strings.TrimSpace(outTradeNo)
+	if outTradeNo == "" {
+		return CallbackResult{}, fmt.Errorf("wxpay query order requires out_trade_no")
+	}
+	if c.devMode {
+		return CallbackResult{OutTradeNo: outTradeNo, TradeState: "NOTPAY"}, nil
+	}
+	path := "/v3/pay/transactions/out-trade-no/" + url.PathEscape(outTradeNo) + "?mchid=" + url.QueryEscape(c.cfg.MchID)
+	var resp struct {
+		AppID         string `json:"appid"`
+		MchID         string `json:"mchid"`
+		OutTradeNo    string `json:"out_trade_no"`
+		TransactionID string `json:"transaction_id"`
+		TradeState    string `json:"trade_state"`
+		Amount        struct {
+			Total int `json:"total"`
+		} `json:"amount"`
+	}
+	if err := c.doSigned(ctx, "GET", path, nil, &resp); err != nil {
+		return CallbackResult{}, err
+	}
+	return CallbackResult{
+		AppID:         resp.AppID,
+		MchID:         resp.MchID,
+		AmountTotal:   resp.Amount.Total,
+		OutTradeNo:    resp.OutTradeNo,
+		TransactionID: resp.TransactionID,
+		TradeState:    resp.TradeState,
+		Success:       resp.TradeState == "SUCCESS",
+	}, nil
+}
 
 // CloseOrder closes an unpaid merchant order before a changed local snapshot
 // can be replaced. WeChat returns success only after the remote order is no

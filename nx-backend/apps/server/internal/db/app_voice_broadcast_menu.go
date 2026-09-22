@@ -9,11 +9,12 @@ import (
 )
 
 const (
-	voiceBroadcastMenuID       int64 = 1621
-	voiceBroadcastMenuPath           = "/app/voice-broadcast-config"
-	voiceBroadcastMenuName           = "AppVoiceBroadcastConfig"
-	voiceBroadcastAuthCode           = "App:VoiceBroadcast:Manage"
-	voiceBroadcastMigrationKey       = "seed.app_voice_broadcast_menu.v1"
+	voiceBroadcastMenuID        int64 = 1621
+	voiceBroadcastMenuPath            = "/app/voice-broadcast-config"
+	voiceBroadcastMenuComponent       = "/app/voice-broadcast"
+	voiceBroadcastMenuName            = "AppVoiceBroadcastConfig"
+	voiceBroadcastAuthCode            = "App:VoiceBroadcast:Manage"
+	voiceBroadcastMigrationKey        = "seed.app_voice_broadcast_menu.v1"
 )
 
 // seedVoiceBroadcastMenu mounts one and only one page below the deployed App
@@ -44,13 +45,13 @@ func seedVoiceBroadcastMenu(ctx context.Context, database *sql.DB) error {
 	err = tx.QueryRowContext(ctx, `SELECT id FROM menus WHERE path=$1 OR name=$2 ORDER BY CASE WHEN id=$3 THEN 0 ELSE 1 END,id LIMIT 1`, voiceBroadcastMenuPath, voiceBroadcastMenuName, voiceBroadcastMenuID).Scan(&menuID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		if err := tx.QueryRowContext(ctx, `INSERT INTO menus(id,pid,name,path,component,auth_code,type,status,sort,meta) VALUES($1,$2,$3,$4,$4,$5,'menu',1,18,$6::jsonb) RETURNING id`, voiceBroadcastMenuID, parentID, voiceBroadcastMenuName, voiceBroadcastMenuPath, voiceBroadcastAuthCode, string(meta)).Scan(&menuID); err != nil {
+		if err := tx.QueryRowContext(ctx, `INSERT INTO menus(id,pid,name,path,component,auth_code,type,status,sort,meta) VALUES($1,$2,$3,$4,$5,$6,'menu',1,18,$7::jsonb) RETURNING id`, voiceBroadcastMenuID, parentID, voiceBroadcastMenuName, voiceBroadcastMenuPath, voiceBroadcastMenuComponent, voiceBroadcastAuthCode, string(meta)).Scan(&menuID); err != nil {
 			return err
 		}
 	case err != nil:
 		return err
 	default:
-		if _, err := tx.ExecContext(ctx, `UPDATE menus SET pid=$2,name=$3,path=$4,component=$4,auth_code=$5,type='menu',status=1,sort=18,meta=$6::jsonb WHERE id=$1`, menuID, parentID, voiceBroadcastMenuName, voiceBroadcastMenuPath, voiceBroadcastAuthCode, string(meta)); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE menus SET pid=$2,name=$3,path=$4,component=$5,auth_code=$6,type='menu',status=1,sort=18,meta=$7::jsonb WHERE id=$1`, menuID, parentID, voiceBroadcastMenuName, voiceBroadcastMenuPath, voiceBroadcastMenuComponent, voiceBroadcastAuthCode, string(meta)); err != nil {
 			return err
 		}
 	}
@@ -68,10 +69,10 @@ func seedVoiceBroadcastMenu(ctx context.Context, database *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO role_menus(role_id,menu_id) SELECT DISTINCT rm.role_id,$1 FROM role_menus rm WHERE rm.menu_id=$2 ON CONFLICT(role_id,menu_id) DO NOTHING`, menuID, parentID); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO role_menus(role_id,menu_id) SELECT DISTINCT rm.role_id,$1::bigint FROM role_menus rm WHERE rm.menu_id=$2::bigint ON CONFLICT(role_id,menu_id) DO NOTHING`, menuID, parentID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO role_menus(role_id,menu_id) SELECT role.id,$1 FROM roles role WHERE role.code='admin' ON CONFLICT(role_id,menu_id) DO NOTHING`, menuID); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO role_menus(role_id,menu_id) SELECT role.id,$1::bigint FROM roles role WHERE role.code='admin' ON CONFLICT(role_id,menu_id) DO NOTHING`, menuID); err != nil {
 		return err
 	}
 	return tx.Commit()

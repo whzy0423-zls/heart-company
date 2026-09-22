@@ -35,6 +35,13 @@ func TestExtractBookText(t *testing.T) {
 	}
 }
 
+func TestNormalizeBookDistillationProvidesMobileFields(t *testing.T) {
+	got := normalizeBookDistillation(nil, "测试书", "第一段内容足够长用于提炼核心框架和方法。\n第二段内容说明适用场景和行动步骤。")
+	if got.OverviewMarkdown == "" || got.CoreMarkdown == "" || len(got.WhenToUse) < 3 || len(got.Workflow) < 3 {
+		t.Fatalf("distillation missing mobile fields: %+v", got)
+	}
+}
+
 func TestExtractBookEPUBSpineOrder(t *testing.T) {
 	var buffer bytes.Buffer
 	writer := zip.NewWriter(&buffer)

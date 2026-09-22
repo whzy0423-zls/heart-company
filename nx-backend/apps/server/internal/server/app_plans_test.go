@@ -9,23 +9,25 @@ func TestAppPlanLookupPreservesCanonicalSvip(t *testing.T) {
 	var server Server
 	plan := server.appPlan(context.Background(), "svip")
 	if plan.Code != "svip" || plan.PlanLevel != "svip" || plan.CardLimit != 10 {
-		t.Fatalf("appPlan(svip) = %+v, want canonical disabled S VIP plan", plan)
+		t.Fatalf("appPlan(svip) = %+v, want canonical disabled SVIP plan", plan)
 	}
 }
 
 func TestDefaultAppPlansCommercialPolicy(t *testing.T) {
 	plans := defaultAppPlans()
-	if len(plans) != 5 {
-		t.Fatalf("len(defaultAppPlans()) = %d, want 5", len(plans))
+	if len(plans) != 7 {
+		t.Fatalf("len(defaultAppPlans()) = %d, want 7", len(plans))
 	}
 	wants := map[string]struct {
 		price, chat, stories, cards int
 	}{
-		"free":        {0, 5, 1, 1},
-		"vip_month":   {2900, -1, 3, 3},
-		"vip_quarter": {7900, -1, 5, 3},
-		"vip_year":    {19900, -1, 12, 3},
-		"svip":        {0, -1, 12, 10},
+		"free":         {0, 5, 1, 1},
+		"vip_month":    {2900, -1, 3, 3},
+		"vip_quarter":  {7900, -1, 3, 3},
+		"vip_year":     {19900, -1, 3, 3},
+		"svip_month":   {5900, -1, 12, 10},
+		"svip_quarter": {15900, -1, 12, 10},
+		"svip_year":    {49900, -1, 12, 10},
 	}
 	for _, plan := range plans {
 		want, ok := wants[plan.Code]
@@ -44,7 +46,7 @@ func TestDefaultSvipPlanIsVisibleButRequiresAdminPricingBeforeActivation(t *test
 		t.Fatalf("defaultAppPlan(svip) = %+v", plan)
 	}
 	if plan.Enabled {
-		t.Fatal("unpriced S VIP fallback must not be purchasable")
+		t.Fatal("unpriced SVIP fallback must not be purchasable")
 	}
 }
 

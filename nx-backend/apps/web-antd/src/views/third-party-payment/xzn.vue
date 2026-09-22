@@ -304,19 +304,20 @@ async function createOrder() {
         <Form class="order-form" layout="vertical"
           ><div class="form-grid">
             <Form.Item label="商户订单号"
-              ><Input v-model:value="form.outTradeNo"
+              ><Input v-model:value="form.outTradeNo" placeholder="请输入商户订单号"
             /></Form.Item>
             <Form.Item label="金额（元）"
-              ><Input v-model:value="form.totalAmount"
+              ><Input v-model:value="form.totalAmount" placeholder="请输入订单金额"
             /></Form.Item>
             <Form.Item label="支付通道"
               ><Select
                 v-model:value="form.channelID"
                 :options="gatewayOptions"
+                placeholder="请选择支付通道"
                 @change="selectGateway"
             /></Form.Item>
             <Form.Item label="订单标题"
-              ><Input v-model:value="form.subject"
+              ><Input v-model:value="form.subject" placeholder="请输入订单标题"
             /></Form.Item>
           </div>
           <Button type="primary" :loading="loading" @click="createOrder"

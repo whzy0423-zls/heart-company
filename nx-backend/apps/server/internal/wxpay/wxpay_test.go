@@ -119,6 +119,38 @@ func TestCloseOrderCallsWeChatMerchantOrderEndpoint(t *testing.T) {
 	}
 }
 
+func TestQueryOrderCallsWeChatMerchantOrderEndpoint(t *testing.T) {
+	var gotPath, gotMchID string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMchID = r.URL.Query().Get("mchid")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"appid":          "wx-app",
+			"mchid":          "merchant",
+			"out_trade_no":   "wx-order-1",
+			"transaction_id": "4200001",
+			"trade_state":    "SUCCESS",
+			"amount":         map[string]any{"total": 10},
+		})
+	}))
+	defer upstream.Close()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{cfg: Config{MchID: "merchant", SerialNo: "serial"}, privateKey: key, http: upstream.Client(), baseURL: upstream.URL}
+	result, err := client.QueryOrder(context.Background(), "wx-order-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v3/pay/transactions/out-trade-no/wx-order-1" || gotMchID != "merchant" {
+		t.Fatalf("unexpected query request path=%q mchid=%q", gotPath, gotMchID)
+	}
+	if !result.Success || result.TradeState != "SUCCESS" || result.TransactionID != "4200001" || result.AmountTotal != 10 {
+		t.Fatalf("unexpected query result: %+v", result)
+	}
+}
+
 func TestCloseOrderTreatsAlreadyClosedAsIdempotentButSurfacesPaidRace(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

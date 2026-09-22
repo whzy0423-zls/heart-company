@@ -14,29 +14,35 @@ assert.match(
 
 assert.match(
   learnSource,
-  /<view\s+v-for="quote in quotes"\s+:key="quote"\s+class="quote-editorial">/,
-  '学习页需要使用批准的 quote-editorial 语录容器',
+  /const\s+quoteEntries\s*=\s*computed\(\(\)\s*=>\s*createLearningQuoteEntries\(quotes\.value\)\)/,
+  '学习页需要为重复语录生成稳定唯一键',
 )
 
 assert.match(
   learnSource,
-  /<text\s+class="quote-editorial__mark"\s+aria-hidden="true">“<\/text>/,
+  /<article\s+v-for="quoteEntry in quoteEntries"\s+:key="quoteEntry\.key"\s+class="quote-card">/,
+  '学习页需要使用统一的 quote-card 语录容器',
+)
+
+assert.match(
+  learnSource,
+  /<text\s+class="quote-card__mark"\s+aria-hidden="true">”<\/text>/,
   '学习页语录需要展示不重复朗读的编辑式引号标识',
 )
 
 assert.match(
   learnSource,
-  /<text\s+class="quote-editorial__text">\{\{ quote \}\}<\/text>/,
+  /<text\s+class="quote-card__text">\{\{ quoteEntry\.text \}\}<\/text>/,
   '学习页语录正文需要原样渲染配置文本，不能额外拼接引号',
 )
 
 assert.match(
   learnSource,
-  /\.quote-editorial\s*\{[^}]*background:\s*var\(--nx-surface-soft\)/s,
-  '编辑式语录需要使用统一的暖白阅读底色',
+  /\.learning-panel\s*\{[^}]*background:\s*var\(--nx-surface\)/s,
+  '语录面板需要使用统一的阅读表面色',
 )
 
-assert.match(learnSource, /老师课堂/, '学习页需要把课堂入口作为页面主标题')
+assert.match(learnSource, /class="learn-header__title">学习中心<\/text>/, '学习页需要显示当前学习中心标题')
 assert.doesNotMatch(
   learnSource,
   /#4338ca|#4f46e5|#7c3aed|#f59e0b/i,

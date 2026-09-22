@@ -9,9 +9,12 @@ import {
 
 describe('app membership helpers', () => {
   it('labels exact membership plans', () => {
-    expect(memberPlanLabel('vip_month')).toBe('月包会员');
-    expect(memberPlanLabel('vip_quarter')).toBe('季包会员');
-    expect(memberPlanLabel('vip_year')).toBe('年包会员');
+    expect(memberPlanLabel('vip_month')).toBe('VIP 月卡');
+    expect(memberPlanLabel('vip_quarter')).toBe('VIP 季卡');
+    expect(memberPlanLabel('vip_year')).toBe('VIP 年卡');
+    expect(memberPlanLabel('svip_month')).toBe('SVIP 月卡');
+    expect(memberPlanLabel('svip_quarter')).toBe('SVIP 季卡');
+    expect(memberPlanLabel('svip_year')).toBe('SVIP 年卡');
     expect(memberPlanLabel('free')).toBe('普通用户');
   });
 

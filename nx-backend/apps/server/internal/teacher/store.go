@@ -189,9 +189,9 @@ func (s *Store) CreateContent(ctx context.Context, item ContentDraft, creatorID 
 	if item.FeedType == "daily" {
 		item.ShowAsStandalone = true
 	}
-	row := s.db.QueryRowContext(ctx, `INSERT INTO classroom_contents(series_id,show_as_standalone,title,description,content_type,cover_url,teacher_key,feed_type,status,review_status,created_by,updated_by)
-		VALUES($1,$2,$3,$4,'video',$5,$6,$7,'draft','draft',$8,$8)
-		RETURNING id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at`, item.SeriesID, item.ShowAsStandalone, strings.TrimSpace(item.Title), item.Description, item.CoverURL, item.TeacherKey, item.FeedType, creatorID)
+	row := s.db.QueryRowContext(ctx, `INSERT INTO classroom_contents(series_id,show_as_standalone,title,description,content_type,cover_url,teacher_key,feed_type,status,review_status,access_level,created_by,updated_by)
+		VALUES($1,$2,$3,$4,'video',$5,$6,$7,'draft','draft','public',$8,$8)
+		RETURNING `+contentDraftColumns, item.SeriesID, item.ShowAsStandalone, strings.TrimSpace(item.Title), item.Description, item.CoverURL, item.TeacherKey, item.FeedType, creatorID)
 	created, err := scanContentDraft(row)
 	if err != nil {
 		return ContentDraft{}, err
@@ -203,7 +203,7 @@ func (s *Store) CreateContent(ctx context.Context, item ContentDraft, creatorID 
 }
 
 func (s *Store) GetContent(ctx context.Context, id int64) (ContentDraft, error) {
-	item, err := scanContentDraft(s.db.QueryRowContext(ctx, `SELECT id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at FROM classroom_contents WHERE id=$1`, id))
+	item, err := scanContentDraft(s.db.QueryRowContext(ctx, `SELECT `+contentDraftColumns+` FROM classroom_contents WHERE id=$1`, id))
 	if err == nil {
 		_ = s.hydrateEngagement(ctx, &item)
 	}
@@ -220,7 +220,7 @@ func (s *Store) UpdateContent(ctx context.Context, item ContentDraft, key string
 	if item.FeedType != "course" && item.FeedType != "daily" {
 		return ContentDraft{}, errors.New("invalid feed type")
 	}
-	_, err := scanContentDraft(s.db.QueryRowContext(ctx, `UPDATE classroom_contents SET title=$1,description=$2,cover_url=$3,feed_type=$4,show_as_standalone=$5,review_status='draft',review_reason='',updated_at=now() WHERE id=$6 AND teacher_key=$7 AND review_status IN ('draft','rejected') RETURNING id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at`, strings.TrimSpace(item.Title), item.Description, item.CoverURL, item.FeedType, item.ShowAsStandalone, item.ID, strings.TrimSpace(key)))
+	_, err := scanContentDraft(s.db.QueryRowContext(ctx, `UPDATE classroom_contents SET title=$1,description=$2,cover_url=$3,feed_type=$4,show_as_standalone=$5,review_status='draft',review_reason='',updated_at=now() WHERE id=$6 AND teacher_key=$7 AND review_status IN ('draft','rejected') RETURNING `+contentDraftColumns, strings.TrimSpace(item.Title), item.Description, item.CoverURL, item.FeedType, item.ShowAsStandalone, item.ID, strings.TrimSpace(key)))
 	if err != nil {
 		return ContentDraft{}, err
 	}
@@ -298,7 +298,7 @@ func (s *Store) ListContent(ctx context.Context, key string, state ReviewState, 
 		args = append(args, feedType)
 		clauses = append(clauses, fmt.Sprintf("feed_type=$%d", len(args)))
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at FROM classroom_contents WHERE `+strings.Join(clauses, " AND ")+" ORDER BY created_at DESC,id DESC", args...)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+contentDraftColumns+` FROM classroom_contents WHERE `+strings.Join(clauses, " AND ")+" ORDER BY created_at DESC,id DESC", args...)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +320,7 @@ func (s *Store) ListContent(ctx context.Context, key string, state ReviewState, 
 // both the classroom publication state and the teacher review state must be
 // published.
 func (s *Store) ListPublishedVideos(ctx context.Context, key string) ([]ContentDraft, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at FROM classroom_contents WHERE teacher_key=$1 AND feed_type IN ('course','daily') AND review_status='published' AND status='published' ORDER BY COALESCE(published_at,created_at) DESC,id DESC`, strings.TrimSpace(key))
+	rows, err := s.db.QueryContext(ctx, `SELECT `+contentDraftColumns+` FROM classroom_contents WHERE teacher_key=$1 AND feed_type IN ('course','daily') AND review_status='published' AND status='published' ORDER BY COALESCE(published_at,created_at) DESC,id DESC`, strings.TrimSpace(key))
 	if err != nil {
 		return nil, err
 	}
@@ -338,7 +338,10 @@ func (s *Store) ListPublishedVideos(ctx context.Context, key string) ([]ContentD
 }
 
 func (s *Store) SubmitContent(ctx context.Context, id int64, key string) (ContentDraft, error) {
-	row := s.db.QueryRowContext(ctx, `UPDATE classroom_contents SET review_status='pending_review',review_reason='',updated_at=now() WHERE id=$1 AND teacher_key=$2 AND review_status IN ('draft','rejected') RETURNING id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at`, id, strings.TrimSpace(key))
+	// A review request is meaningful only after the media pipeline has produced
+	// a ready asset. Keeping this invariant in the store prevents clients from
+	// bypassing the workspace button and submitting an empty draft directly.
+	row := s.db.QueryRowContext(ctx, `UPDATE classroom_contents SET review_status='pending_review',review_reason='',updated_at=now() WHERE id=$1 AND teacher_key=$2 AND review_status IN ('draft','rejected') AND status='ready' AND media_asset_id IS NOT NULL AND EXISTS (SELECT 1 FROM classroom_media_assets WHERE id=classroom_contents.media_asset_id AND storage_status='ready') RETURNING `+contentDraftColumns, id, strings.TrimSpace(key))
 	item, err := scanContentDraft(row)
 	if err != nil {
 		return ContentDraft{}, err
@@ -363,7 +366,7 @@ func (s *Store) ReviewContent(ctx context.Context, id int64, state ReviewState, 
 	if state == ReviewOffline {
 		status = "offline"
 	}
-	row := s.db.QueryRowContext(ctx, `UPDATE classroom_contents SET review_status=$1,review_reason=$2,status=$3,reviewed_by=$4,reviewed_at=now(),published_at=CASE WHEN $1='published' THEN COALESCE(published_at,now()) ELSE published_at END,updated_at=now() WHERE id=$5 RETURNING id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at`, state, strings.TrimSpace(reason), status, actorID, id)
+	row := s.db.QueryRowContext(ctx, `UPDATE classroom_contents SET review_status=$1,review_reason=$2,status=$3,reviewed_by=$4,reviewed_at=now(),published_at=CASE WHEN $1='published' THEN COALESCE(published_at,now()) ELSE published_at END,updated_at=now() WHERE id=$5 AND ($1 <> 'published' OR (status='ready' AND media_asset_id IS NOT NULL AND EXISTS (SELECT 1 FROM classroom_media_assets WHERE id=classroom_contents.media_asset_id AND storage_status='ready'))) RETURNING `+contentDraftColumns, state, strings.TrimSpace(reason), status, actorID, id)
 	item, err := scanContentDraft(row)
 	if err != nil {
 		return ContentDraft{}, err
@@ -379,6 +382,8 @@ type scanner interface{ Scan(...any) error }
 
 const teacherColumns = `id,teacher_key,name,title,avatar,cover,short_intro,detail_intro,expertise,intro_video_url,customer_service,offline_service,show_on_home,show_in_drawer,sort_order,enabled,created_at,updated_at`
 const teacherSelect = `SELECT ` + teacherColumns + ` FROM teacher_profiles`
+
+const contentDraftColumns = `id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at,status,media_asset_id,duration_seconds,cover_url,content_type,COALESCE((SELECT storage_status FROM classroom_media_assets WHERE id=classroom_contents.media_asset_id),'')`
 
 func scanTeacher(row scanner) (Teacher, error) {
 	var t Teacher
@@ -404,7 +409,7 @@ func scanTeacher(row scanner) (Teacher, error) {
 
 func scanContentDraft(row scanner) (ContentDraft, error) {
 	var item ContentDraft
-	err := row.Scan(&item.ID, &item.SeriesID, &item.ShowAsStandalone, &item.Title, &item.Description, &item.TeacherKey, &item.FeedType, &item.ReviewStatus, &item.ReviewReason, &item.ReplacesContentID, &item.PublishedAt, &item.CreatedAt, &item.UpdatedAt)
+	err := row.Scan(&item.ID, &item.SeriesID, &item.ShowAsStandalone, &item.Title, &item.Description, &item.TeacherKey, &item.FeedType, &item.ReviewStatus, &item.ReviewReason, &item.ReplacesContentID, &item.PublishedAt, &item.CreatedAt, &item.UpdatedAt, &item.Status, &item.MediaAssetID, &item.DurationSeconds, &item.CoverURL, &item.ContentType, &item.MediaStatus)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ContentDraft{}, sql.ErrNoRows
 	}

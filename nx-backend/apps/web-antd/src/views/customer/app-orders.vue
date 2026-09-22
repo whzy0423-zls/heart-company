@@ -90,6 +90,9 @@ const productOptions = [
   { label: '月卡会员', value: 'vip_month' },
   { label: '季卡会员', value: 'vip_quarter' },
   { label: '年卡会员', value: 'vip_year' },
+  { label: 'SVIP 月卡', value: 'svip_month' },
+  { label: 'SVIP 季卡', value: 'svip_quarter' },
+  { label: 'SVIP 年卡', value: 'svip_year' },
 ];
 
 const columns = [

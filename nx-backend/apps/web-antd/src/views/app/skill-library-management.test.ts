@@ -13,6 +13,12 @@ describe('growth skill library management contract', () => {
     expect(routes).toContain("authority: ['App:SkillLibrary:View']");
   });
 
+  it('keeps the legacy books route as an alias for the skill library page', () => {
+    const routes = readFileSync(resolve(here, '../../router/routes/modules/app.ts'), 'utf8');
+    expect(routes).toContain("path: 'skill-library'");
+    expect(routes).toContain("alias: 'books'");
+  });
+
   it('edits library, category and skill metadata without changing stable keys', () => {
     const source = readFileSync(resolve(here, 'skill-library-management.vue'), 'utf8');
     for (const expected of [

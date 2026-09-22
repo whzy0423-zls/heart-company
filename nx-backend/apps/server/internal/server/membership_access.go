@@ -493,7 +493,7 @@ func (s *Server) ensureCardWritable(ctx context.Context, appUserID, cardID int64
 		return fmt.Errorf("card ownership lookup: %w", primaryErr)
 	}
 	// Reconcile before reading an existing row. A ledger row written while a
-	// user was on S VIP can otherwise remain `active` after expiry/downgrade,
+	// user was on SVIP can otherwise remain `active` after expiry/downgrade,
 	// allowing a mutation to bypass the current plan until another list or
 	// entitlement request happens to refresh it.
 	if plan, planErr := s.currentAppMembershipPlanWithError(ctx, appUserID); planErr == nil {

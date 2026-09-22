@@ -49,6 +49,7 @@ const routes: RouteRecordRaw[] = [
         },
         name: 'AppSkillLibrary',
         path: 'skill-library',
+        alias: 'books',
       },
       {
         component: () => import('#/views/app/story-management.vue'),

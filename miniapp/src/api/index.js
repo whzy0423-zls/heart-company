@@ -138,6 +138,15 @@ export function createReportOrderApi(testRecordId) {
   });
 }
 
+// 固定 0.10 元的真实微信支付联调订单；金额由后端固定，客户端不传金额。
+export function createWechatPayTestOrderApi() {
+  return request({
+    url: "/miniapp/wechat-pay-test/order",
+    method: "POST",
+    auth: true,
+  });
+}
+
 // 深度报告：解锁后获取正文（LLM 生成，耗时较长）
 export function reportContentApi(testRecordId) {
   return request({

@@ -19,6 +19,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/llm"
+	"nine-xing/nx-backend/apps/server/internal/miniapp"
 	"nine-xing/nx-backend/apps/server/internal/modelconfig"
 	"nine-xing/nx-backend/apps/server/internal/storage"
 	"nine-xing/nx-backend/apps/server/internal/uploadasset"
@@ -227,6 +228,50 @@ func TestValidateWxPayCallbackRejectsMismatchedOrderData(t *testing.T) {
 				t.Fatalf("expected %s validation error, got %v", tc.want, err)
 			}
 		})
+	}
+}
+
+func TestValidateWxPayCallbackAcceptsWechatPayTestOrder(t *testing.T) {
+	env := config.Env{WxPay: config.WxPayConfig{MchID: "merchant", AppID: "miniapp"}}
+	err := validateWxPayCallbackAgainstOrder(env, wxpay.CallbackResult{
+		OutTradeNo:  "wxtest-1",
+		MchID:       "merchant",
+		AppID:       "miniapp",
+		AmountTotal: 10,
+	}, paymentOrderSnapshot{Amount: 10, Product: miniapp.ProductWechatPayTest})
+	if err != nil {
+		t.Fatalf("wechat payment test order should pass callback validation: %v", err)
+	}
+}
+
+func TestGenerateWechatPayTestOutTradeNoUsesWechatCompatibleLength(t *testing.T) {
+	orderNo, err := generateWechatPayTestOutTradeNo(123456789)
+	if err != nil {
+		t.Fatalf("generate order number: %v", err)
+	}
+	if len(orderNo) > 32 || orderNo == "" {
+		t.Fatalf("order number length = %d, value = %q", len(orderNo), orderNo)
+	}
+	for _, r := range orderNo {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'z')) {
+			t.Fatalf("order number contains unsupported character %q: %q", r, orderNo)
+		}
+	}
+}
+
+func TestMiniappOrderReconcileAction(t *testing.T) {
+	tests := map[string]string{
+		"SUCCESS":    "paid",
+		"NOTPAY":     "",
+		"USERPAYING": "",
+		"CLOSED":     "closed",
+		"REVOKED":    "closed",
+		"PAYERROR":   "closed",
+	}
+	for state, want := range tests {
+		if got := miniappOrderReconcileAction(state); got != want {
+			t.Fatalf("state %s action=%q want=%q", state, got, want)
+		}
 	}
 }
 

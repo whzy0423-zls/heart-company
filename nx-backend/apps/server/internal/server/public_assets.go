@@ -364,6 +364,7 @@ func referencedUploadAssetID(raw string) (int64, bool) {
 	for _, prefix := range []string{
 		"/api/public/admin-branding-assets/",
 		"/api/public/article-assets/",
+		"/api/app/distribution/poster-assets/",
 		"/api/public/site-assets/",
 		"/api/public/teacher-assets/",
 	} {
@@ -387,6 +388,7 @@ func referencedLocalUploadRelativePath(raw string) (string, bool) {
 	for _, prefix := range []string{
 		"/api/public/admin-branding-uploads/",
 		"/api/public/article-uploads/",
+		"/api/app/distribution/poster-uploads/",
 		"/api/public/site-uploads/",
 		"/api/public/teacher-uploads/",
 	} {

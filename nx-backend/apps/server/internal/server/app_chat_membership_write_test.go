@@ -116,7 +116,7 @@ type voiceMembershipGateConn struct{}
 
 func (voiceMembershipGateConn) Prepare(string) (driver.Stmt, error) { return nil, driver.ErrSkip }
 func (voiceMembershipGateConn) Close() error                        { return nil }
-func (voiceMembershipGateConn) Begin() (driver.Tx, error)            { return voiceMembershipGateTx{}, nil }
+func (voiceMembershipGateConn) Begin() (driver.Tx, error)           { return voiceMembershipGateTx{}, nil }
 
 func (voiceMembershipGateConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
 	switch {

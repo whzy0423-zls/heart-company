@@ -8,16 +8,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const homeSource = readFileSync(resolve(__dirname, './Home.jsx'), 'utf8')
 const siteConfig = JSON.parse(readFileSync(resolve(__dirname, '../../../shared/site-config.json'), 'utf8'))
 
-test('places the App download section immediately after Hero and before the teacher teaser', () => {
-  assert.match(homeSource, /import AppDownloadSection from '\.\.\/components\/AppDownloadSection'/)
-  assert.match(
-    homeSource,
-    /<\/section>\s*<AppDownloadSection\s+showDetailsLink\s*\/>\s*\{\/\* 老师简介 teaser \*\/}/,
-  )
-  assert.ok(
-    homeSource.indexOf('<AppDownloadSection showDetailsLink />') < homeSource.indexOf('home.teacherTeaser'),
-    'App 下载区需要位于老师简介之前',
-  )
+test('keeps App download content off the homepage', () => {
+  assert.doesNotMatch(homeSource, /import AppDownloadSection from '\.\.\/components\/AppDownloadSection'/)
+  assert.doesNotMatch(homeSource, /<AppDownloadSection\b/)
 })
 
 test('adds App download entry points to both navigation menus and Hero', () => {
@@ -35,7 +28,7 @@ test('adds App download entry points to both navigation menus and Hero', () => {
     && action.type === 'route'
   )))
 
-  assert.match(homeSource, /<AppDownloadSection\s+showDetailsLink\s*\/>/)
+  assert.doesNotMatch(homeSource, /<AppDownloadSection\b/)
 })
 
 test('defines complete editable App download copy without release metadata', () => {

@@ -94,8 +94,8 @@ test('shows the complete App conversation without cropping its top or bottom', (
 })
 
 test('bundles the supplied installation video with an accessible poster and captions', () => {
-  const video = resolve(__dirname, '../../public/assets/app/install-guide.mp4')
-  const poster = resolve(__dirname, '../../public/assets/app/install-guide-poster.webp')
+  const video = resolve(__dirname, '../../public/assets/app/install-guide-strict-redacted.mp4')
+  const poster = resolve(__dirname, '../../public/assets/app/install-guide-poster-strict-redacted.webp')
   const captions = resolve(__dirname, '../../public/assets/app/install-guide.zh-CN.vtt')
 
   assert.ok(existsSync(video), '安装视频需要随官网静态资源发布')
@@ -103,6 +103,8 @@ test('bundles the supplied installation video with an accessible poster and capt
   assert.ok(existsSync(captions), '安装视频需要提供简体中文字幕轨道')
   assert.ok(statSync(video).size > 1024 * 1024, '安装视频文件大小异常，请确认已复制完整视频')
   assert.ok(statSync(poster).size > 1024, '安装视频海报文件大小异常')
+  assert.match(contentSource, /src:\s*'\/assets\/app\/install-guide-strict-redacted\.mp4'/)
+  assert.match(contentSource, /poster:\s*'\/assets\/app\/install-guide-poster-strict-redacted\.webp'/)
   assert.match(readFileSync(captions, 'utf8'), /^WEBVTT[\s\S]*00:00\.000[\s\S]*03:31\.000/)
   assert.match(pageSource, /<video[\s\S]*controls[\s\S]*playsInline[\s\S]*preload="metadata"[\s\S]*poster=\{APP_INSTALL_VIDEO\.poster\}/)
   assert.match(pageSource, /<track[\s\S]*kind="captions"[\s\S]*srcLang="zh-CN"[\s\S]*default/)

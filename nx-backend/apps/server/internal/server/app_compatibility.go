@@ -425,7 +425,7 @@ func (s *Server) compatibilityReportAccess(ctx context.Context, appUserID, cardA
 
 // compatibilityRequiredPlanLevel preserves the entitlement level recorded for
 // the source card. Older rows may be incomplete; a locked row with no usable
-// level fails closed at S VIP rather than silently exposing the report.
+// level fails closed at SVIP rather than silently exposing the report.
 func compatibilityRequiredPlanLevel(state resourceAccessState) string {
 	required := normalizeMembershipLevel(state.RequiredPlanLevel)
 	if required == "free" && (state.State == resourceAccessReadOnlyOverLimit || state.State == resourceAccessLockedUpgrade) {

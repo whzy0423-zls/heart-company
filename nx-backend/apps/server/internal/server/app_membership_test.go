@@ -20,6 +20,9 @@ func TestCalculateMembershipPeriod(t *testing.T) {
 		{name: "month starts at activation", plan: "vip_month", wantStart: activation, wantExpiry: activation.AddDate(0, 0, 30)},
 		{name: "quarter lasts ninety days", plan: "vip_quarter", wantStart: activation, wantExpiry: activation.AddDate(0, 0, 90)},
 		{name: "year lasts three hundred sixty five days", plan: "vip_year", wantStart: activation, wantExpiry: activation.AddDate(0, 0, 365)},
+		{name: "svip month uses monthly duration", plan: "svip_month", wantStart: activation, wantExpiry: activation.AddDate(0, 0, 30)},
+		{name: "svip quarter uses quarterly duration", plan: "svip_quarter", wantStart: activation, wantExpiry: activation.AddDate(0, 0, 90)},
+		{name: "svip year uses annual duration", plan: "svip_year", wantStart: activation, wantExpiry: activation.AddDate(0, 0, 365)},
 		{name: "active membership renews from current expiry", plan: "vip_month", currentExpiry: &activeExpiry, wantStart: activation, wantExpiry: activeExpiry.AddDate(0, 0, 30)},
 		{name: "expired membership restarts at activation", plan: "vip_month", currentExpiry: timePtr(activation.Add(-time.Hour)), wantStart: activation, wantExpiry: activation.AddDate(0, 0, 30)},
 		{name: "invalid plan", plan: "deep_report", wantErr: true},
@@ -52,10 +55,13 @@ func TestAppMembershipBenefitsByPlan(t *testing.T) {
 		wantStoryLimit int
 	}{
 		{plan: "free", wantName: "免费版", wantCards: 1, wantStoryLimit: 1},
-		{plan: "vip_month", wantName: "月卡会员", wantCards: 3, wantStoryLimit: 3},
-		{plan: "vip_quarter", wantName: "季卡会员", wantCards: 3, wantStoryLimit: 5},
-		{plan: "vip_year", wantName: "年卡会员", wantCards: 3, wantStoryLimit: 12},
-		{plan: "svip", wantName: "S VIP", wantCards: 10, wantStoryLimit: 12},
+		{plan: "vip_month", wantName: "VIP 月卡", wantCards: 3, wantStoryLimit: 3},
+		{plan: "vip_quarter", wantName: "VIP 季卡", wantCards: 3, wantStoryLimit: 3},
+		{plan: "vip_year", wantName: "VIP 年卡", wantCards: 3, wantStoryLimit: 3},
+		{plan: "svip_month", wantName: "SVIP 月卡", wantCards: 10, wantStoryLimit: 12},
+		{plan: "svip_quarter", wantName: "SVIP 季卡", wantCards: 10, wantStoryLimit: 12},
+		{plan: "svip_year", wantName: "SVIP 年卡", wantCards: 10, wantStoryLimit: 12},
+		{plan: "svip", wantName: "SVIP", wantCards: 10, wantStoryLimit: 12},
 	}
 
 	for _, tc := range tests {

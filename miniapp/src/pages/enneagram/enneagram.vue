@@ -25,7 +25,7 @@ function openType(id) {
       </view>
       <view class="type-grid">
         <button v-for="type in types" :key="type.id" class="type-card" :class="`type-card--${type.color}`" hover-class="type-card--pressed" @click="openType(type.id)">
-          <image class="type-card__image" :src="`/static/enneagram/${type.id}.webp`" mode="aspectFill" lazy-load />
+          <image class="type-card__image" :src="`/static/enneagram/${type.id}.png`" mode="aspectFill" lazy-load />
           <view class="type-card__body">
             <text class="type-card__number">0{{ type.id }}</text>
             <text class="type-card__name">{{ type.name }}</text>

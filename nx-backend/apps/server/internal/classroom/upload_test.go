@@ -370,6 +370,22 @@ func TestClassroomUploadInitiateGeneratesPrivateObjectKeyAndBindsDraft(t *testin
 	}
 }
 
+func TestClassroomUploadAuthorizeTaskBindsCreatorAndContent(t *testing.T) {
+
+	repo := &fakeUploadRepo{task: UploadTask{ID: 9, ContentID: 7, CreatorID: 42}}
+	svc := newUploadService(repo, &fakeMultipartStorage{}, time.Now())
+
+	if err := svc.AuthorizeTask(context.Background(), 9, 42, 7); err != nil {
+		t.Fatalf("expected matching task to be authorized: %v", err)
+	}
+	if err := svc.AuthorizeTask(context.Background(), 9, 42, 8); !errors.Is(err, ErrUploadOwnership) {
+		t.Fatalf("content mismatch error=%v", err)
+	}
+	if err := svc.AuthorizeTask(context.Background(), 9, 99, 7); !errors.Is(err, ErrUploadOwnership) {
+		t.Fatalf("creator mismatch error=%v", err)
+	}
+}
+
 func TestClassroomUploadConcurrentInitiateReservesBeforeOSS(t *testing.T) {
 	now := time.Now()
 	repo := &fakeUploadRepo{content: Content{ID: 7, Title: "lesson", ContentType: ContentVideo, Status: ContentDraft, AccessLevel: AccessPublic}}

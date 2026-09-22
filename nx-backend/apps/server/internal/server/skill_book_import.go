@@ -1,14 +1,41 @@
 package server
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/skillcatalog"
 )
+
+func (s *Server) distillImportedBook(r *http.Request, name, text string) (*skillcatalog.BookDistillation, error) {
+	// Keep the prompt bounded; the complete book remains available to RAG.
+	const maxPromptRunes = 24000
+	sample := text
+	if utf8.RuneCountInString(sample) > maxPromptRunes {
+		runes := []rune(sample)
+		sample = string(runes[:maxPromptRunes])
+	}
+	system := "你是 book-to-skill 蒸馏器。只输出 JSON，不要 Markdown 代码围栏。字段必须是 overviewMarkdown(string)、coreMarkdown(string)、whenToUse(array of 3-6 strings)、workflow(array of 3-6 strings)、topics(array of 3-8 strings)。只能依据给定书籍正文归纳，不编造作者没有表达的结论。"
+	user := fmt.Sprintf("书名：%s\n请把以下正文提炼成可在手机端展示和执行的技能摘要：\n%s", name, sample)
+	content, err := s.completePreferenceJSON(r.Context(), system, user, 1200)
+	if err != nil {
+		return nil, fmt.Errorf("当前 AI 生成失败: %w", err)
+	}
+	var value skillcatalog.BookDistillation
+	if err := json.Unmarshal([]byte(content), &value); err != nil {
+		return nil, fmt.Errorf("当前 AI 返回的技能结构无效: %w", err)
+	}
+	if strings.TrimSpace(value.OverviewMarkdown) == "" || strings.TrimSpace(value.CoreMarkdown) == "" || len(value.WhenToUse) < 3 || len(value.Workflow) < 3 {
+		return nil, fmt.Errorf("当前 AI 返回的技能缺少核心框架、适用场景或默认工作流")
+	}
+	return &value, nil
+}
 
 func (s *Server) importSkillBook(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -49,7 +76,12 @@ func (s *Server) importSkillBook(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	result, err := skillcatalog.ImportBook(r.Context(), s.db, skillcatalog.BookImportInput{Name: name, Summary: r.FormValue("summary"), CategoryID: categoryID, Filename: header.Filename, Text: content})
+	distillation, err := s.distillImportedBook(r, name, content)
+	if err != nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	result, err := skillcatalog.ImportBook(r.Context(), s.db, skillcatalog.BookImportInput{Name: name, Summary: r.FormValue("summary"), CategoryID: categoryID, Filename: header.Filename, Text: content, Distillation: distillation})
 	if err != nil {
 		httpx.Fail(w, http.StatusBadRequest, "书籍入库失败，请确认名称不超过 120 字、简介不超过 1000 字且分类已启用")
 		return

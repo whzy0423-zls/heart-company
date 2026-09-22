@@ -150,6 +150,21 @@ func (s *UploadService) WithCoverExtractor(cover CoverExtractor) *UploadService 
 	return s
 }
 
+// AuthorizeTask verifies both the authenticated uploader and the content
+// binding before a caller starts or resumes a multipart operation. The
+// regular upload methods already enforce creator ownership; this additional
+// content check is used by scoped entry points such as the teacher workspace.
+func (s *UploadService) AuthorizeTask(ctx context.Context, taskID, creatorID, contentID int64) error {
+	task, err := s.ownedTask(ctx, taskID, creatorID)
+	if err != nil {
+		return err
+	}
+	if contentID <= 0 || task.ContentID != contentID {
+		return ErrUploadOwnership
+	}
+	return nil
+}
+
 func (s *UploadService) Initiate(ctx context.Context, input InitiateUploadInput) (InitiateUploadResult, error) {
 	if input.ContentID <= 0 || input.CreatorID <= 0 || input.SizeBytes <= 0 || !validCRC64(input.Checksum) {
 		return InitiateUploadResult{}, errors.New("checksum must use crc64:<value>")

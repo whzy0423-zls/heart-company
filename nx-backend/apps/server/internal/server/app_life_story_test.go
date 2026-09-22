@@ -500,7 +500,7 @@ func TestLifeStoryHistoryLimitIsSeparateFromMonthlyGenerationQuota(t *testing.T)
 		t.Fatalf("VIP history limit=%d want 3", got)
 	}
 	if got := lifeStoryHistoryLimit("svip"); got != 12 {
-		t.Fatalf("S VIP history limit=%d want 12", got)
+		t.Fatalf("SVIP history limit=%d want 12", got)
 	}
 	// The monthly generation policy is a separate field and may change without
 	// changing the number of historical records kept active at each level.

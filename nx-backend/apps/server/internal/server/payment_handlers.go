@@ -75,6 +75,15 @@ func generateReportOutTradeNo(uid, recordID int64) (string, error) {
 	return fmt.Sprintf("rpt%d-%d-%d-%s", uid, recordID, time.Now().UnixNano(), hex.EncodeToString(suffix[:])), nil
 }
 
+func generateWechatPayTestOutTradeNo(uid int64) (string, error) {
+	var suffix [1]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", err
+	}
+	// 微信商户订单号仅允许有限字符且长度不超过 32；base36 保留足够的唯一性。
+	return fmt.Sprintf("wx%s%s%s", strconv.FormatInt(uid, 36), strconv.FormatInt(time.Now().UnixNano(), 36), hex.EncodeToString(suffix[:])), nil
+}
+
 func validateWxPayCallbackAgainstOrder(env config.Env, result wxpay.CallbackResult, order paymentOrderSnapshot) error {
 	if strings.TrimSpace(result.OutTradeNo) == "" {
 		return errors.New("wxpay callback missing out_trade_no")
@@ -88,11 +97,47 @@ func validateWxPayCallbackAgainstOrder(env config.Env, result wxpay.CallbackResu
 	if result.AmountTotal <= 0 || result.AmountTotal != order.Amount {
 		return fmt.Errorf("wxpay amount mismatch: callback=%d order=%d", result.AmountTotal, order.Amount)
 	}
-	if order.Product != "report" && order.Product != "member" &&
+	if order.Product != "report" && order.Product != "member" && order.Product != miniapp.ProductWechatPayTest &&
 		order.Product != "classroom_series" && order.Product != "classroom_content" {
 		return fmt.Errorf("unsupported payment product: %s", order.Product)
 	}
 	return nil
+}
+
+// createWechatPayTestOrder 创建固定 0.10 元的真实微信支付测试单。
+// 金额、商品和订单关联信息全部由服务端固定，客户端只负责拉起收银台。
+func (s *Server) createWechatPayTestOrder(w http.ResponseWriter, r *http.Request) {
+	if s.pay == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "payment service is not configured")
+		return
+	}
+	uid := userFromRequest(r).ID
+	openID, err := s.miniapp.OpenIDByUserID(r.Context(), uid)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "获取微信用户标识失败")
+		return
+	}
+	outTradeNo, err := generateWechatPayTestOutTradeNo(uid)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "创建测试订单失败")
+		return
+	}
+	const amountCents = 10
+	order, err := s.miniapp.CreateOrder(r.Context(), uid, outTradeNo, miniapp.ProductWechatPayTest, 0, "微信支付测试", amountCents)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "创建测试订单失败")
+		return
+	}
+	prepay, err := s.pay.Prepay(r.Context(), order.OutTradeNo, openID, "九型芯之力·微信支付测试", amountCents)
+	if err != nil {
+		httpx.Fail(w, http.StatusBadGateway, "微信支付下单失败："+err.Error())
+		return
+	}
+	httpx.OK(w, map[string]any{
+		"outTradeNo": order.OutTradeNo,
+		"amount":     amountCents,
+		"payParams":  prepay,
+	})
 }
 
 // reportOrderRequest 下单请求：解锁某条测试记录的深度报告。
@@ -254,6 +299,7 @@ func (s *Server) payNotify(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := parseCallback(r.Header, raw)
 	if err != nil {
+		log.Printf("[WXPAY] callback parse failed: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"code": "FAIL", "message": err.Error()})
 		return
@@ -266,6 +312,7 @@ func (s *Server) payNotify(w http.ResponseWriter, r *http.Request) {
 	}
 	order, err := s.miniapp.PaymentOrderSnapshot(r.Context(), result.OutTradeNo)
 	if err != nil {
+		log.Printf("[WXPAY] callback order lookup failed out_trade_no=%s: %v", result.OutTradeNo, err)
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"code": "FAIL", "message": err.Error()})
 		return
@@ -274,12 +321,14 @@ func (s *Server) payNotify(w http.ResponseWriter, r *http.Request) {
 		Amount:  order.Amount,
 		Product: order.Product,
 	}); err != nil {
+		log.Printf("[WXPAY] callback validation failed out_trade_no=%s: %v", result.OutTradeNo, err)
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"code": "FAIL", "message": err.Error()})
 		return
 	}
 	apply, err := s.miniapp.MarkOrderPaidDetailed(r.Context(), result.OutTradeNo, result.TransactionID)
 	if err != nil {
+		log.Printf("[WXPAY] callback apply failed out_trade_no=%s: %v", result.OutTradeNo, err)
 		// 落账失败要返回非 SUCCESS，微信会重试
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]string{"code": "FAIL", "message": err.Error()})

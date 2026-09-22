@@ -11,6 +11,8 @@ describe('teacher admin management contract', () => {
     const route = read('router/routes/modules/teacher.ts');
     expect(route).toContain("'Miniapp:Teacher:Manage'");
     expect(route).toContain("path: '/teachers'");
+    expect(route).toContain("redirect: '/teachers/manage'");
+    expect(route).toContain("path: 'manage'");
     expect(route).toContain("import('#/views/teacher/index.vue')");
   });
 
@@ -41,13 +43,19 @@ describe('teacher admin management contract', () => {
     expect(source).toContain('输入手机号、昵称或账号搜索');
   });
 
-  it('keeps the profile toolbar in its own full-width row above the table', () => {
+  it('keeps each toolbar in a stable block row above its table', () => {
     const source = read('views/teacher/index.vue');
+    expect(source.match(/<div class="toolbar">/g)).toHaveLength(2);
+    expect(source).not.toContain('<Space class="toolbar" wrap>');
     expect(source).toContain('.toolbar {');
-    expect(source).toContain('display: flex');
-    expect(source).toContain('width: 100%;');
+    expect(source).toContain('display: flex;');
+    expect(source).toContain('column-gap: 8px;');
     expect(source).toContain('row-gap: 12px;');
-    expect(source).toContain('margin-top: 12px !important;');
+    expect(source).toContain('width: 100%;');
+    expect(source).toContain('margin: 16px 0 20px;');
+    expect(source).toContain('class="toolbar-search"');
+    expect(source).toContain('.toolbar-search { width: 240px; }');
+    expect(source).not.toContain(':deep(.ant-table-wrapper)');
   });
 
   it('keeps review actions and required rejection reason visible', () => {

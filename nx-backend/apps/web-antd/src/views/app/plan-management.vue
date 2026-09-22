@@ -92,7 +92,7 @@ function limitText(value: number) {
 }
 
 function levelText(value: AppPlan['planLevel']) {
-  return value === 'svip' ? 'S VIP' : value === 'vip' ? 'VIP' : '免费';
+  return value === 'svip' ? 'SVIP' : value === 'vip' ? 'VIP' : '免费';
 }
 
 function cycleText(value: AppPlan['billingCycle']) {
@@ -135,7 +135,7 @@ function edit(plan: AppPlan) {
     featuresText: plan.features.join('\n'),
     originalPriceYuan: plan.originalPriceCents / 100,
     priceYuan: plan.priceCents / 100,
-    // Legacy annual SKUs remain VIP unless the API explicitly says S VIP.
+    // Legacy annual SKUs remain VIP unless the API explicitly says SVIP.
     planLevel: plan.planLevel ?? (plan.code === 'free' ? 'free' : 'vip'),
     billingCycle: plan.billingCycle ?? (plan.code === 'vip_quarter' ? 'quarter' : plan.code === 'vip_year' ? 'year' : plan.code === 'free' ? 'none' : 'month'),
     featuresJson: JSON.stringify(plan.featureFlags ?? {}, null, 2),
@@ -155,7 +155,7 @@ async function save() {
     return;
   }
   if (form.planLevel !== 'free' && form.billingCycle === 'none') {
-    message.warning('付费套餐必须选择 VIP 或 S VIP');
+    message.warning('付费套餐必须选择 VIP 或 SVIP');
     return;
   }
   const featureFlags = parseJsonObject(form.featuresJson, '功能开关');
@@ -327,7 +327,7 @@ onMounted(async () => {
             <select v-model="form.planLevel" class="native-select">
               <option value="free">免费</option>
               <option value="vip">VIP</option>
-              <option value="svip">S VIP</option>
+              <option value="svip">SVIP</option>
             </select>
           </Form.Item>
           <Form.Item label="购买周期">

@@ -3492,7 +3492,7 @@ CREATE TABLE IF NOT EXISTS app_plans (
   member_poster_enabled BOOLEAN NOT NULL DEFAULT false,
   create_time          TIMESTAMPTZ NOT NULL DEFAULT now(),
   update_time          TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK (code IN ('free','vip','svip','vip_month','vip_quarter','vip_year')),
+  CHECK (code IN ('free','vip','svip','vip_month','vip_quarter','vip_year','svip_month','svip_quarter','svip_year')),
   CHECK (plan_level IN ('free','vip','svip')),
   CHECK (billing_cycle IN ('none','month','quarter','year')),
   CHECK (jsonb_typeof(features) = 'array'),
@@ -3523,20 +3523,31 @@ ALTER TABLE app_plans DROP CONSTRAINT IF EXISTS app_plans_billing_cycle_check;
 ALTER TABLE app_plans DROP CONSTRAINT IF EXISTS app_plans_features_check;
 ALTER TABLE app_plans DROP CONSTRAINT IF EXISTS app_plans_feature_flags_check;
 ALTER TABLE app_plans DROP CONSTRAINT IF EXISTS app_plans_limits_check;
-ALTER TABLE app_plans ADD CONSTRAINT app_plans_code_check CHECK (code IN ('free','vip','svip','vip_month','vip_quarter','vip_year'));
+ALTER TABLE app_plans ADD CONSTRAINT app_plans_code_check CHECK (code IN ('free','vip','svip','vip_month','vip_quarter','vip_year','svip_month','svip_quarter','svip_year'));
 ALTER TABLE app_plans ADD CONSTRAINT app_plans_plan_level_check CHECK (plan_level IN ('free','vip','svip'));
 ALTER TABLE app_plans ADD CONSTRAINT app_plans_billing_cycle_check CHECK (billing_cycle IN ('none','month','quarter','year'));
 ALTER TABLE app_plans ADD CONSTRAINT app_plans_features_check CHECK (jsonb_typeof(features) = 'array');
 ALTER TABLE app_plans ADD CONSTRAINT app_plans_feature_flags_check CHECK (jsonb_typeof(feature_flags) = 'object');
 ALTER TABLE app_plans ADD CONSTRAINT app_plans_limits_check CHECK (jsonb_typeof(limits) = 'object');
 
--- Seed the canonical S VIP only after replacing legacy constraints. This order
+-- Seed the canonical SVIP only after replacing legacy constraints. This order
 -- keeps the migration valid for installations whose old code check excluded it.
 INSERT INTO app_plans
   (code,plan_level,billing_cycle,name,subtitle,price_cents,original_price_cents,badge,features,feature_flags,limits,enabled,sort_order,duration_days,daily_chat_limit,story_monthly_limit,card_limit,deep_chat_enabled,companion_enabled,member_poster_enabled)
 VALUES
-  ('svip','svip','year','S VIP','深度陪伴与优先权益',0,0,'','["深度对话与专业陪伴","每月 12 篇人生故事","最多 10 张人物卡","全部高级内容"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":10,"dailyChatLimit":-1,"storyMonthlyLimit":12}'::jsonb,false,40,365,-1,12,10,true,true,true)
+  ('svip','svip','year','SVIP','深度陪伴与优先权益',0,0,'','["深度对话与专业陪伴","每月 12 篇人生故事","最多 10 张人物卡","全部高级内容"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":10,"dailyChatLimit":-1,"storyMonthlyLimit":12}'::jsonb,false,40,365,-1,12,10,true,true,true),
+  ('svip_month','svip','month','SVIP 月卡','深度画像与高级关系洞察',5900,0,'高级权益','["完整成长画像与趋势分析","深度合盘与关系洞察","每月 12 篇人生故事","最多 10 张人物卡"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":10,"dailyChatLimit":-1,"storyMonthlyLimit":12}'::jsonb,true,40,30,-1,12,10,true,true,true),
+  ('svip_quarter','svip','quarter','SVIP 季卡','深度陪伴与长期洞察',15900,17700,'推荐','["完整成长画像与趋势分析","深度合盘与关系洞察","每月 12 篇人生故事","最多 10 张人物卡"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":10,"dailyChatLimit":-1,"storyMonthlyLimit":12}'::jsonb,true,50,90,-1,12,10,true,true,true),
+  ('svip_year','svip','year','SVIP 年卡','完整高级会员体验',49900,70800,'最划算','["完整成长画像与趋势分析","深度合盘与关系洞察","每月 12 篇人生故事","最多 10 张人物卡"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":10,"dailyChatLimit":-1,"storyMonthlyLimit":12}'::jsonb,true,60,365,-1,12,10,true,true,true)
 ON CONFLICT (code) DO NOTHING;
+
+-- Keep the level-specific capability switches explicit for existing installs.
+UPDATE app_plans
+SET feature_flags = feature_flags || CASE
+  WHEN plan_level = 'svip' THEN '{"growthPortrait":true,"trendAnalysis":true,"relationshipInsight":true,"prioritySupport":true}'::jsonb
+  WHEN plan_level = 'vip' THEN '{"growthPortrait":false,"trendAnalysis":false,"relationshipInsight":false,"prioritySupport":false}'::jsonb
+  ELSE '{}'::jsonb
+END;
 
 UPDATE app_plans
 SET plan_level = CASE
@@ -3554,6 +3565,20 @@ SET plan_level = CASE
       ELSE billing_cycle
     END
 WHERE plan_level IS NULL OR billing_cycle IS NULL OR plan_level = 'free' AND code <> 'free';
+
+-- 权益只由会员等级决定，月/季/年仅影响有效期与价格。修正旧种子中
+-- 按周期递增的 VIP 故事额度，并让历史安装补齐新的 SVIP 周期商品。
+UPDATE app_plans
+SET story_monthly_limit = CASE WHEN plan_level = 'svip' THEN 12 WHEN plan_level = 'vip' THEN 3 ELSE story_monthly_limit END,
+    limits = jsonb_set(COALESCE(limits, '{}'::jsonb), '{storyMonthlyLimit}', to_jsonb(CASE WHEN plan_level = 'svip' THEN 12 WHEN plan_level = 'vip' THEN 3 ELSE story_monthly_limit END), true),
+    name = CASE code
+      WHEN 'vip_month' THEN 'VIP 月卡'
+      WHEN 'vip_quarter' THEN 'VIP 季卡'
+      WHEN 'vip_year' THEN 'VIP 年卡'
+      WHEN 'svip' THEN 'SVIP'
+      ELSE name
+    END
+WHERE code IN ('vip_month','vip_quarter','vip_year','svip');
 UPDATE app_plans
 SET feature_flags = jsonb_build_object(
       'deepChat', deep_chat_enabled,
@@ -3642,6 +3667,9 @@ CREATE TABLE IF NOT EXISTS app_orders (
   member_level_before TEXT,
   member_started_at_before TIMESTAMPTZ,
   member_expires_at_before TIMESTAMPTZ,
+  upgrade_from_plan TEXT NOT NULL DEFAULT '',
+  upgrade_credit_cents INT NOT NULL DEFAULT 0 CHECK (upgrade_credit_cents >= 0),
+  upgrade_quote_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
   refunded_at TIMESTAMPTZ,
   refund_reason TEXT NOT NULL DEFAULT ''
 );
@@ -3663,6 +3691,9 @@ ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS duration_days INT NOT NULL DEFAU
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS member_level_before TEXT;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS member_started_at_before TIMESTAMPTZ;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS member_expires_at_before TIMESTAMPTZ;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS upgrade_from_plan TEXT NOT NULL DEFAULT '';
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS upgrade_credit_cents INT NOT NULL DEFAULT 0;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS upgrade_quote_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS refund_reason TEXT NOT NULL DEFAULT '';
 UPDATE app_orders SET duration_days=CASE product_id

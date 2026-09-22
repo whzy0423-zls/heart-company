@@ -40,7 +40,7 @@ assert.match(
 
 assert.match(
   homeSource,
-  /v-if="classroomEnabled"[^>]*class="service-entry"/,
+  /<view\s+v-if="classroomEnabled"[^>]*class="[^"]*\bservice-entry--course\b[^"]*"[^>]*@tap="goCourse"/,
   '首页课程学习入口应受总开关控制',
 )
 assert.match(

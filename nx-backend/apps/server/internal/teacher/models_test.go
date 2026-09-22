@@ -1,6 +1,10 @@
 package teacher
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestTeacherProfileValidate(t *testing.T) {
 	valid := Teacher{Key: "han", Name: "老韩", Enabled: true}
@@ -46,5 +50,26 @@ func TestRoleSetKeepsTeacherAndAgentIndependent(t *testing.T) {
 	roles.Teacher = false
 	if roles.IsAgent() == false || roles.TeacherKey != "han" || roles.AgentID != 9 {
 		t.Fatal("disabling one role must preserve the other role and bindings")
+	}
+}
+
+func TestContentDraftExposesMediaMetadata(t *testing.T) {
+	mediaID := int64(17)
+	encoded, err := json.Marshal(ContentDraft{
+		ID:              9,
+		ContentType:     "video",
+		MediaAssetID:    &mediaID,
+		MediaStatus:     "processing",
+		Status:          "processing",
+		DurationSeconds: 42,
+		CoverURL:        "/api/classroom/covers/9",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"contentType":"video"`, `"mediaAssetId":17`, `"mediaStatus":"processing"`, `"status":"processing"`, `"durationSeconds":42`, `"coverUrl":"/api/classroom/covers/9"`} {
+		if !strings.Contains(string(encoded), want) {
+			t.Fatalf("missing %s in %s", want, encoded)
+		}
 	}
 }

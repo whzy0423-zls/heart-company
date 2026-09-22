@@ -46,4 +46,19 @@ describe('voice broadcast admin contract', () => {
       expect(source).toContain(expected);
     }
   });
+
+  it('prevents browser login credentials from autofilling provider fields', () => {
+    const source = readFileSync(
+      resolve(here, '../../views/app/voice-broadcast.vue'),
+      'utf8',
+    );
+    expect(source).toContain('<Form autocomplete="off" layout="vertical">');
+    expect(source).toContain('name="voice-broadcast-workspace-id"');
+    expect(source).toContain('autocomplete="new-password"');
+    expect(source).toContain('name="voice-broadcast-api-key"');
+    expect(source).toContain(':readonly="workspaceInputReadonly"');
+    expect(source).toContain('@focus="workspaceInputReadonly = false"');
+    expect(source).toContain(':readonly="apiKeyInputReadonly"');
+    expect(source).toContain('@focus="apiKeyInputReadonly = false"');
+  });
 });

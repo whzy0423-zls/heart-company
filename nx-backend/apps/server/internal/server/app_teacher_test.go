@@ -45,6 +45,12 @@ func (c *teacherVideoTestConn) Begin() (driver.Tx, error) {
 func (c *teacherVideoTestConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
 	c.driver.queries = append(c.driver.queries, query)
 	now := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
+	if strings.Contains(query, "SELECT COALESCE(cover_object_key,'') FROM classroom_media_assets") {
+		return &teacherVideoTestRows{
+			columns: []string{"cover_object_key"},
+			values:  [][]driver.Value{{"classroom/covers/32.jpg"}},
+		}, nil
+	}
 	if strings.Contains(query, "FROM teacher_profiles") {
 		return &teacherVideoTestRows{
 			columns: strings.Split("id,teacher_key,name,title,avatar,cover,short_intro,detail_intro,expertise,intro_video_url,customer_service,offline_service,show_on_home,show_in_drawer,sort_order,enabled,created_at,updated_at", ","),
@@ -58,10 +64,10 @@ func (c *teacherVideoTestConn) QueryContext(_ context.Context, query string, _ [
 			!strings.Contains(query, "ORDER BY COALESCE(published_at,created_at) DESC,id DESC") {
 			return nil, errors.New("teacher video query does not enforce visibility and ordering")
 		}
-		columns := strings.Split("id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at", ",")
+		columns := strings.Split("id,series_id,show_as_standalone,title,description,teacher_key,feed_type,review_status,review_reason,replaces_content_id,published_at,created_at,updated_at,status,media_asset_id,duration_seconds,cover_url,content_type,media_status", ",")
 		return &teacherVideoTestRows{columns: columns, values: [][]driver.Value{
-			{int64(2), nil, false, "日常二", "", "han", "daily", "published", "", nil, now, now, now},
-			{int64(1), nil, false, "课程一", "", "han", "course", "published", "", nil, now.Add(-time.Hour), now.Add(-time.Hour), now},
+			{int64(2), nil, false, "日常二", "", "han", "daily", "published", "", nil, now, now, now, "published", nil, int64(90), "", "video", "ready"},
+			{int64(1), nil, false, "课程一", "", "han", "course", "published", "", nil, now.Add(-time.Hour), now.Add(-time.Hour), now, "published", nil, int64(90), "", "video", "ready"},
 		}}, nil
 	}
 	if strings.Contains(query, "FROM upload_assets") {
@@ -125,6 +131,45 @@ func TestTeacherVideosAggregatesVisibleCourseAndDailyUsingPublicDTO(t *testing.T
 	}
 	if len(body.Data.Items) != 2 || body.Data.Items[0].CoverURL == "" || body.Data.Items[0].DurationSeconds != 90 {
 		t.Fatalf("unified endpoint must use classroom public DTO: %#v", body.Data.Items)
+	}
+}
+
+func TestSignTeacherGeneratedCoverUsesPrivateObjectSigner(t *testing.T) {
+	item := teacher.ContentDraft{ContentType: "video"}
+	signer := &recordingObjectSigner{url: "https://cdn.example/cover.jpg?signature=ok"}
+
+	if err := signTeacherGeneratedCover(context.Background(), &item, "classroom/covers/32.jpg", signer, 15*time.Minute); err != nil {
+		t.Fatalf("signTeacherGeneratedCover returned error: %v", err)
+	}
+	if item.CoverURL != signer.url {
+		t.Fatalf("cover url=%q, want %q", item.CoverURL, signer.url)
+	}
+	if signer.objectKey != "classroom/covers/32.jpg" || signer.expires != 15*time.Minute {
+		t.Fatalf("signer called with key=%q expires=%s", signer.objectKey, signer.expires)
+	}
+}
+
+func TestDecorateTeacherContentCoverLoadsAndSignsGeneratedCover(t *testing.T) {
+	drv := &teacherVideoTestDriver{}
+	name := "teacher-cover-test-" + strings.ReplaceAll(t.Name(), "/", "-")
+	sql.Register(name, drv)
+	db, err := sql.Open(name, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	signer := &recordingObjectSigner{url: "https://cdn.example/cover.jpg?signature=ok"}
+	s := &Server{db: db, classroomPlaybackSigner: signer}
+	assetID := int64(32)
+	item := teacher.ContentDraft{MediaAssetID: &assetID}
+	s.decorateTeacherContentCover(context.Background(), &item)
+
+	if item.CoverURL != signer.url {
+		t.Fatalf("cover url=%q, want %q", item.CoverURL, signer.url)
+	}
+	if signer.objectKey != "classroom/covers/32.jpg" {
+		t.Fatalf("signed object key=%q", signer.objectKey)
 	}
 }
 
