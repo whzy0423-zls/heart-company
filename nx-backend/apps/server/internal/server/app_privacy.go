@@ -202,6 +202,10 @@ func (s *Server) appPrivacyDeleteMemories(w http.ResponseWriter, r *http.Request
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
+	if _, err := tx.ExecContext(r.Context(), `DELETE FROM app_voice_broadcast_preferences WHERE app_user_id = $1`, userInfo.ID); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "server error")
+		return
+	}
 	if err := tx.Commit(); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
@@ -248,6 +252,7 @@ func (s *Server) appPrivacyDeleteAccount(w http.ResponseWriter, r *http.Request)
 		`DELETE FROM app_notifications WHERE app_user_id = $1`,
 		`DELETE FROM app_memories WHERE app_user_id = $1`,
 		`DELETE FROM app_user_preferences WHERE app_user_id = $1`,
+		`DELETE FROM app_voice_broadcast_preferences WHERE app_user_id = $1`,
 		`DELETE FROM upload_assets asset USING app_chat_messages message, app_chat_sessions session
 		  WHERE asset.id=message.audio_asset_id AND message.session_id=session.id AND session.app_user_id=$1`,
 		`DELETE FROM app_chat_sessions WHERE app_user_id = $1`,

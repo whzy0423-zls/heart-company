@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"nine-xing/nx-backend/apps/server/internal/httpx"
+	"nine-xing/nx-backend/apps/server/internal/voicebroadcastconfig"
 	"nine-xing/nx-backend/apps/server/internal/xinzhili"
 )
 
@@ -122,6 +123,42 @@ type voiceBroadcastConfigDocument struct {
 func (s *Server) loadVoiceBroadcastConfig(ctx context.Context) (voiceBroadcastConfig, error) {
 	if s != nil && s.voiceBroadcastConfigLoader != nil {
 		return s.voiceBroadcastConfigLoader(ctx)
+	}
+	// The admin-managed singleton is the authoritative runtime source. Keep
+	// the legacy site-config path only for deployments that predate the admin
+	// page and have not initialized the new store yet.
+	if s != nil && s.voiceBroadcastConfig != nil {
+		stored, found, err := s.voiceBroadcastConfig.Read(ctx)
+		if err != nil {
+			return voiceBroadcastConfig{}, err
+		}
+		cfg := defaultVoiceBroadcastConfig()
+		if !found {
+			return cfg, nil
+		}
+		cfg.Enabled = stored.Enabled
+		cfg.Provider = strings.TrimSpace(stored.Provider)
+		if cfg.Provider == "" {
+			cfg.Provider = voiceBroadcastProviderBailian
+		}
+		cfg.Endpoint = voicebroadcastconfig.DefaultEndpoint
+		cfg.Region = strings.TrimSpace(stored.Region)
+		cfg.WorkspaceID = strings.TrimSpace(stored.WorkspaceID)
+		cfg.GroupID = cfg.WorkspaceID
+		cfg.Model = strings.TrimSpace(stored.Model)
+		if cfg.Model == "" {
+			cfg.Model = voiceBroadcastDefaultModel
+		}
+		cfg.Voice = strings.TrimSpace(stored.CurrentVoice)
+		if cfg.Voice == "" {
+			cfg.Voice = strings.TrimSpace(stored.DefaultVoice)
+		}
+		if cfg.Voice == "" {
+			cfg.Voice = voiceBroadcastDefaultVoice
+		}
+		cfg.Format = "mp3"
+		cfg.APIKey = strings.TrimSpace(stored.APIKey)
+		return cfg, nil
 	}
 	cfg := defaultVoiceBroadcastConfig()
 	if s != nil && s.db != nil {

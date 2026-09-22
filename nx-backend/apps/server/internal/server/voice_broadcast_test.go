@@ -14,6 +14,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/voicebroadcastconfig"
 )
 
 func TestVoiceBroadcastPreferenceDefaultsOffPersistsAndIsUserScoped(t *testing.T) {
@@ -110,6 +111,36 @@ func TestNormalizeVoiceBroadcastProviderAcceptsAdminAlias(t *testing.T) {
 		if got := normalizeVoiceBroadcastProvider(raw); got != voiceBroadcastProviderBailian {
 			t.Fatalf("provider %q normalized to %q", raw, got)
 		}
+	}
+}
+
+func TestLoadVoiceBroadcastConfigUsesAdminSingleton(t *testing.T) {
+	key := "admin-secret"
+	store := &memoryVoiceBroadcastConfigStore{
+		cfg: voicebroadcastconfig.Config{
+			Version:      3,
+			Enabled:      true,
+			Provider:     voicebroadcastconfig.DefaultProvider,
+			Region:       "cn-shanghai",
+			WorkspaceID:  "workspace-1",
+			Model:        "qwen3-tts-instruct-flash",
+			DefaultVoice: "Cherry",
+			CurrentVoice: "Serena",
+			APIKey:       key,
+		},
+		found: true,
+	}
+	s := &Server{voiceBroadcastConfig: store}
+
+	got, err := s.loadVoiceBroadcastConfig(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Enabled || got.Provider != voicebroadcastconfig.DefaultProvider || got.APIKey != key {
+		t.Fatalf("loaded config = %+v", got)
+	}
+	if got.Endpoint != voicebroadcastconfig.DefaultEndpoint || got.GroupID != "workspace-1" || got.Voice != "Serena" {
+		t.Fatalf("admin fields were not mapped = %+v", got)
 	}
 }
 
@@ -233,6 +264,23 @@ type memoryVoiceBroadcastPreferenceStore struct {
 
 func newMemoryVoiceBroadcastPreferenceStore() *memoryVoiceBroadcastPreferenceStore {
 	return &memoryVoiceBroadcastPreferenceStore{values: make(map[int64]bool)}
+}
+
+type memoryVoiceBroadcastConfigStore struct {
+	cfg   voicebroadcastconfig.Config
+	found bool
+}
+
+func (s *memoryVoiceBroadcastConfigStore) Read(context.Context) (voicebroadcastconfig.Config, bool, error) {
+	return s.cfg, s.found, nil
+}
+
+func (s *memoryVoiceBroadcastConfigStore) Update(context.Context, voicebroadcastconfig.UpdateInput, int64) (voicebroadcastconfig.Config, error) {
+	return s.cfg, nil
+}
+
+func (s *memoryVoiceBroadcastConfigStore) RecordHealth(context.Context, int64, voicebroadcastconfig.Health) (voicebroadcastconfig.Config, error) {
+	return s.cfg, nil
 }
 
 func (s *memoryVoiceBroadcastPreferenceStore) Get(_ context.Context, userID int64) (bool, error) {
