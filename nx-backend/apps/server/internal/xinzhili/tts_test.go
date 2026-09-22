@@ -51,10 +51,10 @@ func TestSplitSentences(t *testing.T) {
 }
 
 func TestBailianHostedMiniMaxTTSRequestParsesHexAudio(t *testing.T) {
-	var gotPath, gotAuth string
+	var gotPath, gotAuth, gotWorkspace string
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath, gotAuth = r.URL.Path, r.Header.Get("Authorization")
+		gotPath, gotAuth, gotWorkspace = r.URL.Path, r.Header.Get("Authorization"), r.Header.Get("X-DashScope-WorkSpace")
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Errorf("decode body: %v", err)
 		}
@@ -65,7 +65,7 @@ func TestBailianHostedMiniMaxTTSRequestParsesHexAudio(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := TTSConfig{Provider: TTSProviderBailian, Endpoint: server.URL + "/api/v1", APIKey: "dashscope-key", Model: "MiniMax/speech-2.8-turbo", Voice: "teacher-voice", Format: "mp3"}
+	cfg := TTSConfig{Provider: TTSProviderBailian, Endpoint: server.URL + "/api/v1", APIKey: "dashscope-key", GroupID: "workspace-1", Model: "MiniMax/speech-2.8-turbo", Voice: "teacher-voice", Format: "mp3"}
 	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -75,8 +75,8 @@ func TestBailianHostedMiniMaxTTSRequestParsesHexAudio(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if gotPath != "/api/v1/services/aigc/multimodal-generation/generation" || gotAuth != "Bearer dashscope-key" {
-		t.Fatalf("path=%q auth=%q", gotPath, gotAuth)
+	if gotPath != "/api/v1/services/aigc/multimodal-generation/generation" || gotAuth != "Bearer dashscope-key" || gotWorkspace != "workspace-1" {
+		t.Fatalf("path=%q auth=%q workspace=%q", gotPath, gotAuth, gotWorkspace)
 	}
 	if gotBody["model"] != "MiniMax/speech-2.8-turbo" {
 		t.Fatalf("model=%v", gotBody["model"])

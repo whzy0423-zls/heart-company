@@ -202,6 +202,8 @@ const (
 	appChatStreamDone
 	appChatStreamError
 	appChatStreamPersistenceStarted
+	appChatStreamVoice
+	appChatStreamVoiceError
 )
 
 type appChatStreamEvent struct {
@@ -211,6 +213,8 @@ type appChatStreamEvent struct {
 	response    askResponse
 	publicError string
 	errorPhase  string
+	voice       *voiceBroadcastSegment
+	voiceError  *voiceBroadcastErrorPayload
 }
 
 type appChatStreamLifecycle struct {
@@ -741,6 +745,7 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 
 	events := make(chan appChatStreamEvent, appChatStreamEventBuffer)
 	lifecycle := &appChatStreamLifecycle{}
+	voiceEnabled := s.voiceBroadcastEnabledForUser(r.Context(), userInfo.ID)
 	go s.runAppChatStreamPipeline(ctx, events, appChatStreamPipelineInput{
 		userID:               userInfo.ID,
 		sessionID:            sessionID,
@@ -754,6 +759,8 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 		fixedAnswer:          fixedAnswer,
 		isModelIdentity:      isModelIdentity,
 		quotaKey:             quotaKey,
+		voiceBroadcast:       voiceEnabled,
+		voiceReplyID:         newVoiceBroadcastReplyID(),
 	})
 	s.pumpAppChatStream(ctx, cancel, r.Context(), w, flusher, events, lifecycle, userInfo.ID, sessionID, streamStartedAt, chatTimeout)
 }
@@ -779,6 +786,8 @@ type appChatStreamPipelineInput struct {
 	fixedAnswer          rag.Answer
 	isModelIdentity      bool
 	quotaKey             string
+	voiceBroadcast       bool
+	voiceReplyID         string
 }
 
 func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- appChatStreamEvent, input appChatStreamPipelineInput) {
@@ -794,6 +803,39 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			return false
 		}
 	}
+
+	var voiceStream *voiceBroadcastStream
+	if input.voiceBroadcast {
+		provider, err := s.newVoiceBroadcastSynthesizer(ctx)
+		if err != nil {
+			// Voice is an optional side channel; text generation continues.
+			_ = send(appChatStreamEvent{kind: appChatStreamVoiceError, voiceError: &voiceBroadcastErrorPayload{ReplyID: input.voiceReplyID, Code: "provider_unavailable"}})
+		} else {
+			voiceStream = newVoiceBroadcastStream(ctx, input.voiceReplyID, provider, func(segment voiceBroadcastSegment) error {
+				copy := segment
+				if !send(appChatStreamEvent{kind: appChatStreamVoice, voice: &copy}) {
+					return context.Canceled
+				}
+				return nil
+			})
+		}
+	}
+	finishVoice := func() {
+		if voiceStream == nil {
+			return
+		}
+		err := voiceStream.Close()
+		voiceStream = nil
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			_ = send(appChatStreamEvent{kind: appChatStreamVoiceError, voiceError: &voiceBroadcastErrorPayload{ReplyID: input.voiceReplyID, Code: "synthesis_failed"}})
+		}
+	}
+	defer func() {
+		if voiceStream != nil {
+			voiceStream.Cancel()
+			_ = voiceStream.Wait()
+		}
+	}()
 
 	var ans rag.Answer
 	var knowledgeTrace *chat.KnowledgeTrace
@@ -812,6 +854,9 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			}
 		case <-ctx.Done():
 			return
+		}
+		if voiceStream != nil {
+			_ = voiceStream.Push(input.fixedAnswer.Answer)
 		}
 		ans = input.fixedAnswer
 	} else {
@@ -863,6 +908,9 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 				case <-ctx.Done():
 					return ctx.Err()
 				}
+				if voiceStream != nil {
+					_ = voiceStream.Push(strings.TrimSpace(cleaned))
+				}
 			}
 			return nil
 		}
@@ -910,11 +958,15 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			case <-ctx.Done():
 				return
 			}
+			if voiceStream != nil {
+				_ = voiceStream.Push(ans.Answer)
+			}
 		}
 	}
 	if ctx.Err() != nil {
 		return
 	}
+	finishVoice()
 	ans.Answer = answerhygiene.Clean(input.question, ans.Answer)
 	if s.chatPersistHook != nil {
 		s.chatPersistHook()
@@ -1058,6 +1110,21 @@ func (s *Server) pumpAppChatStream(
 			if firstDelta {
 				firstDelta = false
 				logAppChatStreamTiming("first_delta", userID, sessionID, startedAt, "")
+			}
+		case appChatStreamVoice:
+			if event.voice != nil {
+				if err := writeAppChatSSE(w, flusher, "voice", event.voice.ssePayload()); err != nil {
+					stopBeforePersistenceAndCancel()
+					logAppChatStreamTiming("error", userID, sessionID, startedAt, "voice_write")
+					return true
+				}
+			}
+		case appChatStreamVoiceError:
+			if event.voiceError != nil {
+				if err := writeAppChatSSE(w, flusher, "voice_error", event.voiceError); err != nil {
+					stopBeforePersistenceAndCancel()
+					return true
+				}
 			}
 		case appChatStreamDone:
 			if err := writeAppChatSSE(w, flusher, "done", event.response); err != nil {

@@ -3117,6 +3117,15 @@ CREATE INDEX IF NOT EXISTS idx_app_user_preferences_user_order
 CREATE INDEX IF NOT EXISTS idx_app_user_preferences_category
   ON app_user_preferences(category, app_user_id);
 
+-- The broadcast switch is a product/runtime preference rather than a natural
+-- language instruction. Keep it separate from app_user_preferences so the
+-- instruction slot constraints cannot silently coerce a boolean setting.
+CREATE TABLE IF NOT EXISTS app_voice_broadcast_preferences (
+  app_user_id  BIGINT PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
+  enabled      BOOLEAN NOT NULL DEFAULT false,
+  update_time  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS app_sms_codes (
   id          BIGSERIAL PRIMARY KEY,
   phone       TEXT NOT NULL,

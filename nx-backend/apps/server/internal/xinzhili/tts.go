@@ -248,6 +248,9 @@ func (p *bailianHostedMiniMaxTTS) Synthesize(ctx context.Context, cfg TTSConfig,
 		return nil, "", errors.New("TTS 请求创建失败")
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(cfg.APIKey))
+	if workspace := strings.TrimSpace(cfg.GroupID); workspace != "" {
+		req.Header.Set("X-DashScope-WorkSpace", workspace)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 

@@ -251,6 +251,10 @@ type Server struct {
 	xinzhiliVoiceConfig        xinzhiliVoiceConfigStore
 	theoryAdmin                theoryLibraryAdminService
 	enneagramAdmin             enneagramLibraryAdminService
+
+	voiceBroadcastPreferences        voiceBroadcastPreferenceStore
+	voiceBroadcastConfigLoader       func(context.Context) (voiceBroadcastConfig, error)
+	voiceBroadcastSynthesizerFactory func(context.Context) (voiceBroadcastSynthesizer, error)
 }
 
 type appKnowledgePublicSearcher struct{ server *Server }
@@ -527,6 +531,9 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	}
 	s.skillChatRuntime = skillchat.NewRuntime(s.skillChat, theorystore.NewStore(database), skillChatRuntimeGenerator{server: s}, skillRuntimeOptions...)
 	s.userPreferences = userpreference.NewStore(database)
+	if database != nil {
+		s.voiceBroadcastPreferences = databaseVoiceBroadcastPreferenceStore{db: database}
+	}
 	s.preferenceAsyncSlots = make(chan struct{}, 2)
 	s.preferenceAsyncTimeout = 2 * time.Second
 	s.preferenceExtractor = userpreference.NewLLMExtractor(
@@ -979,6 +986,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/public/distribution/invite", s.method(http.MethodGet, s.publicDistributionInvite))
 	s.mux.HandleFunc("/api/app/health", s.method(http.MethodGet, s.appHealth))
 	s.mux.HandleFunc("/api/app/features", s.method(http.MethodGet, s.requireAppAuth(s.appFeatures)))
+	s.mux.HandleFunc("/api/app/voice-broadcast", s.requireAppAuth(s.appVoiceBroadcast))
+	s.mux.HandleFunc("/api/app/voice-broadcast/", s.requireAppAuth(s.appVoiceBroadcast))
 	s.mux.HandleFunc("/api/app/distribution/overview", s.method(http.MethodGet, s.requireAppAuth(s.appDistributionOverview)))
 	s.mux.HandleFunc("/api/app/distribution/profile", s.method(http.MethodGet, s.requireAppAuth(s.appDistributionProfile)))
 	s.mux.HandleFunc("/api/app/distribution/bind", s.method(http.MethodPost, s.requireAppAuth(s.appDistributionBind)))

@@ -411,6 +411,7 @@ func (c *xinzhiliRealtimeConn) startSession(ctx context.Context, e xinzhili.Enve
 
 		readyPayload := map[string]any{"sessionId": c.sessionID, "cardId": p.CardID, "conversationId": p.ConversationID}
 		mergeXinzhiliModeSnapshot(readyPayload, modeSnapshot)
+		readyPayload["voiceBroadcast"] = c.server.voiceBroadcastCapabilityForUser(ctx, c.userID)
 		if err := c.sendControlAtConfigVersion(ctx, xinzhili.EventSessionReady, readyPayload, nil, nil, cfg.Version); err != nil {
 			if c.releaseCandidateSession(candidateEpoch) {
 				_ = candidate.Close()

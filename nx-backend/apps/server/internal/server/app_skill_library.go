@@ -395,14 +395,134 @@ func (s *Server) appSkillSessionAskStream(w http.ResponseWriter, r *http.Request
 	w.Header().Set("X-Accel-Buffering", "no")
 	_, _ = io.WriteString(w, ": connected\n\n")
 	flusher.Flush()
-	result, err := s.skillChatRuntime.AskStream(ctx, appUserID, sessionID, question, func(delta string) error {
-		return writeAppChatSSE(w, flusher, "delta", map[string]string{"content": delta})
-	})
-	if err != nil {
-		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成失败，请重试"})
-		return
+	voiceReplyID := newVoiceBroadcastReplyID()
+	events := make(chan skillStreamEvent, appChatStreamEventBuffer)
+	voiceEnabled := s.voiceBroadcastEnabledForUser(r.Context(), appUserID)
+	var voiceStream *voiceBroadcastStream
+	if voiceEnabled {
+		provider, providerErr := s.newVoiceBroadcastSynthesizer(ctx)
+		if providerErr == nil {
+			voiceStream = newVoiceBroadcastStream(ctx, voiceReplyID, provider, func(segment voiceBroadcastSegment) error {
+				select {
+				case events <- skillStreamEvent{kind: skillStreamVoice, voice: &segment}:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			})
+		} else {
+			select {
+			case events <- skillStreamEvent{kind: skillStreamVoiceError, voiceError: &voiceBroadcastErrorPayload{ReplyID: voiceReplyID, Code: "provider_unavailable"}}:
+			case <-ctx.Done():
+			}
+		}
 	}
-	_ = writeAppChatSSE(w, flusher, "done", result)
+	go func() {
+		result, err := s.skillChatRuntime.AskStream(ctx, appUserID, sessionID, question, func(delta string) error {
+			select {
+			case events <- skillStreamEvent{kind: skillStreamDelta, delta: delta}:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+		select {
+		case events <- skillStreamEvent{kind: skillStreamDone, result: result, err: err}:
+		case <-ctx.Done():
+		}
+	}()
+	var pendingDone *skillStreamEvent
+	var voiceCloseDone <-chan error
+	for {
+		var event skillStreamEvent
+		select {
+		case event = <-events:
+		case closeErr := <-voiceCloseDone:
+			voiceCloseDone = nil
+			if pendingDone == nil {
+				continue
+			}
+			if closeErr != nil && !errors.Is(closeErr, context.Canceled) && !errors.Is(closeErr, context.DeadlineExceeded) {
+				_ = writeAppChatSSE(w, flusher, "voice_error", voiceBroadcastErrorPayload{ReplyID: voiceReplyID, Code: "synthesis_failed"})
+			}
+			if pendingDone.err != nil {
+				_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成失败，请重试"})
+			} else {
+				_ = writeAppChatSSE(w, flusher, "done", pendingDone.result)
+			}
+			return
+		case <-ctx.Done():
+			if voiceStream != nil {
+				voiceStream.Cancel()
+			}
+			return
+		}
+		switch event.kind {
+		case skillStreamDelta:
+			if event.delta == "" {
+				continue
+			}
+			if err := writeAppChatSSE(w, flusher, "delta", map[string]string{"content": event.delta}); err != nil {
+				if voiceStream != nil {
+					voiceStream.Cancel()
+				}
+				cancel()
+				return
+			}
+			if voiceStream != nil {
+				_ = voiceStream.Push(event.delta)
+			}
+		case skillStreamVoice:
+			if event.voice != nil {
+				if err := writeAppChatSSE(w, flusher, "voice", event.voice.ssePayload()); err != nil {
+					if voiceStream != nil {
+						voiceStream.Cancel()
+					}
+					cancel()
+					return
+				}
+			}
+		case skillStreamVoiceError:
+			if event.voiceError != nil {
+				_ = writeAppChatSSE(w, flusher, "voice_error", event.voiceError)
+			}
+		case skillStreamDone:
+			if voiceStream != nil {
+				stream := voiceStream
+				voiceStream = nil
+				pending := event
+				pendingDone = &pending
+				done := make(chan error, 1)
+				voiceCloseDone = done
+				go func() { done <- stream.Close() }()
+				continue
+			}
+			if event.err != nil {
+				_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成失败，请重试"})
+			} else {
+				_ = writeAppChatSSE(w, flusher, "done", event.result)
+			}
+			return
+		}
+	}
+}
+
+type skillStreamEventKind uint8
+
+const (
+	skillStreamDelta skillStreamEventKind = iota + 1
+	skillStreamVoice
+	skillStreamVoiceError
+	skillStreamDone
+)
+
+type skillStreamEvent struct {
+	kind       skillStreamEventKind
+	delta      string
+	voice      *voiceBroadcastSegment
+	voiceError *voiceBroadcastErrorPayload
+	result     skillchat.Result
+	err        error
 }
 
 var _ rag.StreamingGenerator = skillChatRuntimeGenerator{}
