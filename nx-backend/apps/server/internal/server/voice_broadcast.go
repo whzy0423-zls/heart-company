@@ -291,9 +291,6 @@ func (s *Server) newVoiceBroadcastSynthesizer(ctx context.Context) (voiceBroadca
 		GroupID: cfg.GroupID, Model: cfg.Model, Voice: cfg.Voice,
 		Format: cfg.Format, Instruction: cfg.Instruction,
 	}
-	provider, err := (xinzhili.TTSProviderFactory{Slots: s.globalTTSSlots(), Metrics: s.metrics}).New(ttsCfg)
-	if err != nil {
-		return nil, err
-	}
+	provider := (xinzhili.TTSProviderFactory{Slots: s.globalTTSSlots(), Metrics: s.metrics}).Dynamic()
 	return voiceBroadcastProviderAdapter{provider: provider, cfg: ttsCfg}, nil
 }
