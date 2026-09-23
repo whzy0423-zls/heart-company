@@ -268,11 +268,13 @@ async function render() {
       ctx.fillText('二维码待配置', qrX.value + size / 2, qrY.value + size / 2);
       ctx.textAlign = 'start';
     }
-    if (showInviteCode) {
+    const inviteText = inviteCode.value.trim();
+    // 空邀请码不绘制占位文案，导出的海报应保持该区域完全干净。
+    if (showInviteCode && inviteText) {
       ctx.fillStyle = '#111827';
       ctx.textBaseline = 'top';
       ctx.font = '700 ' + inviteFontSize.value + 'px sans-serif';
-      text(ctx, inviteCode.value.trim() || '邀请码', inviteX.value, inviteY.value + 6, inviteWidth.value);
+      text(ctx, inviteText, inviteX.value, inviteY.value + 6, inviteWidth.value);
     }
     if (disposed || version !== renderVersion) return;
     visible.width = 720 * EXPORT_SCALE; visible.height = 1280 * EXPORT_SCALE;

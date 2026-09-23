@@ -71,6 +71,15 @@ describe('central poster configuration', () => {
     expect(download).toHaveBeenCalledOnce();
     wrapper.unmount();
   });
+  it('does not draw the invitation placeholder when the invitation is empty', async () => {
+    state.codes = ['Customer:App:List', 'Customer:App:Write'];
+    const fillText = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn(), fillRect: vi.fn(), fillText, beginPath: vi.fn(), roundRect: vi.fn(), fill: vi.fn(), scale: vi.fn(), setLineDash: vi.fn(), strokeRect: vi.fn() } as any);
+    const wrapper = mount(true, '');
+    await settle();
+    expect(fillText.mock.calls.some(([value]) => value === '邀请码')).toBe(false);
+    wrapper.unmount();
+  });
   it('official QR URL remains the source even when a legacy image exists', async () => {
     state.get.mockResolvedValue({ ...config, qrImageUrl: '/api/upload-assets/2' });
     const wrapper = mount(); await settle();
