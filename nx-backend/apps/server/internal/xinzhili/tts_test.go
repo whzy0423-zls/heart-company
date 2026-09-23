@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"reflect"
 	"strings"
 	"sync"
@@ -353,6 +355,82 @@ func TestBailianQwenTTSParsesOfficialNestedAudioData(t *testing.T) {
 	}
 	if string(audio) != string(testMP3()) || mime != "audio/mpeg" {
 		t.Fatalf("audio/mime mismatch")
+	}
+}
+
+func TestBailianQwenWAVHasSilentLeadInBeforeMP3Playback(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("WAV normalization requires ffmpeg")
+	}
+	const sampleRate = 24000
+	const signalSamples = sampleRate / 4
+	pcm := make([]byte, signalSamples*2)
+	for i := 0; i < signalSamples; i++ {
+		value := int16(12000)
+		if i%24 >= 12 {
+			value = -value
+		}
+		binary.LittleEndian.PutUint16(pcm[2*i:], uint16(value))
+	}
+	wav := make([]byte, 44+len(pcm))
+	copy(wav[:4], "RIFF")
+	binary.LittleEndian.PutUint32(wav[4:8], uint32(len(wav)-8))
+	copy(wav[8:12], "WAVE")
+	copy(wav[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(wav[16:20], 16)
+	binary.LittleEndian.PutUint16(wav[20:22], 1)
+	binary.LittleEndian.PutUint16(wav[22:24], 1)
+	binary.LittleEndian.PutUint32(wav[24:28], sampleRate)
+	binary.LittleEndian.PutUint32(wav[28:32], sampleRate*2)
+	binary.LittleEndian.PutUint16(wav[32:34], 2)
+	binary.LittleEndian.PutUint16(wav[34:36], 16)
+	copy(wav[36:40], "data")
+	binary.LittleEndian.PutUint32(wav[40:44], uint32(len(pcm)))
+	copy(wav[44:], pcm)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": map[string]any{"audio": base64.StdEncoding.EncodeToString(wav)},
+		})
+	}))
+	defer server.Close()
+	cfg := TTSConfig{Provider: TTSProviderBailian, Endpoint: server.URL, APIKey: "key", Model: "qwen3-tts-vc-2026-01-22", Voice: "cloned-voice"}
+	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio, mimeType, err := provider.Synthesize(context.Background(), cfg, "你好。")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mimeType != "audio/mpeg" || !validMP3(audio) {
+		t.Fatalf("mime=%q validMP3=%v", mimeType, validMP3(audio))
+	}
+	decode := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "24000", "pipe:1")
+	decode.Stdin = bytes.NewReader(audio)
+	decoded, err := decode.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	peak := func(startMs, endMs int) int {
+		peakValue := 0
+		for i := startMs * sampleRate / 1000; i < endMs*sampleRate/1000 && 2*i+1 < len(decoded); i++ {
+			value := int(int16(binary.LittleEndian.Uint16(decoded[2*i:])))
+			if value < 0 {
+				value = -value
+			}
+			if value > peakValue {
+				peakValue = value
+			}
+		}
+		return peakValue
+	}
+	if got := peak(0, 80); got > 100 {
+		t.Fatalf("first 80ms should be silent, peak=%d", got)
+	}
+	if got := peak(150, 200); got < 1000 {
+		t.Fatalf("speech after 120ms lead-in missing, peak=%d", got)
 	}
 }
 

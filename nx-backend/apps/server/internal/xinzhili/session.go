@@ -1429,9 +1429,10 @@ func isExplicitXinzhiliRealtimeEnglishRequest(transcript string) bool {
 }
 
 const (
-	firstTTSChunkMinRunes  = 28
-	firstTTSChunkMaxRunes  = 72
-	streamTTSChunkMaxRunes = maxTTSSentenceRunes
+	firstTTSStrongEndMinRunes = 5
+	firstTTSChunkMinRunes     = 28
+	firstTTSChunkMaxRunes     = 72
+	streamTTSChunkMaxRunes    = maxTTSSentenceRunes
 )
 
 const DefaultVoiceResponseDirective = "这是语音对话：请使用自然、温柔、亲切的口语短句，根据完整语义使用中文标点安排轻重和停顿；避免播音腔、书面腔、编号罗列和过长句子，情绪表达要真实、克制。"
@@ -1458,13 +1459,17 @@ func (c *streamSentenceChunker) take(flush bool) []string {
 		}
 		limit := min(len(c.buffer), chunkLimit)
 		minRunes := firstTTSChunkMinRunes
+		strongEndMinRunes := minRunes
+		if !c.emitted {
+			strongEndMinRunes = firstTTSStrongEndMinRunes
+		}
 		for index := 0; index < limit; index++ {
 			if isStrongSentenceEndAt(c.buffer, index) {
 				candidate := index + 1
 				for candidate < limit && isClosingQuote(c.buffer[candidate]) {
 					candidate++
 				}
-				if candidate >= minRunes || flush {
+				if candidate >= strongEndMinRunes || flush {
 					cut = candidate
 					break
 				}

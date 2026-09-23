@@ -102,15 +102,21 @@ func TestStreamSentenceChunkerPrioritizesPlayableFirstChunk(t *testing.T) {
 		}
 	})
 
-	t.Run("tiny strong first sentence waits for a playable phrase", func(t *testing.T) {
+	t.Run("short complete first sentence starts synthesis immediately", func(t *testing.T) {
+		var chunker streamSentenceChunker
+		want := "我在这里。"
+		if got := chunker.Push(want); !slices.Equal(got, []string{want}) {
+			t.Fatalf("chunks=%q want immediate first sentence %q", got, []string{want})
+		}
+	})
+
+	t.Run("tiny strong first sentence still waits for a playable phrase", func(t *testing.T) {
 		var chunker streamSentenceChunker
 		if got := chunker.Push("你好。"); len(got) != 0 {
-			t.Fatalf("tiny strong sentence emitted choppy chunk=%q", got)
+			t.Fatalf("tiny first sentence emitted=%q", got)
 		}
-		next := "我还在认真听你说完，这样第一段声音不会太碎一点点，"
-		want := "你好。" + next
-		if got := chunker.Push(next); !slices.Equal(got, []string{want}) {
-			t.Fatalf("chunks=%q want %q", got, []string{want})
+		if got := chunker.Push("我在这里。"); !slices.Equal(got, []string{"你好。我在这里。"}) {
+			t.Fatalf("combined first sentence=%q", got)
 		}
 	})
 
@@ -261,6 +267,42 @@ func TestSessionGenerationAddsNaturalVoiceResponseDirective(t *testing.T) {
 	if !slices.Contains(directives, DefaultVoiceResponseDirective) {
 		t.Fatalf("current directives=%q want natural voice directive", directives)
 	}
+}
+
+func TestSessionStartsFirstShortSentenceAudioBeforeGenerationCompletes(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.generator.answer = "我在这里。你可以慢慢说。"
+	fixture.generator.deltas = []string{"我在这里。", "你可以慢慢说。"}
+	fixture.generator.pauseAfter = 1
+	fixture.generator.paused = make(chan struct{})
+	fixture.generator.resume = make(chan struct{})
+	fixture.synth.segments = nil
+	var resumeOnce sync.Once
+	releaseGenerator := func() { resumeOnce.Do(func() { close(fixture.generator.resume) }) }
+	t.Cleanup(releaseGenerator)
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-short-first-sentence")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "你在听吗", Stable: true})
+	select {
+	case <-fixture.generator.paused:
+	case <-time.After(time.Second):
+		t.Fatal("generator did not pause after first sentence")
+	}
+	first := fixture.sink.waitAudio(t)
+	if first.DeliveryText() != "我在这里。" {
+		t.Fatalf("first audio text=%q", first.DeliveryText())
+	}
+	releaseGenerator()
+	if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: "turn-short-first-sentence", SegmentSeq: first.Seq}); err != nil {
+		t.Fatal(err)
+	}
+	second := fixture.sink.waitAudio(t)
+	if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: "turn-short-first-sentence", SegmentSeq: second.Seq}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.store.waitCompleted(t)
 }
 
 func TestSpeechStartedEmitsASRActivity(t *testing.T) {
@@ -1021,8 +1063,9 @@ func TestGenerationLoadsContextInParallelExceptOrderedRetrieval(t *testing.T) {
 func TestDeliveryCreatesAssistantAfterFirstAudioAndAcknowledgesExactPrefixes(t *testing.T) {
 	fixture := newSessionFixture(t)
 	const turnKey uint64 = 42
+	fixture.generator.answer = "先慢慢呼吸。再感受脚底。"
 	fixture.synth.segments = []AudioSegment{
-		{Seq: 0, Audio: []byte{1}, MIME: "audio/mpeg", deliveryText: "先呼吸。"},
+		{Seq: 0, Audio: []byte{1}, MIME: "audio/mpeg", deliveryText: "先慢慢呼吸。"},
 		{Seq: 1, Audio: []byte{2}, MIME: "audio/mpeg", deliveryText: "再感受脚底。"},
 	}
 	input := fixture.input("turn-delivery")
@@ -1043,7 +1086,7 @@ func TestDeliveryCreatesAssistantAfterFirstAudioAndAcknowledgesExactPrefixes(t *
 	if err := fixture.session.HandlePlaybackAck(context.Background(), PlaybackAck{TurnID: "turn-delivery", SegmentSeq: 1}); err != nil {
 		t.Fatal(err)
 	}
-	fixture.store.waitDelivered(t, "先呼吸。再感受脚底。")
+	fixture.store.waitDelivered(t, "先慢慢呼吸。再感受脚底。")
 	fixture.store.waitCompleted(t)
 	fixture.store.waitCompleteAck(t)
 }
@@ -1115,8 +1158,9 @@ func TestDeliverySignalsAssistantDoneAfterFinalAudioSegment(t *testing.T) {
 
 func TestDeliveryOrdersMultipleAudioSegmentsBeforeAssistantDone(t *testing.T) {
 	fixture := newSessionFixture(t)
+	fixture.generator.answer = "先慢慢呼吸。再感受脚底。"
 	fixture.synth.segments = []AudioSegment{
-		{Seq: 0, Audio: []byte{1}, MIME: "audio/mpeg", deliveryText: "先呼吸。"},
+		{Seq: 0, Audio: []byte{1}, MIME: "audio/mpeg", deliveryText: "先慢慢呼吸。"},
 		{Seq: 1, Audio: []byte{2}, MIME: "audio/mpeg", deliveryText: "再感受脚底。"},
 	}
 	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-multi-segment")); err != nil {
@@ -1355,9 +1399,9 @@ func TestSessionLogsTTSFailureWithoutUserContent(t *testing.T) {
 
 func TestDeliveryCompletesAuditWhenLaterTTSChunkFails(t *testing.T) {
 	fixture := newSessionFixture(t)
-	fixture.generator.answer = "第一段。第二段。"
+	fixture.generator.answer = "先听第一段。再听第二段。"
 	fixture.knowledge.docs = []rag.Document{{ID: "knowledge:audit", Title: "审计来源", Content: "支持回答的内容"}}
-	fixture.synth.failText = "第二段。"
+	fixture.synth.failText = "再听第二段。"
 	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-tts-fail")); err != nil {
 		t.Fatal(err)
 	}
@@ -1392,7 +1436,7 @@ func TestDeliveryCompletesAuditWhenLaterTTSChunkFails(t *testing.T) {
 	content, delivered := fixture.store.completedContent, fixture.store.delivered[len(fixture.store.delivered)-1]
 	sources := append(json.RawMessage(nil), fixture.store.sources...)
 	fixture.store.mu.Unlock()
-	if content != "第一段。第二段。" || delivered != "第一段。" || !strings.Contains(string(sources), "knowledge:audit") {
+	if content != "先听第一段。再听第二段。" || delivered != "先听第一段。" || !strings.Contains(string(sources), "knowledge:audit") {
 		t.Fatalf("content=%q delivered=%q sources=%s", content, delivered, sources)
 	}
 }

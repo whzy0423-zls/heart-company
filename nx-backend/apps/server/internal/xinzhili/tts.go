@@ -13,6 +13,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +34,7 @@ const (
 	defaultTTSTimeout   = 15 * time.Second
 	ttsRetryDelay       = 120 * time.Millisecond
 	bailianTTSPath      = "/api/v1/services/aigc/multimodal-generation/generation"
+	ttsWAVLeadInMS      = 120
 )
 
 const DefaultCompanionTTSInstruction = "像真实的陪伴者一样自然、亲切地说话，根据语义自动调整情绪、轻重和停顿，避免播音腔；除非原文明确要求，不要切换成外语。"
@@ -305,7 +307,7 @@ func (p *bailianHostedMiniMaxTTS) Synthesize(ctx context.Context, cfg TTSConfig,
 	if err != nil {
 		return nil, "", err
 	}
-	audio, _, err = voice.NormalizeTTSMP3(ctx, audio, "", maxTTSSegmentBytes)
+	audio, err = normalizeXinzhiliTTSMP3(ctx, audio)
 	if err != nil {
 		return nil, "", err
 	}
@@ -319,6 +321,37 @@ func (p *bailianHostedMiniMaxTTS) Synthesize(ctx context.Context, cfg TTSConfig,
 		return nil, "", errors.New("TTS 返回的音频格式无效")
 	}
 	return audio, "audio/mpeg", nil
+}
+
+func normalizeXinzhiliTTSMP3(ctx context.Context, audio []byte) ([]byte, error) {
+	if len(audio) < 12 || string(audio[:4]) != "RIFF" || string(audio[8:12]) != "WAVE" {
+		mp3, _, err := voice.NormalizeTTSMP3(ctx, audio, "", maxTTSSegmentBytes)
+		return mp3, err
+	}
+
+	// The first PCM sample from Qwen can contain speech. Keep audio focus and
+	// decoder startup from consuming that sample without a second conversion.
+	command := exec.CommandContext(ctx,
+		"ffmpeg", "-hide_banner", "-loglevel", "error",
+		"-i", "pipe:0", "-vn", "-af", fmt.Sprintf("adelay=%d:all=1", ttsWAVLeadInMS),
+		"-codec:a", "libmp3lame", "-b:a", "128k", "-f", "mp3", "pipe:1",
+	)
+	command.Stdin = bytes.NewReader(audio)
+	var output bytes.Buffer
+	command.Stdout = &output
+	if err := command.Run(); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if errors.Is(err, exec.ErrNotFound) {
+			return nil, errors.New("Qwen 音频转换需要服务端安装 ffmpeg")
+		}
+		return nil, errors.New("Qwen 音频转换失败")
+	}
+	if output.Len() == 0 || output.Len() > maxTTSSegmentBytes {
+		return nil, errors.New("Qwen 音频转换结果大小无效")
+	}
+	return output.Bytes(), nil
 }
 
 func isBailianHostedMiniMaxTTSModel(model string) bool {
