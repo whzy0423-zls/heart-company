@@ -633,6 +633,12 @@ func buildSuggestions(input AskInput) []string {
 	if mainType == 0 {
 		return nil
 	}
+	if presetFocus := mainChatPresetFocus(input.Question); presetFocus != "" {
+		// These exact strings are app-owned entry prompts, not requests about
+		// a numbered type. Handle them before the broader type guard so “九型”
+		// is not mistaken for type 9 when the current card has another type.
+		return buildPresetSuggestions(mainType, presetFocus)
+	}
 	focus := recentEnneagramFocus(input, mainType)
 	if focus == "" {
 		return nil
@@ -643,6 +649,55 @@ func buildSuggestions(input AskInput) []string {
 		fmt.Sprintf("从%s的核心动机看，“%s”背后最在意什么？", typeLabel, focus),
 		fmt.Sprintf("%s遇到“%s”时，惯性反应和压力点是什么？", typeLabel, focus),
 		fmt.Sprintf("围绕“%s”，%s可以先做什么成长练习？", focus, typeLabel),
+	}
+}
+
+func buildPresetSuggestions(mainType int, focus string) []string {
+	typeLabel := fmt.Sprintf("%d号%s", mainType, enneagramTypeName(mainType))
+	switch focus {
+	case "九型人格":
+		return []string{
+			fmt.Sprintf("%s了解九型人格后，最值得先观察自己的哪种反应？", typeLabel),
+			fmt.Sprintf("九型人格的核心动机，和%s的日常选择有什么关系？", typeLabel),
+			fmt.Sprintf("%s可以从哪项成长练习开始认识九型人格？", typeLabel),
+		}
+	case "核心性格模式":
+		return []string{
+			fmt.Sprintf("%s的核心性格模式，通常会在什么场景中出现？", typeLabel),
+			fmt.Sprintf("%s如何区分自己的真实需要和惯性反应？", typeLabel),
+			fmt.Sprintf("%s可以从哪项练习开始观察核心性格模式？", typeLabel),
+		}
+	case "人际关系":
+		return []string{
+			fmt.Sprintf("%s在人际关系中最容易忽略哪种需要？", typeLabel),
+			fmt.Sprintf("%s如何在关系里表达自己的真实感受？", typeLabel),
+			fmt.Sprintf("%s可以先做什么练习，让关系沟通更自在？", typeLabel),
+		}
+	case "成长练习":
+		return []string{
+			fmt.Sprintf("%s当前最值得优先练习的成长方向是什么？", typeLabel),
+			fmt.Sprintf("%s如何把一次成长练习落实到今天？", typeLabel),
+			fmt.Sprintf("什么信号能提醒%s回到自己的成长练习？", typeLabel),
+		}
+	default:
+		return nil
+	}
+}
+
+func mainChatPresetFocus(question string) string {
+	normalized := strings.Join(strings.Fields(strings.TrimSpace(question)), "")
+	normalized = strings.Trim(normalized, "，。！？；：,.!?;: \t\n\r")
+	switch normalized {
+	case "什么是九型人格", "九型人格是什么":
+		return "九型人格"
+	case "我的核心性格模式是什么":
+		return "核心性格模式"
+	case "我在人际关系中容易忽略什么":
+		return "人际关系"
+	case "我现在最适合做什么成长练习":
+		return "成长练习"
+	default:
+		return ""
 	}
 }
 

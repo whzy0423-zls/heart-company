@@ -116,6 +116,66 @@ func TestAskSuggestionsStayOnCurrentCardTypeAndRecentFocus(t *testing.T) {
 	}
 }
 
+func TestMainChatPresetQuestionsProduceFreshFollowUps(t *testing.T) {
+	questions := []string{
+		"什么是九型人格？",
+		"我的核心性格模式是什么？",
+		"我在人际关系中容易忽略什么？",
+		"我现在最适合做什么成长练习？",
+	}
+	for _, mainType := range []int{1, 9} {
+		for _, question := range questions {
+			t.Run(fmt.Sprintf("type-%d/%s", mainType, question), func(t *testing.T) {
+				suggestions := buildSuggestions(AskInput{
+					Question:         question,
+					ConversationCard: ConversationCard{MainType: mainType},
+				})
+				if len(suggestions) != 3 {
+					t.Fatalf("suggestions = %+v, want 3", suggestions)
+				}
+				for _, suggestion := range suggestions {
+					if suggestion == question {
+						t.Fatalf("suggestion repeated the selected preset: %q", suggestion)
+					}
+					typeLabel := fmt.Sprintf("%d号%s", mainType, enneagramTypeName(mainType))
+					if !strings.Contains(suggestion, typeLabel) {
+						t.Fatalf("suggestion lost the current card type: %q", suggestion)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestMainChatPresetBroadNineTypeQuestionWorksForEveryCardType(t *testing.T) {
+	for mainType := 1; mainType <= 9; mainType++ {
+		t.Run(fmt.Sprintf("mainType_%d", mainType), func(t *testing.T) {
+			suggestions := buildSuggestions(AskInput{
+				Question:         "什么是九型人格？",
+				ConversationCard: ConversationCard{MainType: mainType},
+			})
+			if len(suggestions) != 3 {
+				t.Fatalf("suggestions = %+v, want 3 for card type %d", suggestions, mainType)
+			}
+			for _, suggestion := range suggestions {
+				if !strings.Contains(suggestion, fmt.Sprintf("%d号", mainType)) {
+					t.Fatalf("suggestion %q lost current card type %d", suggestion, mainType)
+				}
+			}
+		})
+	}
+}
+
+func TestMainChatPresetFocusDoesNotBypassOtherTypeGuard(t *testing.T) {
+	suggestions := buildSuggestions(AskInput{
+		Question:         "我在人际关系中容易忽略什么？6号",
+		ConversationCard: ConversationCard{MainType: 9},
+	})
+	if len(suggestions) != 0 {
+		t.Fatalf("preset-like question with another explicit type produced suggestions: %+v", suggestions)
+	}
+}
+
 func TestAskSuggestionsUseRecentRelevantHistoryForShortContinuation(t *testing.T) {
 	service := NewService(nil, WithGenerator(&fakeGenerator{answer: "可以继续往下看。"}))
 
