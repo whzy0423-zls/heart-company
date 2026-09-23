@@ -261,11 +261,34 @@ func TestVoiceBroadcastStreamOrdersSegmentsAndFlushesFinalText(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].SegmentSeq != 0 || got[1].SegmentSeq != 1 || !got[1].Final {
+	if len(got) != 3 || got[0].SegmentSeq != 0 || got[1].SegmentSeq != 1 || got[1].Final ||
+		got[2].SegmentSeq != 2 || !got[2].Final || len(got[2].Audio) != 0 {
 		t.Fatalf("segments = %+v", got)
 	}
 	if got[0].ReplyID != "reply-1" || string(got[0].Audio) != "这是第一句内容，需要播报。" {
 		t.Fatalf("first segment = %+v", got[0])
+	}
+}
+
+func TestVoiceBroadcastStreamEmitsCompletedSegmentBeforeClose(t *testing.T) {
+	emitted := make(chan voiceBroadcastSegment, 1)
+	stream := newVoiceBroadcastStream(context.Background(), "reply-live", recordingVoiceBroadcastProvider{}, func(segment voiceBroadcastSegment) error {
+		emitted <- segment
+		return nil
+	})
+	if err := stream.Push("完整短句应当立即播报。"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case segment := <-emitted:
+		if segment.SegmentSeq != 0 || segment.Final || string(segment.Audio) != "完整短句应当立即播报。" {
+			t.Fatalf("first segment = %+v", segment)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("completed segment was held until stream close")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

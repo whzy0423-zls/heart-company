@@ -216,8 +216,8 @@ func (s *voiceBroadcastStream) enqueue(chunks []string) error {
 	return nil
 }
 
-// Close flushes the final unterminated sentence and marks the last emitted
-// segment with final=true. It is safe to call more than once.
+// Close flushes the final unterminated sentence and emits an empty final
+// marker after every synthesized segment. It is safe to call more than once.
 func (s *voiceBroadcastStream) Close() error {
 	if s == nil {
 		return nil
@@ -288,7 +288,6 @@ func (s *voiceBroadcastStream) detachEmit() {
 
 func (s *voiceBroadcastStream) run(ctx context.Context) {
 	defer close(s.done)
-	var pending *voiceBroadcastSegment
 	var sequence uint32
 	for {
 		select {
@@ -296,9 +295,10 @@ func (s *voiceBroadcastStream) run(ctx context.Context) {
 			return
 		case text, ok := <-s.jobs:
 			if !ok {
-				if pending != nil && ctx.Err() == nil {
-					pending.Final = true
-					if err := s.emitSegment(*pending); err != nil {
+				if ctx.Err() == nil {
+					if err := s.emitSegment(voiceBroadcastSegment{
+						ReplyID: s.replyID, SegmentSeq: sequence, MIME: "audio/mpeg", Final: true,
+					}); err != nil {
 						s.recordError(err)
 					}
 				}
@@ -324,14 +324,11 @@ func (s *voiceBroadcastStream) run(ctx context.Context) {
 			}
 			segment := voiceBroadcastSegment{ReplyID: s.replyID, SegmentSeq: sequence, MIME: mimeType, Audio: append([]byte(nil), audio...), Text: text}
 			sequence++
-			if pending != nil {
-				if err := s.emitSegment(*pending); err != nil {
-					s.recordError(err)
-					s.cancel()
-					return
-				}
+			if err := s.emitSegment(segment); err != nil {
+				s.recordError(err)
+				s.cancel()
+				return
 			}
-			pending = &segment
 		}
 	}
 }
