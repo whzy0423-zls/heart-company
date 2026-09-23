@@ -18,6 +18,9 @@ export interface PosterTemplate {
   inviteY: number;
   inviteWidth: number;
   inviteFontSize: number;
+  showQrCode: boolean;
+  showInviteCode: boolean;
+  distributionStatus: 'draft' | 'published' | 'dispatched';
 }
 
 export interface PosterConfig extends PosterTemplate {
@@ -26,3 +29,4 @@ export interface PosterConfig extends PosterTemplate {
 
 export const getPosterConfigApi = () => requestClient.get<PosterConfig>('/distribution-poster-config');
 export const savePosterConfigApi = (data: PosterConfig) => requestClient.put<PosterConfig>('/distribution-poster-config', data);
+export const updatePosterTemplateStatusApi = (id: string, action: 'publish' | 'dispatch' | 'withdraw') => requestClient.post<PosterConfig>(`/distribution-poster-config/templates/${encodeURIComponent(id)}/${action}`, {});

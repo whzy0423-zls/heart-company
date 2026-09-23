@@ -47,6 +47,9 @@ type posterTemplate struct {
 	InviteY        int    `json:"inviteY"`
 	InviteWidth    int    `json:"inviteWidth"`
 	InviteFontSize int    `json:"inviteFontSize"`
+	ShowQRCode     bool   `json:"showQrCode"`
+	ShowInviteCode bool   `json:"showInviteCode"`
+	Status         string `json:"distributionStatus"`
 }
 
 type posterConfig struct {
@@ -61,7 +64,7 @@ func defaultPosterConfig() posterConfig {
 }
 
 func defaultPosterTemplate() posterTemplate {
-	return posterTemplate{ID: "default", Name: "默认海报", Enabled: true, SortOrder: 0, LandingURL: defaultPosterLandingURL, QRSize: 176, QRX: 62, QRY: 1010, InviteX: 286, InviteY: 1100, InviteWidth: 350, InviteFontSize: 26}
+	return posterTemplate{ID: "default", Name: "默认海报", Enabled: true, SortOrder: 0, LandingURL: defaultPosterLandingURL, QRSize: 176, QRX: 62, QRY: 1010, InviteX: 286, InviteY: 1100, InviteWidth: 350, InviteFontSize: 26, ShowQRCode: true, ShowInviteCode: true, Status: "dispatched"}
 }
 
 func normalizePosterConfig(cfg posterConfig) posterConfig {
@@ -99,6 +102,15 @@ func normalizePosterConfig(cfg posterConfig) posterConfig {
 		}
 		if cfg.Templates[i].Name == "" {
 			cfg.Templates[i].Name = fmt.Sprintf("海报模板 %d", i+1)
+		}
+		if cfg.Templates[i].Status == "" {
+			// Legacy configs predate visibility flags and therefore decode both
+			// booleans as false. Keep their published appearance unchanged.
+			if !cfg.Templates[i].ShowQRCode && !cfg.Templates[i].ShowInviteCode {
+				cfg.Templates[i].ShowQRCode = true
+				cfg.Templates[i].ShowInviteCode = true
+			}
+			cfg.Templates[i].Status = "dispatched"
 		}
 	}
 	sort.SliceStable(cfg.Templates, func(i, j int) bool { return cfg.Templates[i].SortOrder < cfg.Templates[j].SortOrder })
@@ -172,7 +184,7 @@ func activePosterTemplates(cfg posterConfig) []posterTemplate {
 	cfg = normalizePosterConfig(cfg)
 	items := make([]posterTemplate, 0, len(cfg.Templates))
 	for _, template := range cfg.Templates {
-		if template.Enabled {
+		if template.Enabled && strings.EqualFold(template.Status, "dispatched") {
 			items = append(items, template)
 		}
 	}
@@ -336,6 +348,53 @@ func (s *Server) distributionPosterConfig(w http.ResponseWriter, r *http.Request
 	_, err := s.db.ExecContext(r.Context(), `INSERT INTO site_configs (key,config,update_time) VALUES ($1,$2::jsonb,now()) ON CONFLICT (key) DO UPDATE SET config=EXCLUDED.config,update_time=now()`, distributionPosterKey, string(raw))
 	if err != nil {
 		httpx.Fail(w, 500, "保存海报配置失败")
+		return
+	}
+	httpx.OK(w, cfg)
+}
+
+// distributionPosterTemplateAction changes visibility without requiring the
+// admin client to round-trip the whole canvas configuration.
+func (s *Server) distributionPosterTemplateAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.db == nil {
+		httpx.Fail(w, 503, "海报配置存储暂不可用")
+		return
+	}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/distribution-poster-config/templates/"), "/")
+	if len(parts) != 2 || parts[0] == "" {
+		httpx.Fail(w, 400, "海报模板路径错误")
+		return
+	}
+	status := map[string]string{"publish": "published", "dispatch": "dispatched", "withdraw": "draft"}[parts[1]]
+	if status == "" {
+		httpx.Fail(w, 400, "不支持的海报模板操作")
+		return
+	}
+	cfg, err := s.readDistributionPosterConfig(r.Context())
+	if err != nil {
+		httpx.Fail(w, 500, "读取海报配置失败")
+		return
+	}
+	found := false
+	for i := range cfg.Templates {
+		if cfg.Templates[i].ID == parts[0] {
+			cfg.Templates[i].Status = status
+			found = true
+			break
+		}
+	}
+	if !found {
+		httpx.Fail(w, 404, "海报模板不存在")
+		return
+	}
+	cfg = normalizePosterConfig(cfg)
+	raw, _ := json.Marshal(cfg)
+	if _, err := s.db.ExecContext(r.Context(), `INSERT INTO site_configs (key,config,update_time) VALUES ($1,$2::jsonb,now()) ON CONFLICT (key) DO UPDATE SET config=EXCLUDED.config,update_time=now()`, distributionPosterKey, string(raw)); err != nil {
+		httpx.Fail(w, 500, "保存海报状态失败")
 		return
 	}
 	httpx.OK(w, cfg)

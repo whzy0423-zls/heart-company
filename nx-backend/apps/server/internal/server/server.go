@@ -980,6 +980,7 @@ func (s *Server) routes() {
 		}
 		s.requirePermission("Customer:App:Write", s.distributionPosterConfig)(w, r)
 	})
+	s.mux.HandleFunc("/api/distribution-poster-config/templates/", s.requirePermission("Customer:App:Write", s.distributionPosterTemplateAction))
 
 	// 对话模型连通性测试：对 MiniMax 网关做一次轻量探活，需登录。
 	s.mux.HandleFunc("/api/model-config/test-chat", s.requirePermission("System:Model:Config", s.method(http.MethodPost, s.testChatModel)))

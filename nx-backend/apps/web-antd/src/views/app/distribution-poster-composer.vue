@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAccessStore } from '@vben/stores';
 import { Alert, Button, Card, Form, Input, InputNumber, Slider, Space, Typography, Upload, message } from 'ant-design-vue';
 import QRCode from 'qrcode';
-import { getPosterConfigApi, savePosterConfigApi, type PosterTemplate } from '#/api/core/distribution-poster';
+import { getPosterConfigApi, savePosterConfigApi, updatePosterTemplateStatusApi, type PosterTemplate } from '#/api/core/distribution-poster';
 import { uploadFileApi } from '#/api/core/upload';
 import { createUploadAssetObjectURL } from '#/utils/upload-asset-preview';
 
@@ -27,7 +27,11 @@ const inviteX = ref(286);
 const inviteY = ref(1100);
 const inviteWidth = ref(350);
 const inviteFontSize = ref(26);
+const showQrCode = ref(true);
+const showInviteCode = ref(true);
+const distributionStatus = ref<PosterTemplate['distributionStatus']>('dispatched');
 const MIN_QR_SIZE = 100;
+const EXPORT_SCALE = 3;
 const previewRef = ref<HTMLDivElement>();
 let drag: { kind: 'qr' | 'invite'; pointer: number; x: number; y: number; clientX: number; clientY: number; width: number; height: number } | undefined;
 function boxStyle(kind: 'qr' | 'invite') {
@@ -92,7 +96,7 @@ const dynamicLandingUrl = computed(() => {
 });
 
 function templateSnapshot(): PosterTemplate {
-  return { id: selectedTemplateId.value || `poster-${Date.now()}`, name: templates.value.find(item => item.id === selectedTemplateId.value)?.name || '海报模板', enabled: templates.value.find(item => item.id === selectedTemplateId.value)?.enabled ?? true, sortOrder: templates.value.find(item => item.id === selectedTemplateId.value)?.sortOrder ?? templates.value.length, templateUrl: templateUrl.value, landingUrl: landingUrl.value.trim() || defaultLandingUrl, qrImageUrl: '', qrSize: qrSize.value, qrX: qrX.value, qrY: qrY.value, inviteX: inviteX.value, inviteY: inviteY.value, inviteWidth: inviteWidth.value, inviteFontSize: inviteFontSize.value };
+  return { id: selectedTemplateId.value || `poster-${Date.now()}`, name: templates.value.find(item => item.id === selectedTemplateId.value)?.name || '海报模板', enabled: templates.value.find(item => item.id === selectedTemplateId.value)?.enabled ?? true, sortOrder: templates.value.find(item => item.id === selectedTemplateId.value)?.sortOrder ?? templates.value.length, templateUrl: templateUrl.value, landingUrl: landingUrl.value.trim() || defaultLandingUrl, qrImageUrl: '', qrSize: qrSize.value, qrX: qrX.value, qrY: qrY.value, inviteX: inviteX.value, inviteY: inviteY.value, inviteWidth: inviteWidth.value, inviteFontSize: inviteFontSize.value, showQrCode: showQrCode.value, showInviteCode: showInviteCode.value, distributionStatus: distributionStatus.value };
 }
 
 function applyTemplate(template: PosterTemplate) {
@@ -103,6 +107,9 @@ function applyTemplate(template: PosterTemplate) {
   qrSize.value = Math.min(220, Math.max(MIN_QR_SIZE, template.qrSize || 176)); qrX.value = template.qrX ?? 62; qrY.value = template.qrY ?? 1010;
   inviteX.value = template.inviteX ?? 286; inviteY.value = template.inviteY ?? 1100;
   inviteWidth.value = template.inviteWidth ?? 350; inviteFontSize.value = template.inviteFontSize ?? 26;
+  showQrCode.value = template.showQrCode !== false;
+  showInviteCode.value = template.showInviteCode !== false;
+  distributionStatus.value = template.distributionStatus || 'dispatched';
 }
 
 function syncCurrentTemplate() {
@@ -118,7 +125,7 @@ function addTemplate(copy = false) {
   syncCurrentTemplate();
   const source = copy && templates.value.length ? templates.value.find(item => item.id === selectedTemplateId.value) || templates.value[0] : undefined;
   const id = `poster-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  const next: PosterTemplate = { ...(source || { templateUrl: '', landingUrl: defaultLandingUrl, qrImageUrl: '', qrSize: 176, qrX: 62, qrY: 1010, inviteX: 286, inviteY: 1100, inviteWidth: 350, inviteFontSize: 26 }), id, name: source ? `${source.name} 副本` : `海报模板 ${templates.value.length + 1}`, enabled: true, sortOrder: templates.value.length };
+  const next: PosterTemplate = { ...(source || { templateUrl: '', landingUrl: defaultLandingUrl, qrImageUrl: '', qrSize: 176, qrX: 62, qrY: 1010, inviteX: 286, inviteY: 1100, inviteWidth: 350, inviteFontSize: 26, showQrCode: true, showInviteCode: true, distributionStatus: 'draft' }), id, name: source ? `${source.name} 副本` : `海报模板 ${templates.value.length + 1}`, enabled: true, sortOrder: templates.value.length, distributionStatus: 'draft' };
   templates.value.push(next); applyTemplate(next);
 }
 
@@ -192,6 +199,20 @@ async function saveConfig() {
   finally { saving.value = false; }
 }
 
+async function updateStatus(action: 'publish' | 'dispatch' | 'withdraw') {
+  if (!canEdit.value || !selectedTemplateId.value || saving.value) return;
+  saving.value = true;
+  try {
+    syncCurrentTemplate();
+    await savePosterConfigApi({ ...templateSnapshot(), templates: templates.value });
+    await updatePosterTemplateStatusApi(selectedTemplateId.value, action);
+    distributionStatus.value = action === 'publish' ? 'published' : action === 'dispatch' ? 'dispatched' : 'draft';
+    syncCurrentTemplate();
+    message.success(action === 'dispatch' ? '模板已下发给代理' : action === 'withdraw' ? '模板已撤回，仅管理员可见' : '模板已发布，暂未下发');
+  } catch { message.error('模板状态更新失败，请重试'); }
+  finally { saving.value = false; }
+}
+
 function text(ctx: CanvasRenderingContext2D, value: string, x: number, y: number, maxWidth: number) {
   ctx.fillText(value, x, y, maxWidth);
 }
@@ -211,7 +232,7 @@ async function render() {
   let background: HTMLImageElement | undefined;
   try {
     background = await loadImage(templateUrl.value);
-    // Agents always receive a QR code for their own landing URL and invite code.
+    // The administrator can hide either overlay while retaining the source image.
     // A legacy uploaded QR image remains available only for administrator previews.
     let qrSource = '';
     if (!qrSource && dynamicLandingUrl.value.trim()) {
@@ -227,30 +248,33 @@ async function render() {
       image.src = qrSource;
     }) : qrImageUrl.value ? await loadImage(qrImageUrl.value) : undefined;
     const canvas = document.createElement('canvas');
-    canvas.width = 720; canvas.height = 1280;
+    canvas.width = 720 * EXPORT_SCALE; canvas.height = 1280 * EXPORT_SCALE;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('浏览器不支持海报绘制');
+    ctx.scale(EXPORT_SCALE, EXPORT_SCALE);
     const scale = Math.max(720 / background.naturalWidth, 1280 / background.naturalHeight);
     const w = background.naturalWidth * scale, h = background.naturalHeight * scale;
     ctx.drawImage(background, (720-w)/2, (1280-h)/2, w, h);
     const size = qrSize.value;
-    ctx.fillStyle = '#fff'; ctx.fillRect(qrX.value, qrY.value, size, size);
-    if (qr) {
+    if (showQrCode) ctx.fillStyle = '#fff'; if (showQrCode) ctx.fillRect(qrX.value, qrY.value, size, size);
+    if (showQrCode && qr) {
       const qrScale = Math.min(size / qr.naturalWidth, size / qr.naturalHeight);
       const qw = qr.naturalWidth * qrScale, qh = qr.naturalHeight * qrScale;
       ctx.drawImage(qr, qrX.value+(size-qw)/2, qrY.value+(size-qh)/2, qw, qh);
-    } else {
+    } else if (showQrCode) {
       ctx.strokeStyle = '#2563eb'; ctx.setLineDash([8, 6]); ctx.strokeRect(qrX.value, qrY.value, size, size); ctx.setLineDash([]);
       ctx.fillStyle = '#2563eb'; ctx.font = '600 16px sans-serif'; ctx.textAlign = 'center';
       ctx.fillText('二维码待配置', qrX.value + size / 2, qrY.value + size / 2);
       ctx.textAlign = 'start';
     }
-    ctx.fillStyle = '#111827';
-    ctx.textBaseline = 'top';
-    ctx.font = '700 ' + inviteFontSize.value + 'px sans-serif';
-    text(ctx, inviteCode.value.trim() || '邀请码', inviteX.value, inviteY.value + 6, inviteWidth.value);
+    if (showInviteCode) {
+      ctx.fillStyle = '#111827';
+      ctx.textBaseline = 'top';
+      ctx.font = '700 ' + inviteFontSize.value + 'px sans-serif';
+      text(ctx, inviteCode.value.trim() || '邀请码', inviteX.value, inviteY.value + 6, inviteWidth.value);
+    }
     if (disposed || version !== renderVersion) return;
-    visible.width = 720; visible.height = 1280;
+    visible.width = 720 * EXPORT_SCALE; visible.height = 1280 * EXPORT_SCALE;
     visible.getContext('2d')?.drawImage(canvas, 0, 0);
     ready.value = true;
   } catch (error) {
@@ -262,7 +286,8 @@ async function render() {
         if (ctx) {
           const scale = Math.max(720 / background.naturalWidth, 1280 / background.naturalHeight);
           const w = background.naturalWidth * scale, h = background.naturalHeight * scale;
-          canvasRef.value.width = 720; canvasRef.value.height = 1280;
+          canvasRef.value.width = 720 * EXPORT_SCALE; canvasRef.value.height = 1280 * EXPORT_SCALE;
+          ctx.scale(EXPORT_SCALE, EXPORT_SCALE);
           ctx.clearRect(0, 0, 720, 1280);
           ctx.drawImage(background, (720 - w) / 2, (1280 - h) / 2, w, h);
         }
@@ -272,7 +297,7 @@ async function render() {
 }
 
 function downloadPoster() {
-  if (!ready.value || rendering.value || !inviteCode.value.trim() || !canvasRef.value) return;
+  if (!ready.value || rendering.value || (showInviteCode.value && !inviteCode.value.trim()) || !canvasRef.value) return;
   try {
     const link = document.createElement('a');
     link.download = '芯之力-代理海报.png';
@@ -281,7 +306,7 @@ function downloadPoster() {
   } catch { message.error('海报导出失败，请重新加载图片'); }
 }
 
-watch([inviteCode, landingUrl, qrImageUrl, templateUrl, qrSize, qrX, qrY, inviteX, inviteY, inviteWidth, inviteFontSize], () => void render());
+watch([inviteCode, landingUrl, qrImageUrl, templateUrl, qrSize, qrX, qrY, inviteX, inviteY, inviteWidth, inviteFontSize, showQrCode, showInviteCode], () => void render());
 watch([qrSize, inviteWidth, inviteFontSize], () => {
   moveElement('qr', qrX.value, qrY.value);
   moveElement('invite', inviteX.value, inviteY.value);
@@ -304,7 +329,7 @@ onBeforeUnmount(() => {
         <Button v-if="canEdit" @click="addTemplate(true)" :disabled="!templates.length">复制模板</Button>
         <Button v-if="canEdit" danger @click="removeTemplate" :disabled="templates.length <= 1">删除模板</Button>
         <Button v-if="canEdit" type="primary" :loading="saving" :disabled="!ready || rendering || uploading || (!landingUrl.trim() && !qrImageUrl)" @click="saveConfig">保存并发布</Button>
-        <Button :disabled="!ready || rendering || !inviteCode.trim()" @click="downloadPoster">生成并下载 PNG</Button>
+        <Button :disabled="!ready || rendering || (showInviteCode && !inviteCode.trim())" @click="downloadPoster">生成并下载 PNG</Button>
       </Space>
     </template>
     <Alert v-if="loadError" type="error" show-icon message="海报配置加载失败，请重新加载" />
@@ -327,13 +352,27 @@ onBeforeUnmount(() => {
       </div>
       <Form layout="vertical" class="poster-form">
         <template v-if="canEdit">
-          <Form.Item label="已发布模板">
+          <Form.Item label="海报模板">
             <Space wrap>
               <Button v-for="item in templates" :key="item.id" :type="item.id === selectedTemplateId ? 'primary' : 'default'" @click="syncCurrentTemplate(); applyTemplate(item)">{{ item.name }}</Button>
             </Space>
           </Form.Item>
           <Form.Item label="模板名称"><input class="template-name-input" :value="templates.find(item => item.id === selectedTemplateId)?.name" maxlength="40" @input="updateTemplateName(($event.target as HTMLInputElement).value)" /></Form.Item>
           <Form.Item label="对代理端可见"><input type="checkbox" :checked="templates.find(item => item.id === selectedTemplateId)?.enabled" @change="event => { const item = templates.find(item => item.id === selectedTemplateId); if (item) item.enabled = (event.target as HTMLInputElement).checked; }" /></Form.Item>
+          <Form.Item label="导出内容">
+            <Space wrap>
+              <label><input v-model="showQrCode" type="checkbox" /> 显示二维码</label>
+              <label><input v-model="showInviteCode" type="checkbox" /> 显示邀请码</label>
+            </Space>
+          </Form.Item>
+          <Form.Item label="发布状态">
+            <Space wrap>
+              <Typography.Text type="secondary">{{ distributionStatus === 'dispatched' ? '已下发代理' : distributionStatus === 'published' ? '已发布，未下发' : '仅管理员可见' }}</Typography.Text>
+              <Button :loading="saving" :disabled="distributionStatus === 'published'" @click="updateStatus('publish')">发布未下发</Button>
+              <Button type="primary" :loading="saving" :disabled="distributionStatus === 'dispatched'" @click="updateStatus('dispatch')">下发代理</Button>
+              <Button :loading="saving" :disabled="distributionStatus === 'draft'" @click="updateStatus('withdraw')">撤回</Button>
+            </Space>
+          </Form.Item>
           <Form.Item label="海报模板（上传后立即预览）">
             <Upload accept="image/png,image/jpeg,image/webp" :show-upload-list="false" :disabled="uploading || saving" :before-upload="file => upload(file, 'template')"><Button :loading="uploading">上传海报模板</Button></Upload>
           </Form.Item>

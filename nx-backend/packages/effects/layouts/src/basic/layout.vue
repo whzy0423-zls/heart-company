@@ -156,6 +156,13 @@ function wrapperMenus(menus: MenuRecordRaw[], deep: boolean = true) {
 }
 
 function toggleSidebar() {
+  // Recover a collapsed sidebar from the header control before hiding it.
+  // This keeps the primary toggle usable when the bottom handle is outside
+  // the viewport or a stale preference left the sidebar collapsed.
+  if (!preferences.sidebar.hidden && preferences.sidebar.collapsed) {
+    updatePreferences({ sidebar: { collapsed: false } });
+    return;
+  }
   updatePreferences({
     sidebar: {
       hidden: !preferences.sidebar.hidden,
