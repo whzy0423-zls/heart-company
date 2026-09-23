@@ -193,6 +193,52 @@ func TestConfigStoreClearSecretFailsWhileEnabled(t *testing.T) {
 	}
 }
 
+func TestConfigStoreVerifiedSharedCredentialClearsLegacyASRKeyWhileEnabled(t *testing.T) {
+	database := openConfigStoreTestDB(t)
+	created, err := UpdateConfig(context.Background(), database, validConfig(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	incoming := created
+	incoming.RealtimeASR.APIKey = ""
+	incoming.TTS.APIKey = ""
+	incoming.ClearASRKey = true
+	updated, err := UpdateConfigWithVerifiedSharedCredential(context.Background(), database, incoming, created.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.Enabled || updated.Version != created.Version+1 || updated.RealtimeASR.APIKey != "" || updated.TTS.APIKey != "tts-secret" {
+		t.Fatalf("verified shared credential migration lost configuration: %+v", updated)
+	}
+	stored, found, err := ReadConfig(context.Background(), database)
+	if err != nil || !found || stored.RealtimeASR.APIKey != "" || stored.TTS.APIKey != "tts-secret" || stored.ClearASRKey {
+		t.Fatalf("stored configuration after migration: found=%v err=%v stored=%+v", found, err, stored)
+	}
+}
+
+func TestEnabledASRKeyClearPolicy(t *testing.T) {
+	for _, tt := range []struct {
+		name                     string
+		enabled                  bool
+		clear                    bool
+		sharedCredentialVerified bool
+		wantError                bool
+	}{
+		{name: "empty field preserves", enabled: true},
+		{name: "explicit clear rejected", enabled: true, clear: true, wantError: true},
+		{name: "verified shared credential migration", enabled: true, clear: true, sharedCredentialVerified: true},
+		{name: "disabled configuration can clear", clear: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			incoming := Config{Enabled: tt.enabled, ClearASRKey: tt.clear}
+			err := validateASRKeyClear(incoming, tt.sharedCredentialVerified)
+			if (err != nil) != tt.wantError {
+				t.Fatalf("err=%v wantError=%t", err, tt.wantError)
+			}
+		})
+	}
+}
+
 func TestConfigStoreLegacyUntouched(t *testing.T) {
 	database := openConfigStoreTestDB(t)
 	legacy := map[string]any{

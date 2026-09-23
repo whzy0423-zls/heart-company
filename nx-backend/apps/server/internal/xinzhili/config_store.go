@@ -40,6 +40,16 @@ func ReadConfig(ctx context.Context, db *sql.DB) (Config, bool, error) {
 // UpdateConfig applies a compare-and-swap update under a transaction-scoped
 // advisory lock. The fixed lock also serializes two concurrent first writes.
 func UpdateConfig(ctx context.Context, db *sql.DB, incoming Config, expectedVersion int64) (Config, error) {
+	return updateConfig(ctx, db, incoming, expectedVersion, false)
+}
+
+// UpdateConfigWithVerifiedSharedCredential removes obsolete per-model ASR keys
+// after the caller has verified that a shared Bailian credential is available.
+func UpdateConfigWithVerifiedSharedCredential(ctx context.Context, db *sql.DB, incoming Config, expectedVersion int64) (Config, error) {
+	return updateConfig(ctx, db, incoming, expectedVersion, true)
+}
+
+func updateConfig(ctx context.Context, db *sql.DB, incoming Config, expectedVersion int64, sharedCredentialVerified bool) (Config, error) {
 	if db == nil {
 		return Config{}, errors.New("数据库未初始化，无法保存芯之力配置")
 	}
@@ -63,8 +73,8 @@ func UpdateConfig(ctx context.Context, db *sql.DB, incoming Config, expectedVers
 	if (!found && expectedVersion != 0) || (found && current.Version != expectedVersion) {
 		return Config{}, ErrConfigConflict
 	}
-	if incoming.Enabled && incoming.ClearASRKey {
-		return Config{}, errors.New("启用芯之力时不能清除实时 ASR API Key")
+	if err := validateASRKeyClear(incoming, sharedCredentialVerified); err != nil {
+		return Config{}, err
 	}
 
 	merged := MergeIncoming(current, incoming)
@@ -96,6 +106,13 @@ func UpdateConfig(ctx context.Context, db *sql.DB, incoming Config, expectedVers
 		return Config{}, err
 	}
 	return normalized, nil
+}
+
+func validateASRKeyClear(incoming Config, sharedCredentialVerified bool) error {
+	if incoming.Enabled && incoming.ClearASRKey && !sharedCredentialVerified {
+		return errors.New("启用芯之力时不能清除实时 ASR API Key")
+	}
+	return nil
 }
 
 // MergeIncoming applies secret update semantics used by the store. Empty

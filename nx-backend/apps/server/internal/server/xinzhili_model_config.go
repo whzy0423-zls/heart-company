@@ -19,7 +19,7 @@ import (
 
 type xinzhiliModelConfigStore interface {
 	Read(context.Context) (xinzhili.Config, bool, error)
-	Update(context.Context, xinzhili.Config, int64) (xinzhili.Config, error)
+	Update(context.Context, xinzhili.Config, int64, bool) (xinzhili.Config, error)
 }
 
 type databaseXinzhiliModelConfigStore struct{ db *sql.DB }
@@ -28,7 +28,10 @@ func (s databaseXinzhiliModelConfigStore) Read(ctx context.Context) (xinzhili.Co
 	return xinzhili.ReadConfig(ctx, s.db)
 }
 
-func (s databaseXinzhiliModelConfigStore) Update(ctx context.Context, cfg xinzhili.Config, expectedVersion int64) (xinzhili.Config, error) {
+func (s databaseXinzhiliModelConfigStore) Update(ctx context.Context, cfg xinzhili.Config, expectedVersion int64, sharedCredentialVerified bool) (xinzhili.Config, error) {
+	if sharedCredentialVerified {
+		return xinzhili.UpdateConfigWithVerifiedSharedCredential(ctx, s.db, cfg, expectedVersion)
+	}
 	return xinzhili.UpdateConfig(ctx, s.db, cfg, expectedVersion)
 }
 
@@ -107,6 +110,10 @@ func (s *Server) xinzhiliModelConfigHandler(w http.ResponseWriter, r *http.Reque
 		httpx.Fail(w, http.StatusBadRequest, "expectedVersion is required")
 		return
 	}
+	if input.Config.Enabled && input.Config.ClearASRKey {
+		httpx.Fail(w, http.StatusBadRequest, "启用芯之力时不能清除实时 ASR API Key")
+		return
+	}
 	before, _, err := s.xinzhiliModelConfig.Read(r.Context())
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
@@ -145,7 +152,8 @@ func (s *Server) xinzhiliModelConfigHandler(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	saved, err := s.xinzhiliModelConfig.Update(r.Context(), persisted, *input.ExpectedVersion)
+	sharedCredentialVerified := resolved.Source == bailianCredentialSourceShared && strings.TrimSpace(resolved.APIKey) != ""
+	saved, err := s.xinzhiliModelConfig.Update(r.Context(), persisted, *input.ExpectedVersion, sharedCredentialVerified)
 	if errors.Is(err, xinzhili.ErrConfigConflict) {
 		httpx.Fail(w, http.StatusConflict, "config_version_conflict")
 		return

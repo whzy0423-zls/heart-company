@@ -24,6 +24,7 @@ type fakeXinzhiliModelConfigStore struct {
 	updateErr       error
 	updated         xinzhili.Config
 	expectedVersion int64
+	sharedVerified  bool
 	updateCalls     int
 }
 
@@ -31,12 +32,16 @@ func (f *fakeXinzhiliModelConfigStore) Read(context.Context) (xinzhili.Config, b
 	return f.config, f.found, f.readErr
 }
 
-func (f *fakeXinzhiliModelConfigStore) Update(_ context.Context, cfg xinzhili.Config, expectedVersion int64) (xinzhili.Config, error) {
+func (f *fakeXinzhiliModelConfigStore) Update(_ context.Context, cfg xinzhili.Config, expectedVersion int64, sharedCredentialVerified bool) (xinzhili.Config, error) {
 	f.updateCalls++
 	f.updated = cfg
 	f.expectedVersion = expectedVersion
+	f.sharedVerified = sharedCredentialVerified
 	if f.updateErr != nil {
 		return xinzhili.Config{}, f.updateErr
+	}
+	if cfg.Enabled && cfg.ClearASRKey && !sharedCredentialVerified {
+		return xinzhili.Config{}, errors.New("启用芯之力时不能清除实时 ASR API Key")
 	}
 	merged := xinzhili.MergeIncoming(f.config, cfg)
 	normalized, err := merged.WithDefaults()
@@ -190,6 +195,25 @@ func TestXinzhiliCredentialSaveAcceptsSharedBailianKeyOutsideModelJSON(t *testin
 	}
 	if store.config.RealtimeASR.APIKey != "" || store.config.TTS.APIKey != "" {
 		t.Fatalf("shared credential leaked into persisted Xinzhili JSON: %+v", store.config)
+	}
+	if !store.sharedVerified {
+		t.Fatal("shared credential was not verified for the store update")
+	}
+}
+
+func TestXinzhiliCredentialSaveRejectsExplicitASRClearWhileEnabled(t *testing.T) {
+	cfg := validBailianXinzhiliModelConfigForHandler()
+	cfg.ClearASRKey = true
+	store := &fakeXinzhiliModelConfigStore{}
+	s := &Server{
+		xinzhiliModelConfig: store,
+		bailianCredentials: &memoryBailianCredentialStore{
+			cfg: bailianconfig.Config{Version: 2, APIKey: "sk-shared-runtime"}, found: true,
+		},
+	}
+	res := putXinzhiliModelConfig(t, s, cfg, 0)
+	if res.Code != http.StatusBadRequest || store.updateCalls != 0 {
+		t.Fatalf("status=%d updateCalls=%d body=%s", res.Code, store.updateCalls, res.Body.String())
 	}
 }
 

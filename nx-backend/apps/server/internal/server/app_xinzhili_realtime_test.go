@@ -405,6 +405,45 @@ func TestXinzhiliStartTurnKeepsDedicatedVoiceWhenAppBroadcastIsOff(t *testing.T)
 	}
 }
 
+func TestXinzhiliStartTurnKeepsDedicatedVoiceWhenUserBroadcastPreferenceIsOff(t *testing.T) {
+	serverWS, _ := newXinzhiliWebsocketPair(t)
+	model := validBailianXinzhiliModelConfigForHandler()
+	model.Version = 16
+	model.TTS.Voice = "old-han"
+	session := &recordingXinzhiliTurnSession{}
+	s := &Server{
+		xinzhiliModelConfig: &fakeXinzhiliModelConfigStore{config: model, found: true},
+		bailianCredentials: &memoryBailianCredentialStore{
+			cfg: bailianconfig.Config{Version: 4, APIKey: "sk-shared-asr"}, found: true,
+		},
+		voiceBroadcastPreferences: newMemoryVoiceBroadcastPreferenceStore(),
+		voiceBroadcastConfigLoader: func(context.Context) (voiceBroadcastConfig, error) {
+			return voiceBroadcastConfig{
+				Enabled: true, Provider: voiceBroadcastProviderBailian,
+				Endpoint: voiceBroadcastDefaultEndpoint, APIKey: "sk-app-voice",
+				Model: voiceBroadcastDefaultModel, Voice: voiceBroadcastDefaultVoice, Format: "mp3",
+			}, nil
+		},
+	}
+	c := &xinzhiliRealtimeConn{
+		server: s, ws: serverWS, sess: session, userID: 29, sessionID: "xz-user-voice-off",
+		pendingMode: xinzhili.ModeNormal, turns: make(map[uint64]string), audioSeq: make(map[uint64]uint32),
+	}
+	c.sink = &xinzhiliWSSink{conn: c}
+	turnID := "turn-user-voice-off"
+	c.startTurn(context.Background(), xinzhili.Envelope{
+		TurnID:  &turnID,
+		Payload: json.RawMessage(`{"turnKey":303}`),
+	})
+	if len(session.starts) != 1 {
+		t.Fatalf("started turns=%d want=1", len(session.starts))
+	}
+	got := session.starts[0]
+	if got.DisableTTS || got.TTSConfig.Voice != "old-han" {
+		t.Fatalf("dedicated Xinzhili voice changed by user broadcast preference: %+v", got)
+	}
+}
+
 func startXinzhiliRuntimeCredentialTurn(t *testing.T, c *xinzhiliRealtimeConn, turnID string, turnKey uint64) {
 	t.Helper()
 	c.startTurn(context.Background(), xinzhili.Envelope{

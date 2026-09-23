@@ -69,7 +69,7 @@ func (s staticXinzhiliConfigStore) Read(context.Context) (xinzhili.Config, bool,
 	return s.cfg, s.found, s.err
 }
 
-func (staticXinzhiliConfigStore) Update(context.Context, xinzhili.Config, int64) (xinzhili.Config, error) {
+func (staticXinzhiliConfigStore) Update(context.Context, xinzhili.Config, int64, bool) (xinzhili.Config, error) {
 	return xinzhili.Config{}, errors.New("unexpected update")
 }
 
