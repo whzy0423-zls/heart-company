@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/quiz"
@@ -196,6 +197,38 @@ func TestCompactAppChatContextFallsBackToRecentTwentyWhenSummaryFails(t *testing
 	}
 }
 
+func TestCompactAppChatContextTimesOutSummaryBeforeParentDeadline(t *testing.T) {
+	messages := make([]chat.Message, 0, 25)
+	for i := 1; i <= 25; i++ {
+		messages = append(messages, chat.Message{ID: int64(i), Role: "user", Content: fmt.Sprintf("消息%d", i)})
+	}
+	summarizer := &blockingConversationSummarizer{deadline: make(chan time.Duration, 1)}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	startedAt := time.Now()
+	got := compactAppChatContext(ctx, "原摘要", messages, summarizer)
+	elapsed := time.Since(startedAt)
+
+	if ctx.Err() != nil {
+		t.Fatalf("summary exhausted the parent generation deadline after %s: %v", elapsed, ctx.Err())
+	}
+	if got.Summary != "原摘要" || len(got.History) != 20 || got.History[0].Content != "消息6" {
+		t.Fatalf("expected timeout fallback with the latest 20 messages, got %+v", got)
+	}
+	if got.summaryOutcome != "timeout_fallback" {
+		t.Fatalf("summary outcome = %q, want timeout_fallback", got.summaryOutcome)
+	}
+	select {
+	case observed := <-summarizer.deadline:
+		if observed <= 0 || observed >= 150*time.Millisecond {
+			t.Fatalf("summary deadline = %s, want an independent fraction of the parent deadline", observed)
+		}
+	default:
+		t.Fatal("summarizer did not observe a deadline")
+	}
+}
+
 func TestBuildAppChatPromptContextPersistsCompactedSummary(t *testing.T) {
 	messages := make([]chat.Message, 0, 25)
 	for i := 9; i <= 33; i++ {
@@ -264,6 +297,18 @@ type fakeConversationSummarizer struct {
 	messages []rag.Message
 	calls    int
 	err      error
+}
+
+type blockingConversationSummarizer struct {
+	deadline chan time.Duration
+}
+
+func (s *blockingConversationSummarizer) SummarizeConversation(ctx context.Context, _ string, _ []rag.Message) (string, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		s.deadline <- time.Until(deadline)
+	}
+	<-ctx.Done()
+	return "", ctx.Err()
 }
 
 func (f *fakeConversationSummarizer) SummarizeConversation(_ context.Context, previous string, messages []rag.Message) (string, error) {

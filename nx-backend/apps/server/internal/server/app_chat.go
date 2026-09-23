@@ -27,6 +27,7 @@ import (
 const (
 	appChatHistoryLimit     = 12
 	appChatQuestionMaxRunes = 300
+	appChatSummaryTimeout   = 8 * time.Second
 )
 
 const appChatFallbackHistoryLimit = 20
@@ -244,6 +245,7 @@ type appChatPromptContext struct {
 	History                     []rag.Message
 	SummaryThroughMessageID     int64
 	ShouldPersistUpdatedSummary bool
+	summaryOutcome              string
 }
 
 type appChatContextStore interface {
@@ -392,22 +394,35 @@ func compactAppChatContext(ctx context.Context, previousSummary string, messages
 	validChatMessages := validAppChatMessages(messages)
 	validMessages := appChatHistoryFromMessages(validChatMessages)
 	if len(validMessages) <= appChatFallbackHistoryLimit {
-		return appChatPromptContext{Summary: strings.TrimSpace(previousSummary), History: validMessages}
+		return appChatPromptContext{Summary: strings.TrimSpace(previousSummary), History: validMessages, summaryOutcome: "not_needed"}
 	}
 	if summarizer == nil {
 		return appChatPromptContext{
-			Summary: strings.TrimSpace(previousSummary),
-			History: validMessages[len(validMessages)-appChatFallbackHistoryLimit:],
+			Summary:        strings.TrimSpace(previousSummary),
+			History:        validMessages[len(validMessages)-appChatFallbackHistoryLimit:],
+			summaryOutcome: "unavailable",
 		}
 	}
 
 	oldCount := len(validMessages) - appChatHistoryLimit
-	updatedSummary, err := summarizer.SummarizeConversation(ctx, strings.TrimSpace(previousSummary), validMessages[:oldCount])
+	summaryCtx, cancelSummary := context.WithTimeout(ctx, boundedAppChatSummaryTimeout(ctx))
+	updatedSummary, err := summarizer.SummarizeConversation(summaryCtx, strings.TrimSpace(previousSummary), validMessages[:oldCount])
+	cancelSummary()
 	updatedSummary = strings.TrimSpace(updatedSummary)
 	if err != nil || updatedSummary == "" {
+		outcome := "error_fallback"
+		switch {
+		case errors.Is(err, context.DeadlineExceeded):
+			outcome = "timeout_fallback"
+		case errors.Is(err, context.Canceled):
+			outcome = "canceled_fallback"
+		case err == nil:
+			outcome = "empty_fallback"
+		}
 		return appChatPromptContext{
-			Summary: strings.TrimSpace(previousSummary),
-			History: validMessages[len(validMessages)-appChatFallbackHistoryLimit:],
+			Summary:        strings.TrimSpace(previousSummary),
+			History:        validMessages[len(validMessages)-appChatFallbackHistoryLimit:],
+			summaryOutcome: outcome,
 		}
 	}
 	throughID := validChatMessages[oldCount-1].ID
@@ -416,7 +431,22 @@ func compactAppChatContext(ctx context.Context, previousSummary string, messages
 		History:                     validMessages[oldCount:],
 		SummaryThroughMessageID:     throughID,
 		ShouldPersistUpdatedSummary: true,
+		summaryOutcome:              "updated",
 	}
+}
+
+func boundedAppChatSummaryTimeout(ctx context.Context) time.Duration {
+	timeout := appChatSummaryTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if reserved := remaining / 4; reserved < timeout {
+			timeout = reserved
+		}
+	}
+	if timeout <= 0 {
+		return time.Nanosecond
+	}
+	return timeout
 }
 
 func buildAppChatPromptContext(ctx context.Context, sessionID int64, store appChatContextStore, summarizer rag.ConversationSummarizer) appChatPromptContext {
@@ -1555,7 +1585,21 @@ func (s *Server) appChatContextForPrompt(ctx context.Context, sessionID int64, g
 	if typed, ok := generator.(rag.ConversationSummarizer); ok {
 		summarizer = typed
 	}
-	return buildAppChatPromptContext(ctx, sessionID, s.appChat, summarizer)
+	startedAt := time.Now()
+	log.Printf("app_chat_context stage=started session_id=%d", sessionID)
+	promptContext := buildAppChatPromptContext(ctx, sessionID, s.appChat, summarizer)
+	outcome := promptContext.summaryOutcome
+	if outcome == "" {
+		outcome = "store_fallback"
+	}
+	log.Printf(
+		"app_chat_context stage=completed session_id=%d summary_outcome=%s history_count=%d elapsed_ms=%d",
+		sessionID,
+		outcome,
+		len(promptContext.History),
+		time.Since(startedAt).Milliseconds(),
+	)
+	return promptContext
 }
 
 func appChatHistoryFromMessages(messages []chat.Message) []rag.Message {
