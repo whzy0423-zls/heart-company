@@ -236,18 +236,18 @@ async function render() {
     // The administrator can hide either overlay while retaining the source image.
     // A legacy uploaded QR image remains available only for administrator previews.
     let qrSource = '';
-    if (!qrSource && dynamicLandingUrl.value.trim()) {
+    if (showQrCode.value && dynamicLandingUrl.value.trim()) {
       const url = new URL(dynamicLandingUrl.value.trim());
       if (!['http:', 'https:'].includes(url.protocol)) throw new Error('请输入有效的二维码链接');
       // The administrator owns the QR destination; invitation text never changes it.
       qrSource = await QRCode.toDataURL(dynamicLandingUrl.value.trim(), { margin: 4, width: 660, errorCorrectionLevel: 'M' });
     }
-    const qr = qrSource && !qrImageUrl.value ? await new Promise<HTMLImageElement>((resolve, reject) => {
+    const qr = showQrCode.value && qrSource && !qrImageUrl.value ? await new Promise<HTMLImageElement>((resolve, reject) => {
       const image = new Image();
       image.onload = () => resolve(image);
       image.onerror = () => reject(new Error('二维码生成失败'));
       image.src = qrSource;
-    }) : qrImageUrl.value ? await loadImage(qrImageUrl.value) : undefined;
+    }) : showQrCode.value && qrImageUrl.value ? await loadImage(qrImageUrl.value) : undefined;
     const canvas = document.createElement('canvas');
     canvas.width = 720 * EXPORT_SCALE; canvas.height = 1280 * EXPORT_SCALE;
     const ctx = canvas.getContext('2d');
@@ -257,12 +257,15 @@ async function render() {
     const w = background.naturalWidth * scale, h = background.naturalHeight * scale;
     ctx.drawImage(background, (720-w)/2, (1280-h)/2, w, h);
     const size = qrSize.value;
-    if (showQrCode) ctx.fillStyle = '#fff'; if (showQrCode) ctx.fillRect(qrX.value, qrY.value, size, size);
-    if (showQrCode && qr) {
+    if (showQrCode.value) {
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(qrX.value, qrY.value, size, size);
+    }
+    if (showQrCode.value && qr) {
       const qrScale = Math.min(size / qr.naturalWidth, size / qr.naturalHeight);
       const qw = qr.naturalWidth * qrScale, qh = qr.naturalHeight * qrScale;
       ctx.drawImage(qr, qrX.value+(size-qw)/2, qrY.value+(size-qh)/2, qw, qh);
-    } else if (showQrCode) {
+    } else if (showQrCode.value) {
       ctx.strokeStyle = '#2563eb'; ctx.setLineDash([8, 6]); ctx.strokeRect(qrX.value, qrY.value, size, size); ctx.setLineDash([]);
       ctx.fillStyle = '#2563eb'; ctx.font = '600 16px sans-serif'; ctx.textAlign = 'center';
       ctx.fillText('二维码待配置', qrX.value + size / 2, qrY.value + size / 2);
@@ -270,7 +273,7 @@ async function render() {
     }
     const inviteText = inviteCode.value.trim();
     // 空邀请码不绘制占位文案，导出的海报应保持该区域完全干净。
-    if (showInviteCode && inviteText) {
+    if (showInviteCode.value && inviteText) {
       ctx.fillStyle = '#111827';
       ctx.textBaseline = 'top';
       ctx.font = '700 ' + inviteFontSize.value + 'px sans-serif';

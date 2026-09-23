@@ -80,6 +80,25 @@ describe('central poster configuration', () => {
     expect(fillText.mock.calls.some(([value]) => value === '邀请码')).toBe(false);
     wrapper.unmount();
   });
+  it('does not draw a QR code when the template hides it', async () => {
+    state.codes = ['Customer:App:List', 'Customer:App:Write'];
+    state.get.mockResolvedValue({ ...config, showQrCode: false, showInviteCode: true });
+    const fillRect = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn(), fillRect, fillText: vi.fn(), scale: vi.fn(), setLineDash: vi.fn(), strokeRect: vi.fn() } as any);
+    const wrapper = mount(true, ''); await settle();
+    expect(fillRect).not.toHaveBeenCalled();
+    expect(state.qr).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+  it('does not draw an invitation when the template hides it', async () => {
+    state.codes = ['Customer:App:List', 'Customer:App:Write'];
+    state.get.mockResolvedValue({ ...config, showQrCode: true, showInviteCode: false });
+    const fillText = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn(), fillRect: vi.fn(), fillText, scale: vi.fn(), setLineDash: vi.fn(), strokeRect: vi.fn() } as any);
+    const wrapper = mount(true, 'A123'); await settle();
+    expect(fillText).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
   it('official QR URL remains the source even when a legacy image exists', async () => {
     state.get.mockResolvedValue({ ...config, qrImageUrl: '/api/upload-assets/2' });
     const wrapper = mount(); await settle();
