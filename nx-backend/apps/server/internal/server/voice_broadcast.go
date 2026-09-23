@@ -301,41 +301,6 @@ func (s *Server) voiceBroadcastEnabledForUser(ctx context.Context, userID int64)
 	return capability.Enabled && capability.UserEnabled && capability.ProviderAvailable
 }
 
-// voiceBroadcastRuntimeConfigured reports whether the optional app-level
-// channel is available to govern realtime sessions. Hand-built test servers
-// and older callers that do not wire the app channel retain the legacy
-// Xinzhili TTS behavior; production servers always have the preference store
-// and admin config store initialized by newServer.
-func (s *Server) voiceBroadcastRuntimeConfigured() bool {
-	return s != nil && (s.db != nil || s.voiceBroadcastPreferences != nil || s.voiceBroadcastConfigLoader != nil || s.voiceBroadcastConfig != nil)
-}
-
-// xinzhiliRealtimeVoiceBroadcastConfig resolves the user switch and the
-// administrator-selected provider settings in one read. The controlled return
-// value distinguishes an explicitly wired app channel from legacy callers so
-// an unavailable optional provider can suppress TTS without blocking ASR or
-// text generation.
-func (s *Server) xinzhiliRealtimeVoiceBroadcastConfig(ctx context.Context, userID int64) (xinzhili.TTSConfig, bool, bool) {
-	if !s.voiceBroadcastRuntimeConfigured() {
-		return xinzhili.TTSConfig{}, true, false
-	}
-	preferences := s.voiceBroadcastPreferenceStore()
-	if preferences == nil {
-		return xinzhili.TTSConfig{}, false, true
-	}
-	userEnabled, err := preferences.Get(ctx, userID)
-	if err != nil || !userEnabled {
-		return xinzhili.TTSConfig{}, false, true
-	}
-	cfg, err := s.loadVoiceBroadcastConfig(ctx)
-	if err != nil || !cfg.Enabled || strings.TrimSpace(cfg.APIKey) == "" ||
-		normalizeVoiceBroadcastProvider(cfg.Provider) != xinzhili.TTSProviderBailian ||
-		strings.TrimSpace(cfg.Model) == "" || strings.TrimSpace(cfg.Voice) == "" {
-		return xinzhili.TTSConfig{}, false, true
-	}
-	return voiceBroadcastTTSConfig(cfg), true, true
-}
-
 func voiceBroadcastTTSConfig(cfg voiceBroadcastConfig) xinzhili.TTSConfig {
 	endpoint := strings.TrimSpace(cfg.Endpoint)
 	if endpoint == "" {

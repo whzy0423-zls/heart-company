@@ -128,26 +128,6 @@ func TestVoiceBroadcastCapabilityNormalizesAdminBailianProvider(t *testing.T) {
 	}
 }
 
-func TestXinzhiliRealtimeVoiceBroadcastRejectsNonBailianProvider(t *testing.T) {
-	preferences := newMemoryVoiceBroadcastPreferenceStore()
-	if err := preferences.Set(context.Background(), 7, true); err != nil {
-		t.Fatal(err)
-	}
-	s := &Server{
-		voiceBroadcastPreferences: preferences,
-		voiceBroadcastConfigLoader: func(context.Context) (voiceBroadcastConfig, error) {
-			return voiceBroadcastConfig{
-				Enabled: true, Provider: "minimax", APIKey: "sk-test",
-				Model: "speech-02", Voice: "female",
-			}, nil
-		},
-	}
-	_, enabled, controlled := s.xinzhiliRealtimeVoiceBroadcastConfig(context.Background(), 7)
-	if !controlled || enabled {
-		t.Fatalf("controlled=%t enabled=%t, want controlled=true enabled=false", controlled, enabled)
-	}
-}
-
 func TestNormalizeVoiceBroadcastProviderAcceptsAdminAlias(t *testing.T) {
 	for _, raw := range []string{"bailian", "aliyun-bailian", "aliyun_bailian", "dashscope"} {
 		if got := normalizeVoiceBroadcastProvider(raw); got != voiceBroadcastProviderBailian {

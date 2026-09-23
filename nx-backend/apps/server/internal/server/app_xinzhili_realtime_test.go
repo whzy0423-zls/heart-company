@@ -313,14 +313,11 @@ func TestXinzhiliRuntimeCredentialTreatsCustomNativeBailianAsPrivateTTS(t *testi
 	}
 }
 
-func TestXinzhiliStartTurnUsesAppVoiceBroadcastConfigWhenEnabled(t *testing.T) {
+func TestXinzhiliStartTurnUsesDedicatedVoiceWhenAppBroadcastEnabled(t *testing.T) {
 	serverWS, _ := newXinzhiliWebsocketPair(t)
 	model := validBailianXinzhiliModelConfigForHandler()
 	model.Version = 14
-	// The legacy Xinzhili TTS block is intentionally incomplete. Once the
-	// app-level channel is enabled, it must be replaced before legacy TTS
-	// credential validation runs.
-	model.TTS = xinzhili.TTSConfig{}
+	model.TTS.Voice = "old-han"
 	session := &recordingXinzhiliTurnSession{}
 	preferences := newMemoryVoiceBroadcastPreferenceStore()
 	if err := preferences.Set(context.Background(), 27, true); err != nil {
@@ -355,9 +352,9 @@ func TestXinzhiliStartTurnUsesAppVoiceBroadcastConfigWhenEnabled(t *testing.T) {
 	}
 	got := session.starts[0]
 	if got.DisableTTS {
-		t.Fatalf("app voice enabled but DisableTTS=true")
+		t.Fatalf("dedicated Xinzhili voice disabled by app broadcast")
 	}
-	if got.TTSConfig.Model != "qwen3-tts-instruct-flash" || got.TTSConfig.Voice != "Serena" || got.TTSConfig.APIKey != "sk-app-voice" {
+	if got.TTSConfig.Model != model.TTS.Model || got.TTSConfig.Voice != "old-han" || got.TTSConfig.APIKey != "sk-shared-asr" {
 		t.Fatalf("TTS config=%+v", got.TTSConfig)
 	}
 	if got.ASRConfig.APIKey != "sk-shared-asr" {
@@ -365,10 +362,11 @@ func TestXinzhiliStartTurnUsesAppVoiceBroadcastConfigWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestXinzhiliStartTurnDisablesTTSWhenAppVoiceBroadcastIsOff(t *testing.T) {
+func TestXinzhiliStartTurnKeepsDedicatedVoiceWhenAppBroadcastIsOff(t *testing.T) {
 	serverWS, _ := newXinzhiliWebsocketPair(t)
 	model := validBailianXinzhiliModelConfigForHandler()
 	model.Version = 15
+	model.TTS.Voice = "old-han"
 	session := &recordingXinzhiliTurnSession{}
 	preferences := newMemoryVoiceBroadcastPreferenceStore()
 	if err := preferences.Set(context.Background(), 28, true); err != nil {
@@ -402,8 +400,8 @@ func TestXinzhiliStartTurnDisablesTTSWhenAppVoiceBroadcastIsOff(t *testing.T) {
 		t.Fatalf("started turns=%d want=1", len(session.starts))
 	}
 	got := session.starts[0]
-	if !got.DisableTTS {
-		t.Fatalf("app voice disabled but DisableTTS=false")
+	if got.DisableTTS || got.TTSConfig.Voice != "old-han" {
+		t.Fatalf("dedicated Xinzhili voice changed by app broadcast: %+v", got)
 	}
 }
 

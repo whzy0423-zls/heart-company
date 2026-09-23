@@ -475,23 +475,7 @@ func (c *xinzhiliRealtimeConn) startTurn(ctx context.Context, e xinzhili.Envelop
 				return
 			}
 		}
-		appTTS, appTTSEnabled, appTTSControlled := c.server.xinzhiliRealtimeVoiceBroadcastConfig(ctx, c.userID)
-		if appTTSControlled {
-			// The app-level channel owns realtime playback when wired. Resolve
-			// only the ASR credential here; the administrator-selected TTS
-			// config is injected below, and an unavailable/disabled channel is
-			// represented as a text-only turn.
-			cfg, err = c.server.withXinzhiliRuntimeASRCredentials(ctx, cfg)
-			if err == nil {
-				if appTTSEnabled {
-					cfg.TTS = appTTS
-				} else {
-					cfg.TTS = xinzhili.TTSConfig{}
-				}
-			}
-		} else {
-			cfg, err = c.server.withXinzhiliRuntimeCredentials(ctx, cfg)
-		}
+		cfg, err = c.server.withXinzhiliRuntimeCredentials(ctx, cfg)
 		if err != nil {
 			c.sendError(ctx, "xinzhili_credentials_unavailable", "芯之力语音凭证暂不可用", true, false)
 			return
@@ -511,7 +495,7 @@ func (c *xinzhiliRealtimeConn) startTurn(ctx context.Context, e xinzhili.Envelop
 			c.mu.Unlock()
 			c.configStateMu.Unlock()
 
-			c.startTurnWithConfig(ctx, e, turnKey, cfg, mode, cardID, conversationID, previousTurnKey, sequence, appTTSControlled && !appTTSEnabled)
+			c.startTurnWithConfig(ctx, e, turnKey, cfg, mode, cardID, conversationID, previousTurnKey, sequence)
 			return
 		}
 		c.mu.Unlock()
@@ -519,7 +503,7 @@ func (c *xinzhiliRealtimeConn) startTurn(ctx context.Context, e xinzhili.Envelop
 	}
 }
 
-func (c *xinzhiliRealtimeConn) startTurnWithConfig(ctx context.Context, e xinzhili.Envelope, turnKey uint64, cfg xinzhili.Config, mode xinzhili.Mode, cardID, conversationID int64, previousTurnKey uint64, sequence *xinzhili.SequenceGuard, disableTTS bool) {
+func (c *xinzhiliRealtimeConn) startTurnWithConfig(ctx context.Context, e xinzhili.Envelope, turnKey uint64, cfg xinzhili.Config, mode xinzhili.Mode, cardID, conversationID int64, previousTurnKey uint64, sequence *xinzhili.SequenceGuard) {
 	c.turnMu.Lock()
 	previousTurnID := c.turns[previousTurnKey]
 	c.turnMu.Unlock()
@@ -532,7 +516,7 @@ func (c *xinzhiliRealtimeConn) startTurnWithConfig(ctx context.Context, e xinzhi
 			return
 		}
 	}
-	in := xinzhili.StartTurnInput{UserID: c.userID, CardID: cardID, ConversationID: conversationID, TurnID: *e.TurnID, TurnKey: turnKey, Mode: mode, ASRConfig: cfg.RealtimeASR, TTSConfig: cfg.TTS, Timing: cfg.Timing, CommonPrompt: cfg.CommonPrompt, ModePrompt: cfg.ModePrompts[mode], KnowledgeTopK: 6, KnowledgeMinScore: 0.2, TheoryTopK: 6, TheoryMinScore: 0.2, DisableTTS: disableTTS}
+	in := xinzhili.StartTurnInput{UserID: c.userID, CardID: cardID, ConversationID: conversationID, TurnID: *e.TurnID, TurnKey: turnKey, Mode: mode, ASRConfig: cfg.RealtimeASR, TTSConfig: cfg.TTS, Timing: cfg.Timing, CommonPrompt: cfg.CommonPrompt, ModePrompt: cfg.ModePrompts[mode], KnowledgeTopK: 6, KnowledgeMinScore: 0.2, TheoryTopK: 6, TheoryMinScore: 0.2}
 	if err := c.sess.StartTurn(ctx, in); err != nil {
 		if sequence != nil {
 			sequence.ReleaseActiveTurn(*e.TurnID)
@@ -736,26 +720,6 @@ func (s *Server) withXinzhiliRuntimeCredentials(ctx context.Context, cfg xinzhil
 	if usesSharedTTS {
 		runtime.TTS.APIKey = key
 	}
-	return runtime, nil
-}
-
-// withXinzhiliRuntimeASRCredentials resolves only the shared realtime ASR
-// credential. The app-level voice-broadcast path uses this helper so a
-// disabled or reconfigured TTS channel never blocks ASR/text generation.
-func (s *Server) withXinzhiliRuntimeASRCredentials(ctx context.Context, cfg xinzhili.Config) (xinzhili.Config, error) {
-	if !xinzhili.IsOfficialDashScopeRealtimeASREndpoint(cfg.RealtimeASR.Endpoint) {
-		return xinzhili.Config{}, errors.New("realtime ASR endpoint is not official DashScope")
-	}
-	resolved, err := s.resolveBailianCredentialsForConfig(ctx, cfg, true)
-	if err != nil {
-		return xinzhili.Config{}, err
-	}
-	key := strings.TrimSpace(resolved.APIKey)
-	if key == "" {
-		return xinzhili.Config{}, errors.New("shared Bailian credential is empty")
-	}
-	runtime := cfg
-	runtime.RealtimeASR.APIKey = key
 	return runtime, nil
 }
 
