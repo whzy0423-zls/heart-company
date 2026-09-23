@@ -20,6 +20,7 @@ import {
   Input,
   message,
   Modal,
+  Pagination,
   Select,
   Space,
   Table,
@@ -361,6 +362,12 @@ function handleTableChange(pagination: {
   load();
 }
 
+function handleMobilePageChange(page: number, pageSize: number) {
+  query.page = page;
+  query.pageSize = pageSize;
+  load();
+}
+
 function search() {
   query.page = 1;
   load();
@@ -420,7 +427,91 @@ onMounted(() => {
       </Card>
 
       <Card :bordered="false" class="table-card">
+        <div v-if="customers.length" class="mobile-customer-list">
+          <article
+            v-for="record in customers"
+            :key="`mobile-${record.id}`"
+            class="mobile-customer-card"
+          >
+            <div class="mobile-customer-heading">
+              <div class="mobile-customer-identity">
+                <strong>{{ record.nickname || '未设置昵称' }}</strong>
+                <span>{{ record.phone || '-' }}</span>
+              </div>
+              <Tag :color="statusMeta(record.status).color">
+                {{ statusMeta(record.status).label }}
+              </Tag>
+            </div>
+            <div class="mobile-customer-grid">
+              <div>
+                <span>会员等级</span>
+                <Tag>{{ memberLevelLabel(record.memberLevel) }}</Tag>
+              </div>
+              <div>
+                <span>剩余天数</span>
+                <b>{{ record.remainingDays ?? 0 }} 天</b>
+              </div>
+              <div>
+                <span>会员到期</span>
+                <b>{{ record.memberExpiresAt || '-' }}</b>
+              </div>
+              <div>
+                <span>最后登录</span>
+                <b>{{ record.lastLoginAt || '-' }}</b>
+              </div>
+            </div>
+            <div class="mobile-customer-source">
+              注册来源：{{ sourceLabel(record.registerSource) }}
+            </div>
+            <div class="mobile-customer-actions">
+              <Button
+                v-if="canOpenUserInsights"
+                size="small"
+                type="link"
+                @click="goUser360(customerRecord(record))"
+              >
+                360
+              </Button>
+              <Button
+                size="small"
+                type="link"
+                @click="openDetail(customerRecord(record))"
+              >
+                查看详情
+              </Button>
+              <Button
+                v-if="canEdit"
+                size="small"
+                type="link"
+                @click="openEdit(customerRecord(record))"
+              >
+                编辑
+              </Button>
+              <Button
+                v-if="canGrantTrialCredit"
+                size="small"
+                type="link"
+                @click="openGrant(customerRecord(record))"
+              >
+                赠送额度
+              </Button>
+            </div>
+          </article>
+        </div>
+        <div v-else-if="!loading && !loadError" class="mobile-empty-state">
+          暂无客户
+        </div>
+        <Pagination
+          v-if="customers.length || total"
+          class="mobile-customer-pagination"
+          :current="query.page"
+          :page-size="query.pageSize"
+          :show-size-changer="true"
+          :total="total"
+          @change="handleMobilePageChange"
+        />
         <Table
+          class="desktop-customer-table"
           :columns="columns"
           :data-source="customers"
           :loading="loading"
@@ -714,6 +805,120 @@ onMounted(() => {
   .filter-actions :deep(.ant-space-item),
   .filter-actions :deep(.ant-btn) {
     width: 100%;
+  }
+
+  .table-card :deep(.ant-card-body) {
+    padding: 12px;
+  }
+}
+
+.mobile-customer-list {
+  display: none;
+}
+
+.mobile-customer-card {
+  padding: 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  background: hsl(var(--background));
+}
+
+.mobile-customer-card + .mobile-customer-card {
+  margin-top: 10px;
+}
+
+.mobile-customer-heading {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.mobile-customer-identity {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.mobile-customer-identity strong {
+  overflow: hidden;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-customer-identity span,
+.mobile-customer-source {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+.mobile-customer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+  margin-top: 14px;
+}
+
+.mobile-customer-grid > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mobile-customer-grid span {
+  color: hsl(var(--muted-foreground));
+  font-size: 12px;
+}
+
+.mobile-customer-grid b {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-customer-source {
+  margin-top: 12px;
+}
+
+.mobile-customer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid hsl(var(--border));
+}
+
+.mobile-empty-state,
+.mobile-customer-pagination {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .desktop-customer-table {
+    display: none;
+  }
+
+  .mobile-customer-list {
+    display: block;
+  }
+
+  .mobile-empty-state {
+    display: block;
+    padding: 32px 0;
+    color: hsl(var(--muted-foreground));
+    text-align: center;
+  }
+
+  .mobile-customer-pagination {
+    display: flex;
+    justify-content: center;
+    margin-top: 14px;
   }
 }
 

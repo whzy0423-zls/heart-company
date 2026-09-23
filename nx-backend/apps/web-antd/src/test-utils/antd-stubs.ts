@@ -72,6 +72,7 @@ export const Modal = defineComponent({
       ]);
   },
 });
+export const Pagination = passthrough('Pagination');
 export const Row = passthrough('Row');
 export const Select = passthrough('Select');
 export const Space = passthrough('Space');
