@@ -257,6 +257,44 @@ func TestBailianQwenInstructTTSPreservesExplicitInstructions(t *testing.T) {
 	}
 }
 
+func TestBailianQwenInstructTTSCanSkipInstructionOptimization(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": map[string]any{"audio": hex.EncodeToString(testMP3())},
+		})
+	}))
+	defer server.Close()
+
+	cfg := TTSConfig{
+		Provider:                       TTSProviderBailian,
+		Endpoint:                       server.URL,
+		APIKey:                         "dashscope-key",
+		Model:                          "qwen3-tts-instruct-flash",
+		Voice:                          "Cherry",
+		DisableInstructionOptimization: true,
+	}
+	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := provider.Synthesize(context.Background(), cfg, "我们先慢慢说。"); err != nil {
+		t.Fatal(err)
+	}
+
+	input := gotBody["input"].(map[string]any)
+	if input["voice"] != "Cherry" || input["text"] != "我们先慢慢说。" {
+		t.Fatalf("input=%#v", input)
+	}
+	if input["instructions"] != DefaultCompanionTTSInstruction || input["optimize_instructions"] != false {
+		t.Fatalf("input=%#v", input)
+	}
+}
+
 func TestBailianQwenAudioTTSIncludesEmotionInstruction(t *testing.T) {
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

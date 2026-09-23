@@ -58,12 +58,13 @@ type TTSConfig struct {
 	// public HTTP endpoint is shared across mainland regions, but retaining the
 	// value in the runtime config keeps the admin selection effective and lets
 	// the provider add its routing header without changing the endpoint.
-	Region      string `json:"region,omitempty"`
-	GroupID     string `json:"groupId,omitempty"`
-	Model       string `json:"model"`
-	Voice       string `json:"voice"`
-	Format      string `json:"format"`
-	Instruction string `json:"instruction,omitempty"`
+	Region                         string `json:"region,omitempty"`
+	GroupID                        string `json:"groupId,omitempty"`
+	Model                          string `json:"model"`
+	Voice                          string `json:"voice"`
+	Format                         string `json:"format"`
+	Instruction                    string `json:"instruction,omitempty"`
+	DisableInstructionOptimization bool   `json:"-"`
 }
 
 type TimingConfig struct {

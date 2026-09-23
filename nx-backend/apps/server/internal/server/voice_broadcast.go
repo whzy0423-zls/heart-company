@@ -313,7 +313,7 @@ func voiceBroadcastTTSConfig(cfg voiceBroadcastConfig) xinzhili.TTSConfig {
 	return xinzhili.TTSConfig{
 		Provider: normalizeVoiceBroadcastProvider(cfg.Provider), Endpoint: endpoint,
 		APIKey: cfg.APIKey, Region: strings.TrimSpace(cfg.Region), GroupID: cfg.GroupID, Model: cfg.Model, Voice: cfg.Voice,
-		Format: format, Instruction: cfg.Instruction,
+		Format: format, Instruction: cfg.Instruction, DisableInstructionOptimization: true,
 	}
 }
 

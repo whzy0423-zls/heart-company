@@ -136,6 +136,20 @@ func TestNormalizeVoiceBroadcastProviderAcceptsAdminAlias(t *testing.T) {
 	}
 }
 
+func TestVoiceBroadcastTTSConfigSkipsInstructionOptimization(t *testing.T) {
+	cfg := voiceBroadcastTTSConfig(voiceBroadcastConfig{
+		Provider: voiceBroadcastProviderBailian,
+		Model:    "qwen3-tts-instruct-flash",
+		Voice:    "Cherry",
+	})
+	if cfg.Model != "qwen3-tts-instruct-flash" || cfg.Voice != "Cherry" {
+		t.Fatalf("model or voice changed: %+v", cfg)
+	}
+	if !cfg.DisableInstructionOptimization {
+		t.Fatal("ordinary voice broadcast should skip instruction rewriting")
+	}
+}
+
 func TestLoadVoiceBroadcastConfigUsesAdminSingleton(t *testing.T) {
 	key := "admin-secret"
 	store := &memoryVoiceBroadcastConfigStore{

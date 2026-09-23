@@ -230,7 +230,7 @@ func (p *bailianHostedMiniMaxTTS) Synthesize(ctx context.Context, cfg TTSConfig,
 		input["voice"] = cfg.Voice
 		input["language_type"] = "Chinese"
 		input["instructions"] = instruction
-		input["optimize_instructions"] = true
+		input["optimize_instructions"] = !cfg.DisableInstructionOptimization
 	} else if isBailianQwenAudioTTSModel(cfg.Model) {
 		input["voice"] = cfg.Voice
 		instruction := strings.TrimSpace(cfg.Instruction)
