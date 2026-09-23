@@ -18,7 +18,7 @@ vi.mock('ant-design-vue', async () => {
 });
 import Composer from './distribution-poster-composer.vue';
 async function settle() { for (let i = 0; i < 12; i++) await flushVuePromises(); }
-function mount(editable = false) { return mountVueComponent(defineComponent({ setup: () => () => h(Composer, { editable, agentCode: 'A123' }) })); }
+function mount(editable = false, agentCode: string | undefined = 'A123') { return mountVueComponent(defineComponent({ setup: () => () => h(Composer, { editable, agentCode }) })); }
 const config = { templateUrl: '/api/upload-assets/1', landingUrl: 'https://example.com/fixed', qrImageUrl: '', qrSize: 176, qrX: 62, qrY: 1010, inviteX: 286, inviteY: 1100, inviteWidth: 350, inviteFontSize: 26 };
 describe('central poster configuration', () => {
   beforeEach(() => {
@@ -26,7 +26,7 @@ describe('central poster configuration', () => {
     state.get.mockReset().mockResolvedValue(config);
     state.save.mockReset().mockResolvedValue({});
     state.qr.mockReset().mockResolvedValue('data:image/png;base64,AA==');
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn(), fillRect: vi.fn(), fillText: vi.fn(), beginPath: vi.fn(), roundRect: vi.fn(), fill: vi.fn() } as any);
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ clearRect: vi.fn(), drawImage: vi.fn(), fillRect: vi.fn(), fillText: vi.fn(), beginPath: vi.fn(), roundRect: vi.fn(), fill: vi.fn(), scale: vi.fn(), setLineDash: vi.fn(), strokeRect: vi.fn() } as any);
     vi.stubGlobal('Image', class {
       naturalWidth = 720; naturalHeight = 1280; onload?: () => void;
       set src(_: string) { queueMicrotask(() => this.onload?.()); }
@@ -55,6 +55,20 @@ describe('central poster configuration', () => {
     await settle();
     wrapper.button('保存并发布')!.click(); await settle();
     expect(state.save).toHaveBeenCalledWith(expect.objectContaining({ qrX: 72, templates: expect.any(Array) }));
+    wrapper.unmount();
+  });
+  it('admin can download a 3x PNG without entering a preview invitation', async () => {
+    state.codes = ['Customer:App:List', 'Customer:App:Write'];
+    const toDataURL = vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,poster');
+    const download = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const wrapper = mount(true, ''); await settle();
+    expect(wrapper.button('生成并下载 PNG')?.disabled).toBe(false);
+    const canvas = document.body.querySelector('canvas')!;
+    expect(canvas.width).toBe(2160);
+    expect(canvas.height).toBe(3840);
+    wrapper.button('生成并下载 PNG')!.click();
+    expect(toDataURL).toHaveBeenCalledWith('image/png');
+    expect(download).toHaveBeenCalledOnce();
     wrapper.unmount();
   });
   it('official QR URL remains the source even when a legacy image exists', async () => {

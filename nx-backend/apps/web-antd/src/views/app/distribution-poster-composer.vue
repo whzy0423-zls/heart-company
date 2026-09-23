@@ -81,6 +81,7 @@ const rendering = ref(false);
 const ready = ref(false);
 const loadError = ref(false);
 const renderError = ref('');
+const downloadDisabled = computed(() => !ready.value || rendering.value || (!canEdit.value && showInviteCode.value && !inviteCode.value.trim()));
 let renderVersion = 0;
 let disposed = false;
 const imageCache = new Map<string, Promise<HTMLImageElement>>();
@@ -297,7 +298,7 @@ async function render() {
 }
 
 function downloadPoster() {
-  if (!ready.value || rendering.value || (showInviteCode.value && !inviteCode.value.trim()) || !canvasRef.value) return;
+  if (downloadDisabled.value || !canvasRef.value) return;
   try {
     const link = document.createElement('a');
     link.download = '芯之力-代理海报.png';
@@ -329,7 +330,7 @@ onBeforeUnmount(() => {
         <Button v-if="canEdit" @click="addTemplate(true)" :disabled="!templates.length">复制模板</Button>
         <Button v-if="canEdit" danger @click="removeTemplate" :disabled="templates.length <= 1">删除模板</Button>
         <Button v-if="canEdit" type="primary" :loading="saving" :disabled="!ready || rendering || uploading || (!landingUrl.trim() && !qrImageUrl)" @click="saveConfig">保存并发布</Button>
-        <Button :disabled="!ready || rendering || (showInviteCode && !inviteCode.trim())" @click="downloadPoster">生成并下载 PNG</Button>
+        <Button :disabled="downloadDisabled" @click="downloadPoster">生成并下载 PNG</Button>
       </Space>
     </template>
     <Alert v-if="loadError" type="error" show-icon message="海报配置加载失败，请重新加载" />
