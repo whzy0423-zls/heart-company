@@ -12,10 +12,18 @@ type SentenceChunker struct {
 }
 
 func NewSentenceChunker(maxRunes int) *SentenceChunker {
+	return NewSentenceChunkerWithMin(maxRunes, defaultSentenceChunkerMinRunes)
+}
+
+// NewSentenceChunkerWithMin lets a latency-sensitive caller start a complete
+// short sentence earlier without changing the default realtime TTS cadence.
+func NewSentenceChunkerWithMin(maxRunes, minRunes int) *SentenceChunker {
 	if maxRunes <= 0 {
 		maxRunes = 42
 	}
-	minRunes := defaultSentenceChunkerMinRunes
+	if minRunes <= 0 {
+		minRunes = defaultSentenceChunkerMinRunes
+	}
 	if minRunes > maxRunes {
 		minRunes = maxRunes
 	}

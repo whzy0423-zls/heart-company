@@ -398,6 +398,7 @@ func (s *Server) appSkillSessionAskStream(w http.ResponseWriter, r *http.Request
 	flusher.Flush()
 	voiceReplyID := newVoiceBroadcastReplyID()
 	events := make(chan skillStreamEvent, appChatStreamEventBuffer)
+	var voiceDelivery skillVoiceDelivery
 	voiceEnabled := s.voiceBroadcastEnabledForUser(r.Context(), appUserID)
 	var voiceStream *voiceBroadcastStream
 	var voiceClose *voiceBroadcastCloseHandle
@@ -475,34 +476,43 @@ func (s *Server) appSkillSessionAskStream(w http.ResponseWriter, r *http.Request
 				_ = voiceStream.Push(event.delta)
 			}
 		case skillStreamVoice:
-			if event.voice != nil {
-				if err := writeAppChatSSE(w, flusher, "voice", event.voice.ssePayload()); err != nil {
-					if voiceStream != nil {
-						voiceStream.Cancel()
-						voiceStream.detachEmit()
-					}
-					cancel()
-					return
+			if err := voiceDelivery.writeEvent(w, flusher, event); err != nil {
+				if voiceStream != nil {
+					voiceStream.Cancel()
+					voiceStream.detachEmit()
 				}
+				cancel()
+				return
 			}
 		case skillStreamVoiceError:
-			if event.voiceError != nil {
-				_ = writeAppChatSSE(w, flusher, "voice_error", event.voiceError)
-			}
+			_ = voiceDelivery.writeEvent(w, flusher, event)
 		case skillStreamDone:
 			if voiceStream != nil {
 				voiceClose = startVoiceBroadcastClose(voiceStream)
 				voiceStream = nil
-				closeErr, completed := voiceClose.await(s.voiceBroadcastTerminalDrainTimeout())
-				if !completed {
-					if err := writeAppChatSSE(w, flusher, "voice_error", voiceBroadcastErrorPayload{ReplyID: voiceReplyID, Code: "synthesis_timeout"}); err != nil {
-						return
-					}
-				} else if code := voiceBroadcastTerminalErrorCode(closeErr, voiceCtx.Err()); code != "" {
-					if err := writeAppChatSSE(w, flusher, "voice_error", voiceBroadcastErrorPayload{ReplyID: voiceReplyID, Code: code}); err != nil {
+				timer := time.NewTimer(s.voiceBroadcastTerminalDrainTimeout())
+				terminalErrorCode := ""
+				waiting := true
+				for waiting {
+					select {
+					case queued := <-events:
+						if err := voiceDelivery.writeEvent(w, flusher, queued); err != nil {
+							timer.Stop()
+							return
+						}
+					case closeErr := <-voiceClose.done:
+						terminalErrorCode = voiceBroadcastTerminalErrorCode(closeErr, voiceCtx.Err())
+						waiting = false
+					case <-timer.C:
+						voiceClose.abort()
+						terminalErrorCode = "synthesis_timeout"
+						waiting = false
+					case <-voiceCtx.Done():
+						timer.Stop()
 						return
 					}
 				}
+				timer.Stop()
 				// Close completion guarantees that all segments emitted before the
 				// terminal have reached the queue. Drain those frames before done.
 				for {
@@ -511,25 +521,20 @@ func (s *Server) appSkillSessionAskStream(w http.ResponseWriter, r *http.Request
 						if !queueOK {
 							goto voiceQueueDrained
 						}
-						switch queued.kind {
-						case skillStreamVoice:
-							if queued.voice != nil {
-								if err := writeAppChatSSE(w, flusher, "voice", queued.voice.ssePayload()); err != nil {
-									return
-								}
-							}
-						case skillStreamVoiceError:
-							if queued.voiceError != nil {
-								if err := writeAppChatSSE(w, flusher, "voice_error", queued.voiceError); err != nil {
-									return
-								}
-							}
+						if err := voiceDelivery.writeEvent(w, flusher, queued); err != nil {
+							return
 						}
 					default:
 						goto voiceQueueDrained
 					}
 				}
 			voiceQueueDrained:
+				if voiceCtx.Err() != nil {
+					return
+				}
+				if err := voiceDelivery.finish(w, flusher, voiceReplyID, terminalErrorCode); err != nil {
+					return
+				}
 				voiceClose.abort()
 				voiceClose = nil
 			}
@@ -544,6 +549,54 @@ func (s *Server) appSkillSessionAskStream(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
+}
+
+type skillVoiceDelivery struct {
+	nextSegmentSeq uint32
+	hasAudio       bool
+	terminated     bool
+}
+
+func (d *skillVoiceDelivery) writeEvent(w http.ResponseWriter, flusher http.Flusher, event skillStreamEvent) error {
+	switch event.kind {
+	case skillStreamVoice:
+		if event.voice != nil {
+			if err := writeAppChatSSE(w, flusher, "voice", event.voice.ssePayload()); err != nil {
+				return err
+			}
+			if len(event.voice.Audio) > 0 {
+				d.hasAudio = true
+				d.nextSegmentSeq = event.voice.SegmentSeq + 1
+			}
+			if event.voice.Final {
+				d.terminated = true
+			}
+		}
+	case skillStreamVoiceError:
+		if event.voiceError != nil {
+			return writeAppChatSSE(w, flusher, "voice_error", event.voiceError)
+		}
+	}
+	return nil
+}
+
+func (d *skillVoiceDelivery) finish(w http.ResponseWriter, flusher http.Flusher, replyID, errorCode string) error {
+	if errorCode == "" {
+		return nil
+	}
+	if d.hasAudio {
+		// The App stops playback on voice_error; finish partial audio instead.
+		if d.terminated {
+			return nil
+		}
+		return d.writeEvent(w, flusher, skillStreamEvent{
+			kind: skillStreamVoice,
+			voice: &voiceBroadcastSegment{
+				ReplyID: replyID, SegmentSeq: d.nextSegmentSeq, MIME: "audio/mpeg", Final: true,
+			},
+		})
+	}
+	return writeAppChatSSE(w, flusher, "voice_error", voiceBroadcastErrorPayload{ReplyID: replyID, Code: errorCode})
 }
 
 type skillStreamEventKind uint8

@@ -148,7 +148,7 @@ func newVoiceBroadcastStream(ctx context.Context, replyID string, provider voice
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &voiceBroadcastStream{
 		ctx: ctx, runCtx: streamCtx, cancel: cancel, replyID: strings.TrimSpace(replyID), provider: provider,
-		emit: emit, chunker: voice.NewSentenceChunker(96), jobs: make(chan string, voiceBroadcastQueueSize), done: make(chan struct{}),
+		emit: emit, chunker: voice.NewSentenceChunkerWithMin(42, 8), jobs: make(chan string, voiceBroadcastQueueSize), done: make(chan struct{}),
 	}
 	if stream.replyID == "" {
 		stream.replyID = newVoiceBroadcastReplyID()
@@ -195,22 +195,8 @@ func (s *voiceBroadcastStream) enqueue(chunks []string) error {
 		case <-s.runCtx.Done():
 			return s.runCtx.Err()
 		default:
-			// Prefer the newest sentence when the optional voice queue is full.
-			// Dropping an older queued sentence is preferable to blocking text
-			// delivery; the terminal Close call can still enqueue its final text.
-			select {
-			case <-s.jobs:
-			default:
-			}
-			select {
-			case s.jobs <- chunk:
-			case <-s.runCtx.Done():
-				return s.runCtx.Err()
-			default:
-				// The worker may have won the race between the two non-blocking
-				// operations. Dropping this chunk still preserves the no-blocking
-				// contract.
-			}
+			// Keep the earliest sentences, especially the first audible reply,
+			// without allowing optional TTS to slow the text stream.
 		}
 	}
 	return nil
