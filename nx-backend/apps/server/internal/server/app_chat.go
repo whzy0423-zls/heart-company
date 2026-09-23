@@ -791,6 +791,7 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 		quotaKey:             quotaKey,
 		voiceBroadcast:       voiceEnabled,
 		voiceReplyID:         newVoiceBroadcastReplyID(),
+		voiceContext:         r.Context(),
 	})
 	s.pumpAppChatStream(ctx, cancel, r.Context(), w, flusher, events, lifecycle, userInfo.ID, sessionID, streamStartedAt, chatTimeout)
 }
@@ -818,6 +819,7 @@ type appChatStreamPipelineInput struct {
 	quotaKey             string
 	voiceBroadcast       bool
 	voiceReplyID         string
+	voiceContext         context.Context
 }
 
 func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- appChatStreamEvent, input appChatStreamPipelineInput) {
@@ -836,21 +838,33 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 
 	var voiceStream *voiceBroadcastStream
 	var voiceClose *voiceBroadcastCloseHandle
+	voiceCtx := input.voiceContext
+	if voiceCtx == nil {
+		voiceCtx = ctx
+	}
+	sendVoice := func(event appChatStreamEvent) bool {
+		select {
+		case events <- event:
+			return true
+		case <-voiceCtx.Done():
+			return false
+		}
+	}
 	if input.voiceBroadcast {
-		provider, err := s.newVoiceBroadcastSynthesizer(ctx)
+		provider, err := s.newVoiceBroadcastSynthesizer(voiceCtx)
 		if err != nil {
 			// Voice is an optional side channel; text generation continues.
-			_ = send(appChatStreamEvent{kind: appChatStreamVoiceError, voiceError: &voiceBroadcastErrorPayload{ReplyID: input.voiceReplyID, Code: "provider_unavailable"}})
+			_ = sendVoice(appChatStreamEvent{kind: appChatStreamVoiceError, voiceError: &voiceBroadcastErrorPayload{ReplyID: input.voiceReplyID, Code: "provider_unavailable"}})
 		} else {
-			voiceStream = newVoiceBroadcastStream(ctx, input.voiceReplyID, provider, func(segment voiceBroadcastSegment) error {
+			voiceStream = newVoiceBroadcastStream(voiceCtx, input.voiceReplyID, provider, func(segment voiceBroadcastSegment) error {
 				copy := segment
 				// Voice is an optional side channel. Never let a burst of audio
 				// segments block text persistence or terminal delivery.
 				select {
 				case events <- appChatStreamEvent{kind: appChatStreamVoice, voice: &copy}:
 					return nil
-				case <-ctx.Done():
-					return ctx.Err()
+				case <-voiceCtx.Done():
+					return voiceCtx.Err()
 				default:
 					return errors.New("voice event queue full")
 				}
@@ -1036,9 +1050,10 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 	}
 	s.commitAppChatQuota(input.quotaKey)
 	if voiceClose != nil {
-		if closeErr, completed := voiceClose.await(voiceBroadcastCloseGrace); completed && closeErr != nil &&
-			!errors.Is(closeErr, context.Canceled) && !errors.Is(closeErr, context.DeadlineExceeded) {
-			_ = send(appChatStreamEvent{kind: appChatStreamVoiceError, voiceError: &voiceBroadcastErrorPayload{ReplyID: input.voiceReplyID, Code: "synthesis_failed"}})
+		if closeErr, completed := voiceClose.await(s.voiceBroadcastTerminalDrainTimeout()); !completed {
+			_ = sendVoice(appChatStreamEvent{kind: appChatStreamVoiceError, voiceError: &voiceBroadcastErrorPayload{ReplyID: input.voiceReplyID, Code: "synthesis_timeout"}})
+		} else if code := voiceBroadcastTerminalErrorCode(closeErr, voiceCtx.Err()); code != "" {
+			_ = sendVoice(appChatStreamEvent{kind: appChatStreamVoiceError, voiceError: &voiceBroadcastErrorPayload{ReplyID: input.voiceReplyID, Code: code}})
 		}
 	}
 	// Start the reserved fallback without waiting on the per-user mutation lock,

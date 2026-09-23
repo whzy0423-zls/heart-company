@@ -390,6 +390,7 @@ func (s *Server) appSkillSessionAskStream(w http.ResponseWriter, r *http.Request
 	_, timeout := s.chatRuntime()
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
+	voiceCtx := r.Context()
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -409,14 +410,14 @@ func (s *Server) appSkillSessionAskStream(w http.ResponseWriter, r *http.Request
 		}
 	}()
 	if voiceEnabled {
-		provider, providerErr := s.newVoiceBroadcastSynthesizer(ctx)
+		provider, providerErr := s.newVoiceBroadcastSynthesizer(voiceCtx)
 		if providerErr == nil {
-			voiceStream = newVoiceBroadcastStream(ctx, voiceReplyID, provider, func(segment voiceBroadcastSegment) error {
+			voiceStream = newVoiceBroadcastStream(voiceCtx, voiceReplyID, provider, func(segment voiceBroadcastSegment) error {
 				select {
 				case events <- skillStreamEvent{kind: skillStreamVoice, voice: &segment}:
 					return nil
-				case <-ctx.Done():
-					return ctx.Err()
+				case <-voiceCtx.Done():
+					return voiceCtx.Err()
 				default:
 					return errors.New("voice event queue full")
 				}
@@ -424,7 +425,7 @@ func (s *Server) appSkillSessionAskStream(w http.ResponseWriter, r *http.Request
 		} else {
 			select {
 			case events <- skillStreamEvent{kind: skillStreamVoiceError, voiceError: &voiceBroadcastErrorPayload{ReplyID: voiceReplyID, Code: "provider_unavailable"}}:
-			case <-ctx.Done():
+			case <-voiceCtx.Done():
 			}
 		}
 	}
@@ -492,9 +493,13 @@ func (s *Server) appSkillSessionAskStream(w http.ResponseWriter, r *http.Request
 			if voiceStream != nil {
 				voiceClose = startVoiceBroadcastClose(voiceStream)
 				voiceStream = nil
-				closeErr, completed := voiceClose.await(voiceBroadcastCloseGrace)
-				if completed && closeErr != nil && !errors.Is(closeErr, context.Canceled) && !errors.Is(closeErr, context.DeadlineExceeded) {
-					if err := writeAppChatSSE(w, flusher, "voice_error", voiceBroadcastErrorPayload{ReplyID: voiceReplyID, Code: "synthesis_failed"}); err != nil {
+				closeErr, completed := voiceClose.await(s.voiceBroadcastTerminalDrainTimeout())
+				if !completed {
+					if err := writeAppChatSSE(w, flusher, "voice_error", voiceBroadcastErrorPayload{ReplyID: voiceReplyID, Code: "synthesis_timeout"}); err != nil {
+						return
+					}
+				} else if code := voiceBroadcastTerminalErrorCode(closeErr, voiceCtx.Err()); code != "" {
+					if err := writeAppChatSSE(w, flusher, "voice_error", voiceBroadcastErrorPayload{ReplyID: voiceReplyID, Code: code}); err != nil {
 						return
 					}
 				}
@@ -527,6 +532,9 @@ func (s *Server) appSkillSessionAskStream(w http.ResponseWriter, r *http.Request
 			voiceQueueDrained:
 				voiceClose.abort()
 				voiceClose = nil
+			}
+			if voiceCtx.Err() != nil {
+				return
 			}
 			if event.err != nil {
 				_ = writeAppChatSSE(w, flusher, "error", map[string]string{"message": "回答生成失败，请重试"})

@@ -11,16 +11,35 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/voice"
+	"nine-xing/nx-backend/apps/server/internal/xinzhili"
 )
 
 const voiceBroadcastQueueSize = 8
 
-// voiceBroadcastCloseGrace is only the terminal ordering grace period. Text
-// persistence starts before this period is observed, so a slow optional TTS
-// provider cannot hold the database write. Fast providers still flush their
-// final segment before the text done event, preserving the original protocol
-// ordering.
-const voiceBroadcastCloseGrace = 300 * time.Millisecond
+// defaultVoiceBroadcastDrainTimeout covers the usual one-to-three sentence
+// answer while remaining bounded by the Bailian HTTP client's request budget.
+// Text deltas and persistence complete before this terminal drain starts.
+const defaultVoiceBroadcastDrainTimeout = 30 * time.Second
+
+func (s *Server) voiceBroadcastTerminalDrainTimeout() time.Duration {
+	if s != nil && s.voiceBroadcastDrainTimeout > 0 {
+		return s.voiceBroadcastDrainTimeout
+	}
+	return defaultVoiceBroadcastDrainTimeout
+}
+
+func voiceBroadcastTerminalErrorCode(err, requestErr error) string {
+	if err == nil {
+		return ""
+	}
+	if requestErr != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		return ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, xinzhili.ErrTTSTimeout) {
+		return "synthesis_timeout"
+	}
+	return "synthesis_failed"
+}
 
 // voiceBroadcastSegment is an in-process segment. Audio is converted to a
 // base64 string only at the HTTP/WebSocket boundary, never persisted.

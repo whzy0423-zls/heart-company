@@ -388,7 +388,85 @@ func TestAppChatStreamEmitsVoiceSideChannelWithoutChangingTextEvents(t *testing.
 	}
 }
 
-func TestAppChatStreamDoesNotWaitForSlowVoiceClose(t *testing.T) {
+func TestAppChatStreamKeepsValidSlowVoiceBeforeDone(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	s := newAppChatStreamServer(store, successfulAppChatGenerator("这是第一句内容，需要播报。这是第二句内容，也需要播报。"))
+	s.voiceBroadcastPreferences = newMemoryVoiceBroadcastPreferenceStore()
+	if err := s.voiceBroadcastPreferences.Set(context.Background(), 7, true); err != nil {
+		t.Fatal(err)
+	}
+	s.voiceBroadcastConfigLoader = func(context.Context) (voiceBroadcastConfig, error) {
+		return voiceBroadcastConfig{Enabled: true, Provider: voiceBroadcastProviderBailian, APIKey: "test", Model: voiceBroadcastDefaultModel, Voice: voiceBroadcastDefaultVoice}, nil
+	}
+	s.voiceBroadcastSynthesizerFactory = func(context.Context) (voiceBroadcastSynthesizer, error) {
+		return delayedVoiceBroadcastProvider{delay: 450 * time.Millisecond}, nil
+	}
+
+	w := newAppChatBlockingStreamWriter()
+	s.appChatRouter(w, newAppChatStreamRequest(context.Background()))
+	body := w.BodyString()
+	voiceIndex := strings.Index(body, "event: voice\n")
+	lastVoiceIndex := strings.LastIndex(body, "event: voice\n")
+	doneIndex := strings.Index(body, "event: done\n")
+	if voiceIndex < 0 || lastVoiceIndex == voiceIndex {
+		t.Fatalf("two slow valid voice segments missing: %q", body)
+	}
+	if doneIndex < 0 || lastVoiceIndex > doneIndex {
+		t.Fatalf("slow valid voice segments must arrive before done: %q", body)
+	}
+}
+
+func TestAppChatVoiceOutlivesGenerationDeadlineAfterPersistence(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	s := newAppChatStreamServer(store, successfulAppChatGenerator("生成已经结束，语音仍需完成。"))
+	s.chatTimeout = 100 * time.Millisecond
+	s.voiceBroadcastPreferences = newMemoryVoiceBroadcastPreferenceStore()
+	if err := s.voiceBroadcastPreferences.Set(context.Background(), 7, true); err != nil {
+		t.Fatal(err)
+	}
+	s.voiceBroadcastConfigLoader = func(context.Context) (voiceBroadcastConfig, error) {
+		return voiceBroadcastConfig{Enabled: true, Provider: voiceBroadcastProviderBailian, APIKey: "test", Model: voiceBroadcastDefaultModel, Voice: voiceBroadcastDefaultVoice}, nil
+	}
+	s.voiceBroadcastSynthesizerFactory = func(context.Context) (voiceBroadcastSynthesizer, error) {
+		return delayedVoiceBroadcastProvider{delay: 450 * time.Millisecond}, nil
+	}
+
+	w := newAppChatBlockingStreamWriter()
+	s.appChatRouter(w, newAppChatStreamRequest(context.Background()))
+	body := w.BodyString()
+	voiceIndex := strings.Index(body, "event: voice\n")
+	doneIndex := strings.Index(body, "event: done\n")
+	if voiceIndex < 0 {
+		t.Fatalf("voice was canceled by the generation deadline: %q", body)
+	}
+	if doneIndex < 0 || voiceIndex > doneIndex {
+		t.Fatalf("voice must arrive before done after persistence: %q", body)
+	}
+}
+
+func TestAppChatReportsProviderDeadlineAsVoiceTimeout(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	s := newAppChatStreamServer(store, successfulAppChatGenerator("语音服务内部超时。"))
+	s.voiceBroadcastPreferences = newMemoryVoiceBroadcastPreferenceStore()
+	if err := s.voiceBroadcastPreferences.Set(context.Background(), 7, true); err != nil {
+		t.Fatal(err)
+	}
+	s.voiceBroadcastConfigLoader = func(context.Context) (voiceBroadcastConfig, error) {
+		return voiceBroadcastConfig{Enabled: true, Provider: voiceBroadcastProviderBailian, APIKey: "test", Model: voiceBroadcastDefaultModel, Voice: voiceBroadcastDefaultVoice}, nil
+	}
+	s.voiceBroadcastSynthesizerFactory = func(context.Context) (voiceBroadcastSynthesizer, error) {
+		return failingVoiceBroadcastProvider{err: context.DeadlineExceeded}, nil
+	}
+
+	w := newAppChatBlockingStreamWriter()
+	s.appChatRouter(w, newAppChatStreamRequest(context.Background()))
+	body := w.BodyString()
+	if !strings.Contains(body, "event: voice_error\n") || !strings.Contains(body, `"code":"synthesis_timeout"`) {
+		t.Fatalf("provider deadline must emit voice timeout: %q", body)
+	}
+}
+
+func TestAppChatStreamBoundsStalledVoiceClose(t *testing.T) {
 	store := newFakeAppChatStreamStore()
 	s := newAppChatStreamServer(store, successfulAppChatGenerator("这是第一句内容，需要播报。"))
 	s.voiceBroadcastPreferences = newMemoryVoiceBroadcastPreferenceStore()
@@ -402,6 +480,7 @@ func TestAppChatStreamDoesNotWaitForSlowVoiceClose(t *testing.T) {
 	s.voiceBroadcastSynthesizerFactory = func(context.Context) (voiceBroadcastSynthesizer, error) {
 		return provider, nil
 	}
+	s.voiceBroadcastDrainTimeout = 50 * time.Millisecond
 	w := newAppChatBlockingStreamWriter()
 	done := make(chan struct{})
 	go func() {
@@ -427,6 +506,9 @@ func TestAppChatStreamDoesNotWaitForSlowVoiceClose(t *testing.T) {
 	body := w.BodyString()
 	if !strings.Contains(body, "event: done\n") || store.saveCallCount() != 1 {
 		t.Fatalf("text terminal/persistence missing after slow voice close: body=%q saves=%d", body, store.saveCallCount())
+	}
+	if !strings.Contains(body, "event: voice_error\n") || !strings.Contains(body, `"code":"synthesis_timeout"`) {
+		t.Fatalf("stalled voice close must emit a timeout error: %q", body)
 	}
 }
 
@@ -495,6 +577,25 @@ type recordingVoiceBroadcastProvider struct{}
 
 func (recordingVoiceBroadcastProvider) Synthesize(_ context.Context, text string) ([]byte, string, error) {
 	return []byte(text), "audio/mpeg", nil
+}
+
+type delayedVoiceBroadcastProvider struct{ delay time.Duration }
+
+func (p delayedVoiceBroadcastProvider) Synthesize(ctx context.Context, text string) ([]byte, string, error) {
+	timer := time.NewTimer(p.delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return []byte(text), "audio/mpeg", nil
+	case <-ctx.Done():
+		return nil, "", ctx.Err()
+	}
+}
+
+type failingVoiceBroadcastProvider struct{ err error }
+
+func (p failingVoiceBroadcastProvider) Synthesize(context.Context, string) ([]byte, string, error) {
+	return nil, "", p.err
 }
 
 type blockingVoiceBroadcastProvider struct {

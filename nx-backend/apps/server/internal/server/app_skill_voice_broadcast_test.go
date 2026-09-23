@@ -15,7 +15,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/skillchat"
 )
 
-func TestSkillChatStreamDoesNotWaitForSlowVoiceClose(t *testing.T) {
+func TestSkillChatStreamBoundsStalledVoiceClose(t *testing.T) {
 	provider := &blockingVoiceBroadcastProvider{started: make(chan struct{}), release: make(chan struct{})}
 	store := &slowVoiceSkillRuntimeStore{}
 	runtime := skillchat.NewRuntime(store, slowVoiceSkillSearcher{}, slowVoiceSkillGenerator{})
@@ -38,6 +38,7 @@ func TestSkillChatStreamDoesNotWaitForSlowVoiceClose(t *testing.T) {
 		voiceBroadcastSynthesizerFactory: func(context.Context) (voiceBroadcastSynthesizer, error) {
 			return provider, nil
 		},
+		voiceBroadcastDrainTimeout: 50 * time.Millisecond,
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/app/skill-sessions/42/ask/stream", strings.NewReader(`{"question":"请回答"}`))
 	writer := newAppChatBlockingStreamWriter()
@@ -57,11 +58,86 @@ func TestSkillChatStreamDoesNotWaitForSlowVoiceClose(t *testing.T) {
 		t.Fatal("skill text stream remained blocked by slow voice close")
 	}
 	close(provider.release)
-	if body := writer.BodyString(); !strings.Contains(body, "event: done\n") {
-		t.Fatalf("skill stream missing done event: %q", body)
+	if body := writer.BodyString(); !strings.Contains(body, "event: done\n") ||
+		!strings.Contains(body, "event: voice_error\n") || !strings.Contains(body, `"code":"synthesis_timeout"`) {
+		t.Fatalf("skill stream missing done or voice timeout event: %q", body)
 	}
 	if got := store.saves.Load(); got != 1 {
 		t.Fatalf("skill answer save count=%d, want 1", got)
+	}
+}
+
+func TestSkillChatStreamKeepsValidSlowVoiceBeforeDone(t *testing.T) {
+	store := &slowVoiceSkillRuntimeStore{}
+	runtime := skillchat.NewRuntime(store, slowVoiceSkillSearcher{}, slowVoiceSkillGenerator{})
+	s := &Server{
+		skillChatRuntime: runtime,
+		chatTimeout:      2 * time.Second,
+		voiceBroadcastPreferences: func() voiceBroadcastPreferenceStore {
+			preferences := newMemoryVoiceBroadcastPreferenceStore()
+			if err := preferences.Set(context.Background(), 7, true); err != nil {
+				t.Fatal(err)
+			}
+			return preferences
+		}(),
+		voiceBroadcastConfigLoader: func(context.Context) (voiceBroadcastConfig, error) {
+			return voiceBroadcastConfig{
+				Enabled: true, Provider: voiceBroadcastProviderBailian, APIKey: "test",
+				Model: voiceBroadcastDefaultModel, Voice: voiceBroadcastDefaultVoice,
+			}, nil
+		},
+		voiceBroadcastSynthesizerFactory: func(context.Context) (voiceBroadcastSynthesizer, error) {
+			return delayedVoiceBroadcastProvider{delay: 450 * time.Millisecond}, nil
+		},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/app/skill-sessions/42/ask/stream", strings.NewReader(`{"question":"请回答"}`))
+	writer := newAppChatBlockingStreamWriter()
+	s.appSkillSessionAskStream(writer, request, 7)
+	body := writer.BodyString()
+	voiceIndex := strings.Index(body, "event: voice\n")
+	doneIndex := strings.Index(body, "event: done\n")
+	if voiceIndex < 0 {
+		t.Fatalf("slow valid skill voice segment missing: %q", body)
+	}
+	if doneIndex < 0 || voiceIndex > doneIndex {
+		t.Fatalf("slow valid skill voice must arrive before done: %q", body)
+	}
+}
+
+func TestSkillChatVoiceOutlivesGenerationDeadline(t *testing.T) {
+	store := &slowVoiceSkillRuntimeStore{}
+	runtime := skillchat.NewRuntime(store, slowVoiceSkillSearcher{}, slowVoiceSkillGenerator{})
+	s := &Server{
+		skillChatRuntime: runtime,
+		chatTimeout:      100 * time.Millisecond,
+		voiceBroadcastPreferences: func() voiceBroadcastPreferenceStore {
+			preferences := newMemoryVoiceBroadcastPreferenceStore()
+			if err := preferences.Set(context.Background(), 7, true); err != nil {
+				t.Fatal(err)
+			}
+			return preferences
+		}(),
+		voiceBroadcastConfigLoader: func(context.Context) (voiceBroadcastConfig, error) {
+			return voiceBroadcastConfig{
+				Enabled: true, Provider: voiceBroadcastProviderBailian, APIKey: "test",
+				Model: voiceBroadcastDefaultModel, Voice: voiceBroadcastDefaultVoice,
+			}, nil
+		},
+		voiceBroadcastSynthesizerFactory: func(context.Context) (voiceBroadcastSynthesizer, error) {
+			return delayedVoiceBroadcastProvider{delay: 450 * time.Millisecond}, nil
+		},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/app/skill-sessions/42/ask/stream", strings.NewReader(`{"question":"请回答"}`))
+	writer := newAppChatBlockingStreamWriter()
+	s.appSkillSessionAskStream(writer, request, 7)
+	body := writer.BodyString()
+	voiceIndex := strings.Index(body, "event: voice\n")
+	doneIndex := strings.Index(body, "event: done\n")
+	if voiceIndex < 0 {
+		t.Fatalf("skill voice was canceled by the generation deadline: %q", body)
+	}
+	if doneIndex < 0 || voiceIndex > doneIndex {
+		t.Fatalf("skill voice must arrive before done: %q", body)
 	}
 }
 

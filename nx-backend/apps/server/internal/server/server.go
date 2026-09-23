@@ -107,6 +107,7 @@ type Server struct {
 	bailianRuntime             bailianCredentialRuntimeState
 	voiceBroadcastConfig       voiceBroadcastConfigStore
 	voiceBroadcastProbe        func(context.Context, voicebroadcastconfig.Config, string) voiceBroadcastProbeResult
+	voiceBroadcastDrainTimeout time.Duration
 	videos                     *video.Store
 	videoConfig                config.VideoConfig
 	videoAnalysis              *videoanalysis.Store
