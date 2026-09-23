@@ -65,6 +65,7 @@ type TTSConfig struct {
 	Format                         string `json:"format"`
 	Instruction                    string `json:"instruction,omitempty"`
 	DisableInstructionOptimization bool   `json:"-"`
+	UseStreamingAudio              bool   `json:"-"`
 }
 
 type TimingConfig struct {

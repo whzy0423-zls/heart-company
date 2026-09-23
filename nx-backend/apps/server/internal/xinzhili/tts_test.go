@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -470,6 +471,352 @@ func TestBailianQwenWAVHasSilentLeadInBeforeMP3Playback(t *testing.T) {
 	if got := peak(150, 200); got < 1000 {
 		t.Fatalf("speech after 120ms lead-in missing, peak=%d", got)
 	}
+}
+
+func TestBailianQwenInstructStreamingPCMProducesCompleteMP3(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("PCM normalization requires ffmpeg")
+	}
+	pcm := make([]byte, 24000*2*3/10)
+	for i := 0; i < len(pcm)/2; i++ {
+		value := int16(12000)
+		if i%24 >= 12 {
+			value = -value
+		}
+		binary.LittleEndian.PutUint16(pcm[i*2:], uint16(value))
+	}
+	var gotSSEHeader, gotAccept string
+	var gotBody map[string]any
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		gotSSEHeader = r.Header.Get("X-DashScope-SSE")
+		gotAccept = r.Header.Get("Accept")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, bailianSSEEvent(map[string]any{"output": map[string]any{"audio": map[string]any{"data": base64.StdEncoding.EncodeToString(pcm[:len(pcm)/2])}}}))
+		_, _ = io.WriteString(w, bailianSSEEvent(map[string]any{"output": map[string]any{"audio": map[string]any{"data": base64.StdEncoding.EncodeToString(pcm[len(pcm)/2:])}}}))
+		_, _ = io.WriteString(w, bailianSSEEvent(map[string]any{"output": map[string]any{"audio": map[string]any{"url": "https://audio.example.com/should-not-fetch.wav"}, "finish_reason": "stop"}}))
+	}))
+	defer server.Close()
+	cfg := TTSConfig{Provider: TTSProviderBailian, Endpoint: server.URL, APIKey: "key", Model: "qwen3-tts-instruct-flash", Voice: "Cherry", UseStreamingAudio: true}
+	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio, mimeType, err := provider.Synthesize(context.Background(), cfg, "在。")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotSSEHeader != "enable" || gotAccept != "text/event-stream" || requests.Load() != 1 {
+		t.Fatalf("SSE header=%q accept=%q requests=%d", gotSSEHeader, gotAccept, requests.Load())
+	}
+	if gotBody["model"] != cfg.Model || gotBody["input"].(map[string]any)["voice"] != cfg.Voice {
+		t.Fatalf("request body=%#v", gotBody)
+	}
+	if mimeType != "audio/mpeg" || !validMP3(audio) {
+		t.Fatalf("mime=%q validMP3=%v", mimeType, validMP3(audio))
+	}
+	decode := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "24000", "pipe:1")
+	decode.Stdin = bytes.NewReader(audio)
+	decoded, err := decode.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	peak := func(startMs, endMs int) int {
+		peakValue := 0
+		for i := startMs * 24; i < endMs*24 && 2*i+1 < len(decoded); i++ {
+			value := int(int16(binary.LittleEndian.Uint16(decoded[2*i:])))
+			if value < 0 {
+				value = -value
+			}
+			if value > peakValue {
+				peakValue = value
+			}
+		}
+		return peakValue
+	}
+	if got := peak(0, 80); got > 100 {
+		t.Fatalf("first 80ms should be silent, peak=%d", got)
+	}
+	if got := peak(150, 200); got < 1000 {
+		t.Fatalf("first PCM chunk missing, peak=%d", got)
+	}
+	if got := peak(360, 400); got < 1000 {
+		t.Fatalf("last PCM chunk missing, peak=%d", got)
+	}
+}
+
+func TestBailianQwenInstructStreamingRejectsIncompleteOrInvalidPCM(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"upstream error", bailianSSEEvent(map[string]any{"code": "InvalidParameter", "message": "secret upstream details"})},
+		{"malformed json", "data: {invalid-json}\n\n"},
+		{"missing final", bailianSSEEvent(map[string]any{"output": map[string]any{"audio": map[string]any{"data": "AQI="}}})},
+		{"odd PCM bytes", bailianSSEEvent(map[string]any{"output": map[string]any{"audio": map[string]any{"data": "AQ=="}, "finish_reason": "stop"}})},
+		{"invalid base64", bailianSSEEvent(map[string]any{"output": map[string]any{"audio": map[string]any{"data": "invalid!"}, "finish_reason": "stop"}})},
+		{"non-stop final", bailianSSEEvent(map[string]any{"output": map[string]any{"audio": map[string]any{"data": "AQI="}, "finish_reason": "length"}})},
+		{"frame exceeds limit", "data: " + strings.Repeat("A", 2*maxTTSSegmentBytes+64*1024) + "\n\n"},
+		{"PCM exceeds limit", strings.Repeat(bailianSSEEvent(map[string]any{
+			"output": map[string]any{"audio": map[string]any{"data": base64.StdEncoding.EncodeToString(make([]byte, 128*1024))}},
+		}), 4*maxTTSSegmentBytes/(128*1024)+1)},
+		{"SSE body exceeds limit", strings.Repeat(":"+strings.Repeat("x", 8192)+"\n\n", 8*maxTTSSegmentBytes/8195+2)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			defer server.Close()
+			cfg := TTSConfig{Provider: TTSProviderBailian, Endpoint: server.URL, APIKey: "key", Model: "qwen3-tts-instruct-flash", Voice: "Cherry", UseStreamingAudio: true}
+			provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			audio, mimeType, err := provider.Synthesize(context.Background(), cfg, "在。")
+			if err == nil || len(audio) != 0 || mimeType != "" {
+				t.Fatalf("audio=%d mime=%q err=%v", len(audio), mimeType, err)
+			}
+			if strings.Contains(err.Error(), "secret upstream details") {
+				t.Fatalf("upstream response leaked: %v", err)
+			}
+		})
+	}
+}
+
+func TestBailianQwenInstructStreamingFallsBackToSafeURLWhenPCMAbsent(t *testing.T) {
+	var downloads atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, bailianSSEEvent(map[string]any{"output": map[string]any{
+			"audio": map[string]any{"url": "https://audio.example.com/final.mp3"}, "finish_reason": "stop",
+		}}))
+	}))
+	defer server.Close()
+	client := server.Client()
+	upstreamTransport := client.Transport
+	client.Transport = testRoundTripper(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host == "audio.example.com" {
+			downloads.Add(1)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"audio/mpeg"}},
+				Body:       io.NopCloser(bytes.NewReader(testMP3())),
+			}, nil
+		}
+		return upstreamTransport.RoundTrip(req)
+	})
+	cfg := TTSConfig{Provider: TTSProviderBailian, Endpoint: server.URL, APIKey: "key", Model: "qwen3-tts-instruct-flash", Voice: "Cherry", UseStreamingAudio: true}
+	provider, err := (TTSProviderFactory{HTTPClient: client}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio, mimeType, err := provider.Synthesize(context.Background(), cfg, "在。")
+	if err != nil || mimeType != "audio/mpeg" || !bytes.Equal(audio, testMP3()) || downloads.Load() != 1 {
+		t.Fatalf("audio=%x mime=%q downloads=%d err=%v", audio, mimeType, downloads.Load(), err)
+	}
+}
+
+func TestBailianQwenInstructStreamingFallsBackToBoundedJSONAudio(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-DashScope-SSE") != "enable" {
+			t.Errorf("SSE header=%q", r.Header.Get("X-DashScope-SSE"))
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(map[string]any{"output": map[string]any{"audio": map[string]any{"data": base64.StdEncoding.EncodeToString(testMP3())}}})
+	}))
+	defer server.Close()
+	cfg := TTSConfig{Provider: TTSProviderBailian, Endpoint: server.URL, APIKey: "key", Model: "qwen3-tts-instruct-flash", Voice: "Cherry", UseStreamingAudio: true}
+	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio, mimeType, err := provider.Synthesize(context.Background(), cfg, "在。")
+	if err != nil || mimeType != "audio/mpeg" || !bytes.Equal(audio, testMP3()) {
+		t.Fatalf("audio=%x mime=%q err=%v", audio, mimeType, err)
+	}
+}
+
+func TestBailianQwenInstructStreamingJSONFallbackPreservesLegacyAudioFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"output": map[string]any{"data": map[string]any{"hex": hex.EncodeToString(testMP3())}}})
+	}))
+	defer server.Close()
+	cfg := TTSConfig{Provider: TTSProviderBailian, Endpoint: server.URL, APIKey: "key", Model: "qwen3-tts-instruct-flash", Voice: "Cherry", UseStreamingAudio: true}
+	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio, mimeType, err := provider.Synthesize(context.Background(), cfg, "在。")
+	if err != nil || mimeType != "audio/mpeg" || !bytes.Equal(audio, testMP3()) {
+		t.Fatalf("audio=%x mime=%q err=%v", audio, mimeType, err)
+	}
+}
+
+func TestBailianStreamingPCMParsesMultilineFinalEventWithoutBlankLine(t *testing.T) {
+	resp := &http.Response{
+		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader("data: {\"output\":\n" +
+			"data: {\"audio\":{\"data\":\"AQI=\"},\"finish_reason\":\"stop\"}}\n")),
+	}
+	provider := &bailianHostedMiniMaxTTS{}
+	wav, err := provider.readBailianStreamingAudio(context.Background(), resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wav) != 46 || string(wav[:4]) != "RIFF" || string(wav[8:12]) != "WAVE" || !bytes.Equal(wav[44:], []byte{1, 2}) {
+		t.Fatalf("wav=%x", wav)
+	}
+}
+
+func TestBailianStreamingPCMAllowsIntermediateNullFinishReason(t *testing.T) {
+	resp := &http.Response{
+		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(
+			bailianSSEEvent(map[string]any{"output": map[string]any{
+				"audio": map[string]any{"data": "AQI="}, "finish_reason": "null",
+			}}) + bailianSSEEvent(map[string]any{"output": map[string]any{
+				"finish_reason": "stop",
+			}}))),
+	}
+	provider := &bailianHostedMiniMaxTTS{}
+	wav, err := provider.readBailianStreamingAudio(context.Background(), resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wav) != 46 || !bytes.Equal(wav[44:], []byte{1, 2}) {
+		t.Fatalf("wav=%x", wav)
+	}
+}
+
+func TestBailianQwenInstructStreamingRejectsOversizedJSONFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"output":{"audio":"`+strings.Repeat("A", 2*maxTTSSegmentBytes+64*1024)+`"}}`)
+	}))
+	defer server.Close()
+	cfg := TTSConfig{Provider: TTSProviderBailian, Endpoint: server.URL, APIKey: "key", Model: "qwen3-tts-instruct-flash", Voice: "Cherry", UseStreamingAudio: true}
+	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio, _, err := provider.Synthesize(context.Background(), cfg, "在。")
+	if err == nil || !strings.Contains(err.Error(), "超过上限") || len(audio) != 0 {
+		t.Fatalf("audio=%d err=%v", len(audio), err)
+	}
+}
+
+func TestBailianQwenInstructStreamingRejectsEmptyErrorEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: error\n\n")
+	}))
+	defer server.Close()
+	cfg := TTSConfig{Provider: TTSProviderBailian, Endpoint: server.URL, APIKey: "key", Model: "qwen3-tts-instruct-flash", Voice: "Cherry", UseStreamingAudio: true}
+	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = provider.Synthesize(context.Background(), cfg, "在。")
+	if err == nil || !strings.Contains(err.Error(), "流式生成失败") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+type testRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f testRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestBailianQwenInstructStreamingCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, bailianSSEEvent(map[string]any{"output": map[string]any{"audio": map[string]any{"data": "AQI="}}}))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	cfg := TTSConfig{Provider: TTSProviderBailian, Endpoint: server.URL, APIKey: "key", Model: "qwen3-tts-instruct-flash", Voice: "Cherry", UseStreamingAudio: true}
+	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if audio, _, err := provider.Synthesize(ctx, cfg, "在。"); !errors.Is(err, ErrTTSTimeout) || len(audio) != 0 {
+		t.Fatalf("audio=%d err=%v", len(audio), err)
+	}
+}
+
+func TestBailianQwenInstructStreamingExplicitCancelDropsPartialPCM(t *testing.T) {
+	flushed := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, bailianSSEEvent(map[string]any{"output": map[string]any{"audio": map[string]any{"data": "AQI="}}}))
+		w.(http.Flusher).Flush()
+		close(flushed)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	cfg := TTSConfig{Provider: TTSProviderBailian, Endpoint: server.URL, APIKey: "key", Model: "qwen3-tts-instruct-flash", Voice: "Cherry", UseStreamingAudio: true}
+	provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-flushed
+		cancel()
+	}()
+	if audio, _, err := provider.Synthesize(ctx, cfg, "在。"); !errors.Is(err, context.Canceled) || len(audio) != 0 {
+		t.Fatalf("audio=%d err=%v", len(audio), err)
+	}
+}
+
+func TestBailianSSEHeaderOnlyForOptedInQwenInstruct(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		optIn bool
+	}{
+		{"ordinary instruct disabled", "qwen3-tts-instruct-flash", false},
+		{"clone enabled", "qwen3-tts-vc-2026-01-22", true},
+		{"MiniMax enabled", "MiniMax/speech-2.8-turbo", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("X-DashScope-SSE") != "" || r.Header.Get("Accept") != "application/json" {
+					t.Errorf("headers=%#v", r.Header)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{"output": map[string]any{"audio": hex.EncodeToString(testMP3())}})
+			}))
+			defer server.Close()
+			cfg := TTSConfig{Provider: TTSProviderBailian, Endpoint: server.URL, APIKey: "key", Model: tt.model, Voice: "voice", UseStreamingAudio: tt.optIn}
+			provider, err := (TTSProviderFactory{HTTPClient: server.Client()}).New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if audio, mimeType, err := provider.Synthesize(context.Background(), cfg, "短句"); err != nil || mimeType != "audio/mpeg" || !bytes.Equal(audio, testMP3()) {
+				t.Fatalf("audio=%x mime=%q err=%v", audio, mimeType, err)
+			}
+		})
+	}
+}
+
+func bailianSSEEvent(payload map[string]any) string {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	return "data: " + string(data) + "\n\n"
 }
 
 func TestBailianFetchAudioURLAcceptsOfficialWAVForMP3Normalization(t *testing.T) {

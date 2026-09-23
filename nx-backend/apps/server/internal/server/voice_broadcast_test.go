@@ -148,6 +148,9 @@ func TestVoiceBroadcastTTSConfigSkipsInstructionOptimization(t *testing.T) {
 	if !cfg.DisableInstructionOptimization {
 		t.Fatal("ordinary voice broadcast should skip instruction rewriting")
 	}
+	if !cfg.UseStreamingAudio {
+		t.Fatal("ordinary voice broadcast should consume provider audio without a second download")
+	}
 }
 
 func TestLoadVoiceBroadcastConfigUsesAdminSingleton(t *testing.T) {

@@ -1,10 +1,12 @@
 package xinzhili
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -35,6 +37,9 @@ const (
 	ttsRetryDelay       = 120 * time.Millisecond
 	bailianTTSPath      = "/api/v1/services/aigc/multimodal-generation/generation"
 	ttsWAVLeadInMS      = 120
+	maxTTSSSEFrameBytes = 2*maxTTSSegmentBytes + 64*1024
+	maxTTSSSEBodyBytes  = 8 * maxTTSSegmentBytes
+	maxTTSSSEPCMBytes   = 4 * maxTTSSegmentBytes
 )
 
 const DefaultCompanionTTSInstruction = "像真实的陪伴者一样自然、亲切地说话，根据语义自动调整情绪、轻重和停顿，避免播音腔；除非原文明确要求，不要切换成外语。"
@@ -260,7 +265,13 @@ func (p *bailianHostedMiniMaxTTS) Synthesize(ctx context.Context, cfg TTSConfig,
 		req.Header.Set("X-DashScope-WorkSpace", workspace)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
+	streaming := cfg.UseStreamingAudio && isBailianQwenInstructTTSModel(cfg.Model)
+	if streaming {
+		req.Header.Set("X-DashScope-SSE", "enable")
+		req.Header.Set("Accept", "text/event-stream")
+	} else {
+		req.Header.Set("Accept", "application/json")
+	}
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -273,39 +284,50 @@ func (p *bailianHostedMiniMaxTTS) Synthesize(ctx context.Context, cfg TTSConfig,
 		return nil, "", errors.New("TTS 请求失败")
 	}
 	defer resp.Body.Close()
-	// Hex may be 2x and Base64 about 4/3x the decoded MP3 size.
-	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 2*maxTTSSegmentBytes+64*1024))
-	if readErr != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(readErr, context.DeadlineExceeded) {
-			return nil, "", ErrTTSTimeout
+	var audio []byte
+	if streaming {
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			return nil, "", fmt.Errorf("TTS 请求失败（状态码 %d）", resp.StatusCode)
 		}
-		if ctx.Err() != nil {
-			return nil, "", ctx.Err()
+		audio, err = p.readBailianStreamingAudio(ctx, resp)
+		if err != nil {
+			return nil, "", err
 		}
-		return nil, "", errors.New("TTS 响应读取失败")
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, "", fmt.Errorf("TTS 请求失败（状态码 %d）", resp.StatusCode)
-	}
-	var result map[string]any
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return nil, "", errors.New("TTS 响应解析失败")
-	}
-	if err := bailianResponseError(result); err != nil {
-		return nil, "", err
-	}
-	audioRef := firstNestedString(result,
-		"data.audio", "data.hex", "data.base64", "data.audio_url", "data.url",
-		"output.audio", "output.audio.data", "output.audio.url", "output.hex", "output.base64", "output.audio_url", "output.url",
-		"output.data.audio", "output.data.hex", "output.data.base64", "output.data.audio_url", "output.data.url",
-		"audio", "hex", "base64", "audio_url", "url",
-	)
-	if audioRef == "" {
-		return nil, "", errors.New("TTS 返回空音频")
-	}
-	audio, err := p.decodeOrFetchAudio(ctx, audioRef)
-	if err != nil {
-		return nil, "", err
+	} else {
+		// Hex may be 2x and Base64 about 4/3x the decoded MP3 size.
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 2*maxTTSSegmentBytes+64*1024))
+		if readErr != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(readErr, context.DeadlineExceeded) {
+				return nil, "", ErrTTSTimeout
+			}
+			if ctx.Err() != nil {
+				return nil, "", ctx.Err()
+			}
+			return nil, "", errors.New("TTS 响应读取失败")
+		}
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			return nil, "", fmt.Errorf("TTS 请求失败（状态码 %d）", resp.StatusCode)
+		}
+		var result map[string]any
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return nil, "", errors.New("TTS 响应解析失败")
+		}
+		if err := bailianResponseError(result); err != nil {
+			return nil, "", err
+		}
+		audioRef := firstNestedString(result,
+			"data.audio", "data.hex", "data.base64", "data.audio_url", "data.url",
+			"output.audio", "output.audio.data", "output.audio.url", "output.hex", "output.base64", "output.audio_url", "output.url",
+			"output.data.audio", "output.data.hex", "output.data.base64", "output.data.audio_url", "output.data.url",
+			"audio", "hex", "base64", "audio_url", "url",
+		)
+		if audioRef == "" {
+			return nil, "", errors.New("TTS 返回空音频")
+		}
+		audio, err = p.decodeOrFetchAudio(ctx, audioRef)
+		if err != nil {
+			return nil, "", err
+		}
 	}
 	audio, err = normalizeXinzhiliTTSMP3(ctx, audio)
 	if err != nil {
@@ -321,6 +343,193 @@ func (p *bailianHostedMiniMaxTTS) Synthesize(ctx context.Context, cfg TTSConfig,
 		return nil, "", errors.New("TTS 返回的音频格式无效")
 	}
 	return audio, "audio/mpeg", nil
+}
+
+func (p *bailianHostedMiniMaxTTS) readBailianStreamingAudio(ctx context.Context, resp *http.Response) ([]byte, error) {
+	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err != nil {
+		return nil, errors.New("TTS 流式响应格式无效")
+	}
+	if strings.EqualFold(mediaType, "application/json") {
+		return p.readBailianStreamingJSONFallback(ctx, resp.Body)
+	}
+	if !strings.EqualFold(mediaType, "text/event-stream") {
+		return nil, errors.New("TTS 流式响应格式无效")
+	}
+	limited := &io.LimitedReader{R: resp.Body, N: maxTTSSSEBodyBytes + 1}
+	scanner := bufio.NewScanner(limited)
+	scanner.Buffer(make([]byte, 4096), maxTTSSSEFrameBytes+1)
+	var eventData strings.Builder
+	var pcm bytes.Buffer
+	var audioURL string
+	var eventType string
+	stopped := false
+	processEvent := func() error {
+		if eventData.Len() == 0 {
+			if eventType == "error" {
+				return errors.New("阿里百炼 TTS 流式生成失败")
+			}
+			eventType = ""
+			return nil
+		}
+		data := eventData.String()
+		eventData.Reset()
+		if data == "[DONE]" {
+			return errors.New("TTS 流式响应缺少结束标记")
+		}
+		var frame map[string]any
+		if err := json.Unmarshal([]byte(data), &frame); err != nil {
+			return errors.New("TTS 流式响应解析失败")
+		}
+		if eventType == "error" || bailianResponseError(frame) != nil {
+			return errors.New("阿里百炼 TTS 流式生成失败")
+		}
+		eventType = ""
+		if chunk := firstNestedString(frame, "output.audio.data"); chunk != "" {
+			if len(chunk) > base64.StdEncoding.EncodedLen(maxTTSSSEPCMBytes-pcm.Len()) {
+				return errors.New("TTS 流式 PCM 超过上限")
+			}
+			decoded, err := base64.StdEncoding.DecodeString(chunk)
+			if err != nil {
+				return errors.New("TTS 流式 PCM 解析失败")
+			}
+			if pcm.Len()+len(decoded) > maxTTSSSEPCMBytes {
+				return errors.New("TTS 流式 PCM 超过上限")
+			}
+			_, _ = pcm.Write(decoded)
+		}
+		if candidate := firstNestedString(frame, "output.audio.url", "output.audio_url"); candidate != "" {
+			if len(candidate) > 2048 {
+				return errors.New("TTS 流式音频 URL 过长")
+			}
+			audioURL = candidate
+		}
+		if reason := firstNestedString(frame, "output.finish_reason", "finish_reason"); reason != "" && reason != "null" {
+			if reason != "stop" {
+				return errors.New("TTS 流式响应未正常结束")
+			}
+			stopped = true
+		}
+		return nil
+	}
+	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return nil, ErrTTSTimeout
+			}
+			return nil, err
+		}
+		line := scanner.Text()
+		if line == "" {
+			if err := processEvent(); err != nil {
+				return nil, err
+			}
+			if stopped {
+				break
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "event:") {
+			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		}
+		if strings.HasPrefix(line, "data:") {
+			part := strings.TrimPrefix(line, "data:")
+			part = strings.TrimPrefix(part, " ")
+			if eventData.Len()+len(part)+1 > maxTTSSSEFrameBytes {
+				return nil, errors.New("TTS 流式事件超过上限")
+			}
+			if eventData.Len() > 0 {
+				_ = eventData.WriteByte('\n')
+			}
+			_, _ = eventData.WriteString(part)
+		}
+	}
+	if scanErr := scanner.Err(); scanErr != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(scanErr, context.DeadlineExceeded) {
+			return nil, ErrTTSTimeout
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, errors.New("TTS 流式响应读取失败")
+	}
+	if !stopped && (eventData.Len() > 0 || eventType == "error") {
+		if err := processEvent(); err != nil {
+			return nil, err
+		}
+	}
+	if limited.N == 0 {
+		return nil, errors.New("TTS 流式响应超过上限")
+	}
+	if !stopped {
+		return nil, errors.New("TTS 流式响应缺少结束标记")
+	}
+	if pcm.Len() > 0 {
+		if pcm.Len()%2 != 0 {
+			return nil, errors.New("TTS 流式 PCM 长度无效")
+		}
+		return wavFromBailianPCM(pcm.Bytes()), nil
+	}
+	if audioURL != "" {
+		if !strings.HasPrefix(strings.ToLower(audioURL), "https://") && !strings.HasPrefix(strings.ToLower(audioURL), "http://") {
+			return nil, errors.New("TTS 流式音频 URL 无效")
+		}
+		return p.decodeOrFetchAudio(ctx, audioURL)
+	}
+	return nil, errors.New("TTS 返回空音频")
+}
+
+func (p *bailianHostedMiniMaxTTS) readBailianStreamingJSONFallback(ctx context.Context, body io.Reader) ([]byte, error) {
+	const maxJSONBytes = 2*maxTTSSegmentBytes + 64*1024
+	raw, err := io.ReadAll(io.LimitReader(body, maxJSONBytes+1))
+	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, ErrTTSTimeout
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, errors.New("TTS JSON 回退读取失败")
+	}
+	if len(raw) > maxJSONBytes {
+		return nil, errors.New("TTS JSON 回退超过上限")
+	}
+	var result map[string]any
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, errors.New("TTS JSON 回退解析失败")
+	}
+	if bailianResponseError(result) != nil {
+		return nil, errors.New("阿里百炼 TTS 生成失败")
+	}
+	audioRef := firstNestedString(result,
+		"data.audio", "data.hex", "data.base64", "data.audio_url", "data.url",
+		"output.audio", "output.audio.data", "output.audio.url", "output.hex", "output.base64", "output.audio_url", "output.url",
+		"output.data.audio", "output.data.hex", "output.data.base64", "output.data.audio_url", "output.data.url",
+		"audio", "hex", "base64", "audio_url", "url",
+	)
+	if audioRef == "" {
+		return nil, errors.New("TTS 返回空音频")
+	}
+	return p.decodeOrFetchAudio(ctx, audioRef)
+}
+
+func wavFromBailianPCM(pcm []byte) []byte {
+	wav := make([]byte, 44+len(pcm))
+	copy(wav[:4], "RIFF")
+	binary.LittleEndian.PutUint32(wav[4:8], uint32(len(wav)-8))
+	copy(wav[8:12], "WAVE")
+	copy(wav[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(wav[16:20], 16)
+	binary.LittleEndian.PutUint16(wav[20:22], 1)
+	binary.LittleEndian.PutUint16(wav[22:24], 1)
+	binary.LittleEndian.PutUint32(wav[24:28], 24000)
+	binary.LittleEndian.PutUint32(wav[28:32], 24000*2)
+	binary.LittleEndian.PutUint16(wav[32:34], 2)
+	binary.LittleEndian.PutUint16(wav[34:36], 16)
+	copy(wav[36:40], "data")
+	binary.LittleEndian.PutUint32(wav[40:44], uint32(len(pcm)))
+	copy(wav[44:], pcm)
+	return wav
 }
 
 func normalizeXinzhiliTTSMP3(ctx context.Context, audio []byte) ([]byte, error) {
