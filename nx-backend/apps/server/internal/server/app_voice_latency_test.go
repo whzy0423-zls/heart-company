@@ -37,7 +37,7 @@ func TestVoiceBroadcastStartsShortCompleteSentenceBeforeClose(t *testing.T) {
 	}
 }
 
-func TestVoiceBroadcastStartsLongPhraseBeforeNinetySixRunes(t *testing.T) {
+func TestVoiceBroadcastStartsLongPhraseBeforeTextSentenceCompletes(t *testing.T) {
 	emitted := make(chan voiceBroadcastSegment, 2)
 	stream := newVoiceBroadcastStream(context.Background(), "long-reply", recordingVoiceBroadcastProvider{}, func(segment voiceBroadcastSegment) error {
 		emitted <- segment
@@ -50,12 +50,69 @@ func TestVoiceBroadcastStartsLongPhraseBeforeNinetySixRunes(t *testing.T) {
 	}
 	select {
 	case segment := <-emitted:
-		if string(segment.Audio) != strings.Repeat("说", 42) || segment.Final {
+		if string(segment.Audio) != strings.Repeat("说", 18) || segment.Final {
 			t.Fatalf("first segment = %+v", segment)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("long phrase waited for the 96-rune limit")
 	}
+}
+
+func TestAppChatStartsVoiceBeforeTextSentenceCompletes(t *testing.T) {
+	providerStarted := make(chan struct{})
+	var providerOnce sync.Once
+	store := newFakeAppChatStreamStore()
+	generator := &controlledAppChatStreamingGenerator{
+		generateStream: func(ctx context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+			for _, delta := range []string{"第一段内容正在", "继续输出更多内容", "再说吧"} {
+				if err := emit(delta); err != nil {
+					return "", err
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(2 * time.Second):
+				return "第一段内容正在继续输出更多内容再说吧。", nil
+			}
+		},
+	}
+	preferences := newMemoryVoiceBroadcastPreferenceStore()
+	if err := preferences.Set(context.Background(), 7, true); err != nil {
+		t.Fatal(err)
+	}
+	s := newAppChatStreamServer(store, generator)
+	s.voiceBroadcastPreferences = preferences
+	s.voiceBroadcastConfigLoader = enabledVoiceBroadcastConfig
+	s.voiceBroadcastSynthesizerFactory = func(context.Context) (voiceBroadcastSynthesizer, error) {
+		return voiceBroadcastProviderFunc(func(context.Context, string) ([]byte, string, error) {
+			providerOnce.Do(func() { close(providerStarted) })
+			return []byte("audio"), "audio/mpeg", nil
+		}), nil
+	}
+	writer := newAppChatBlockingStreamWriter()
+	request := newAppChatStreamRequest(context.Background())
+	done := make(chan struct{})
+	go func() {
+		s.appChatRouter(writer, request)
+		close(done)
+	}()
+	select {
+	case <-providerStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("voice TTS did not start while text sentence was still incomplete")
+	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("chat stream did not finish")
+	}
+}
+
+type voiceBroadcastProviderFunc func(context.Context, string) ([]byte, string, error)
+
+func (f voiceBroadcastProviderFunc) Synthesize(ctx context.Context, text string) ([]byte, string, error) {
+	return f(ctx, text)
 }
 
 func TestVoiceBroadcastKeepsTinyAcknowledgmentWithNextSentence(t *testing.T) {

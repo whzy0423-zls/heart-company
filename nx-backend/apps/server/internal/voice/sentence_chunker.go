@@ -6,9 +6,11 @@ const defaultSentenceChunkerMinRunes = 10
 
 // SentenceChunker 将流式文字切成可尽早送给 TTS 的有序句子。
 type SentenceChunker struct {
-	maxRunes int
-	minRunes int
-	buffer   []rune
+	maxRunes      int
+	minRunes      int
+	firstMaxRunes int
+	buffer        []rune
+	emittedChunk  bool
 }
 
 func NewSentenceChunker(maxRunes int) *SentenceChunker {
@@ -18,6 +20,13 @@ func NewSentenceChunker(maxRunes int) *SentenceChunker {
 // NewSentenceChunkerWithMin lets a latency-sensitive caller start a complete
 // short sentence earlier without changing the default realtime TTS cadence.
 func NewSentenceChunkerWithMin(maxRunes, minRunes int) *SentenceChunker {
+	return NewSentenceChunkerWithMinAndFirst(maxRunes, minRunes, 0)
+}
+
+// NewSentenceChunkerWithMinAndFirst uses a smaller limit for the first
+// unpunctuated chunk, allowing latency-sensitive TTS to start while the model
+// is still generating the rest of an answer. Subsequent chunks use maxRunes.
+func NewSentenceChunkerWithMinAndFirst(maxRunes, minRunes, firstMaxRunes int) *SentenceChunker {
 	if maxRunes <= 0 {
 		maxRunes = 42
 	}
@@ -27,7 +36,15 @@ func NewSentenceChunkerWithMin(maxRunes, minRunes int) *SentenceChunker {
 	if minRunes > maxRunes {
 		minRunes = maxRunes
 	}
-	return &SentenceChunker{maxRunes: maxRunes, minRunes: minRunes}
+	if firstMaxRunes > 0 {
+		if firstMaxRunes < minRunes {
+			firstMaxRunes = minRunes
+		}
+		if firstMaxRunes > maxRunes {
+			firstMaxRunes = maxRunes
+		}
+	}
+	return &SentenceChunker{maxRunes: maxRunes, minRunes: minRunes, firstMaxRunes: firstMaxRunes}
 }
 
 func (c *SentenceChunker) Push(delta string) []string {
@@ -37,14 +54,20 @@ func (c *SentenceChunker) Push(delta string) []string {
 		if isSentenceBoundary(r) && len(c.buffer) >= c.minRunes {
 			if chunk := strings.TrimSpace(string(c.buffer)); chunk != "" {
 				chunks = append(chunks, chunk)
+				c.emittedChunk = true
 			}
 			c.buffer = c.buffer[:0]
 			continue
 		}
-		if len(c.buffer) >= c.maxRunes {
-			cut := c.naturalPauseCut()
+		limit := c.maxRunes
+		if !c.emittedChunk && c.firstMaxRunes > 0 {
+			limit = c.firstMaxRunes
+		}
+		if len(c.buffer) >= limit {
+			cut := c.naturalPauseCut(limit)
 			if chunk := strings.TrimSpace(string(c.buffer[:cut])); chunk != "" {
 				chunks = append(chunks, chunk)
+				c.emittedChunk = true
 			}
 			c.buffer = append(c.buffer[:0], c.buffer[cut:]...)
 		}
@@ -52,14 +75,14 @@ func (c *SentenceChunker) Push(delta string) []string {
 	return chunks
 }
 
-func (c *SentenceChunker) naturalPauseCut() int {
+func (c *SentenceChunker) naturalPauseCut(limit int) int {
 	minimum := c.minRunes - 1
-	for index := len(c.buffer) - 1; index >= minimum; index-- {
+	for index := limit - 1; index >= minimum; index-- {
 		if isNaturalPause(c.buffer[index]) {
 			return index + 1
 		}
 	}
-	return c.maxRunes
+	return limit
 }
 
 func (c *SentenceChunker) Flush() []string {
@@ -68,6 +91,7 @@ func (c *SentenceChunker) Flush() []string {
 	if chunk == "" {
 		return nil
 	}
+	c.emittedChunk = true
 	return []string{chunk}
 }
 

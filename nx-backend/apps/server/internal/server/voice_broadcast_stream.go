@@ -148,7 +148,7 @@ func newVoiceBroadcastStream(ctx context.Context, replyID string, provider voice
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &voiceBroadcastStream{
 		ctx: ctx, runCtx: streamCtx, cancel: cancel, replyID: strings.TrimSpace(replyID), provider: provider,
-		emit: emit, chunker: voice.NewSentenceChunkerWithMin(42, 8), jobs: make(chan string, voiceBroadcastQueueSize), done: make(chan struct{}),
+		emit: emit, chunker: voice.NewSentenceChunkerWithMinAndFirst(42, 8, 18), jobs: make(chan string, voiceBroadcastQueueSize), done: make(chan struct{}),
 	}
 	if stream.replyID == "" {
 		stream.replyID = newVoiceBroadcastReplyID()

@@ -977,6 +977,7 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 
 		var sentenceBuffer answerhygiene.SentenceBuffer
 		emittedAnswer := false
+		voiceInputPushed := false
 		var immediatePrefix string
 		emitSafeSentences := func(sentences []string) error {
 			for _, sentence := range sentences {
@@ -1011,9 +1012,6 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 				case <-ctx.Done():
 					return ctx.Err()
 				}
-				if voiceStream != nil {
-					_ = voiceStream.Push(strings.TrimSpace(cleaned))
-				}
 			}
 			return nil
 		}
@@ -1039,6 +1037,13 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			if delta == "" {
 				return nil
 			}
+			// Keep the optional voice side channel independent from the text
+			// sentence buffer. The latter waits for strong punctuation, which
+			// delayed short replies until the whole model answer had arrived.
+			if voiceStream != nil && strings.TrimSpace(delta) != "" {
+				_ = voiceStream.Push(delta)
+				voiceInputPushed = true
+			}
 			// Push the first non-empty model increment immediately. Waiting for a
 			// complete sentence makes a healthy stream look stalled on mobile.
 			if !emittedAnswer {
@@ -1060,9 +1065,6 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 						emittedAnswer = true
 					case <-ctx.Done():
 						return ctx.Err()
-					}
-					if voiceStream != nil {
-						_ = voiceStream.Push(first)
 					}
 				}
 			}
@@ -1096,7 +1098,7 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			case <-ctx.Done():
 				return
 			}
-			if voiceStream != nil {
+			if voiceStream != nil && !voiceInputPushed {
 				_ = voiceStream.Push(ans.Answer)
 			}
 		}

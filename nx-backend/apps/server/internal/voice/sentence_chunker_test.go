@@ -67,3 +67,15 @@ func TestSentenceChunkerBatchesTinySpeechFragmentsForSmootherTTS(t *testing.T) {
 		t.Fatalf("chunks = %#v, want %#v", got, want)
 	}
 }
+
+func TestSentenceChunkerFlushesFirstUnpunctuatedChunkForLowLatency(t *testing.T) {
+	c := NewSentenceChunkerWithMinAndFirst(42, 8, 12)
+	if got := c.Push("第一段内容正在"); len(got) != 0 {
+		t.Fatalf("first partial chunk flushed too early: %#v", got)
+	}
+	got := c.Push("继续输出好")
+	want := []string{"第一段内容正在继续输出好"}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("first latency chunk = %#v, want %#v", got, want)
+	}
+}
