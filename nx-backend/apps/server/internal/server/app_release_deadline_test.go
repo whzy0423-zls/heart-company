@@ -81,6 +81,9 @@ func (slowUploadAppReleaseService) Publish(context.Context, int64) (apprelease.R
 func (slowUploadAppReleaseService) Archive(context.Context, int64) (apprelease.Release, error) {
 	return apprelease.Release{}, nil
 }
+func (slowUploadAppReleaseService) UpdatePolicy(context.Context, int64, apprelease.AppReleasePolicy) (apprelease.Release, error) {
+	return apprelease.Release{}, nil
+}
 func (slowUploadAppReleaseService) Latest(context.Context, string) (apprelease.Release, error) {
 	return apprelease.Release{}, nil
 }

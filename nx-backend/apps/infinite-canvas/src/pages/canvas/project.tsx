@@ -4,9 +4,17 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Group, Video } from "lucide-react";
 import { saveAs } from "file-saver";
 
-import { requestEdit, requestGeneration, requestImageQuestion } from "@/services/api/image";
-import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
-import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
+import {
+    requestCanvasAudioGeneration as requestAudioGeneration,
+    requestCanvasImageBatch as requestGeneration,
+    requestCanvasImageEdit as requestEdit,
+    requestCanvasImageQuestion,
+    requestCanvasTextStream as requestImageQuestion,
+    requestCanvasVideoGeneration as requestVideoGeneration,
+    requestCanvasVideoRetry,
+} from "@/lib/canvas/canvas-generation-dispatch";
+import { storeGeneratedAudio } from "@/services/api/audio";
+import { storeGeneratedVideo } from "@/services/api/video";
 import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { uploadImage } from "@/services/image-storage";
 import { uploadMediaFile } from "@/services/file-storage";
@@ -47,7 +55,9 @@ import {
     audioExtension,
     buildAngleLabel,
     buildAnglePrompt,
+    buildConfigNodeMetadata,
     buildGenerationConfig,
+    generationCapabilityForNodeType,
     findRetrySourceNode,
     generationReferenceUrls,
     getGenerationCount,
@@ -65,6 +75,7 @@ import { getNodeDefinition, isBuiltinNodeType as isBuiltinType, useNodeRegistryV
 import { registerBuiltinNodes } from "@/components/canvas/nodes/builtin-nodes";
 import { CanvasRefreshShell } from "@/components/canvas/canvas-refresh-shell";
 import { CanvasTopBar } from "@/components/canvas/canvas-top-bar";
+import { CapabilityModelConfigDialog } from "@/components/capability-model-config-dialog";
 import { ConnectionCreateMenu, NodeCreateMenu, type PendingConnectionCreate } from "@/components/canvas/canvas-create-menus";
 import {
     CanvasNodeType,
@@ -191,6 +202,7 @@ function InfiniteCanvasPage() {
     const [connections, setConnections] = useState<CanvasConnection[]>([]);
     const [chatSessions, setChatSessions] = useState<CanvasAssistantSession[]>([]);
     const [activeChatId, setActiveChatId] = useState<string | null>(null);
+    const [agentLoading, setAgentLoading] = useState(false);
     const [viewport, setViewport] = useState<ViewportTransform>({ x: 0, y: 0, k: 1 });
     const [size, setSize] = useState({ width: 1200, height: 720 });
     const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
@@ -485,7 +497,7 @@ function InfiniteCanvasPage() {
 
     const createConnectedNode = useCallback(
         (type: CanvasNodeType.Image | CanvasNodeType.Text | CanvasNodeType.Config | CanvasNodeType.Video | CanvasNodeType.Audio, pending: PendingConnectionCreate) => {
-            const metadata = type === CanvasNodeType.Config ? { model: effectiveConfig.imageModel || effectiveConfig.model, size: effectiveConfig.size, count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count) } : undefined;
+            const metadata = type === CanvasNodeType.Config ? buildConfigNodeMetadata(effectiveConfig) : undefined;
             const newNode = createCanvasNode(type, pending.position, metadata);
             const connection = normalizeConnection(pending.connection.nodeId, newNode.id, [...nodesRef.current, newNode], pending.connection.handleType);
             if (!connection) {
@@ -500,7 +512,7 @@ function InfiniteCanvasPage() {
             setPendingConnectionCreate(null);
             setConnecting(null);
         },
-        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, message, setConnecting],
+        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageCount, effectiveConfig.imageSize, effectiveConfig.size, message, setConnecting],
     );
 
     const cancelPendingConnectionCreate = useCallback(() => {
@@ -634,14 +646,7 @@ function InfiniteCanvasPage() {
     const createNode = useCallback(
         (type: CanvasNodeTypeId, position?: Position) => {
             const targetPosition = position || getCanvasCenter();
-            const configMetadata =
-                type === CanvasNodeType.Config
-                    ? {
-                          model: effectiveConfig.imageModel || effectiveConfig.model,
-                          size: effectiveConfig.size,
-                          count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count),
-                      }
-                    : undefined;
+            const configMetadata = type === CanvasNodeType.Config ? buildConfigNodeMetadata(effectiveConfig) : undefined;
             const newNode = createCanvasNode(type, targetPosition, configMetadata);
 
             setNodes((prev) => [...prev, newNode]);
@@ -660,7 +665,7 @@ function InfiniteCanvasPage() {
                     : isBuiltinType(type) && type !== CanvasNodeType.Text && type !== CanvasNodeType.Audio && type !== CanvasNodeType.Group;
             if (wantsPanel) setDialogNodeId(newNode.id);
         },
-        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, getCanvasCenter],
+        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageCount, effectiveConfig.imageSize, effectiveConfig.size, getCanvasCenter],
     );
 
     const deleteNodes = useCallback(
@@ -1578,7 +1583,6 @@ function InfiniteCanvasPage() {
                     { x: textNode.position.x + textNode.width + gap + configSpec.width / 2, y: centerY },
                     {
                         generationMode: "text",
-                        model: effectiveConfig.textModel || effectiveConfig.model || defaultConfig.textModel,
                         count: 1,
                         composerContent: `参考图片：@[node:${node.id}]\n任务说明：@[node:${textNode.id}]`,
                     },
@@ -1593,7 +1597,7 @@ function InfiniteCanvasPage() {
             setDialogNodeId(configNode.id);
             setContextMenu(null);
         },
-        [effectiveConfig.model, effectiveConfig.textModel, message],
+        [message],
     );
 
     const cropImageNode = useCallback(async (node: CanvasNodeData, crop: CanvasImageCropRect) => {
@@ -1662,9 +1666,9 @@ function InfiniteCanvasPage() {
     const maskEditImageNode = useCallback(
         async (node: CanvasNodeData, payload: CanvasImageMaskEditPayload) => {
             if (!node.metadata?.content) return;
-            const generationConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1", size: node.metadata?.size || "auto" };
-            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
-                openConfigDialog(true);
+            const generationConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1", imageCount: "1", size: node.metadata?.size || "auto", imageSize: node.metadata?.size || "auto" };
+            if (!isAiConfigReady(generationConfig, "image", generationConfig.model)) {
+                openConfigDialog(true, "channels", "image");
                 return;
             }
             const userPrompt = payload.prompt.trim();
@@ -1737,9 +1741,9 @@ function InfiniteCanvasPage() {
     const generateAngleNode = useCallback(
         async (node: CanvasNodeData, params: CanvasImageAngleParams) => {
             if (!node.metadata?.content) return;
-            const generationConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1" };
-            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
-                openConfigDialog(true);
+            const generationConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1", imageCount: "1" };
+            if (!isAiConfigReady(generationConfig, "image", generationConfig.model)) {
+                openConfigDialog(true, "channels", "image");
                 return;
             }
             const childId = nanoid();
@@ -1972,8 +1976,8 @@ function InfiniteCanvasPage() {
         async (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => {
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
             const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);
-            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
-                openConfigDialog(true);
+            if (!isAiConfigReady(generationConfig, mode, generationConfig.model)) {
+                openConfigDialog(true, "channels", mode);
                 return;
             }
 
@@ -1999,8 +2003,8 @@ function InfiniteCanvasPage() {
                             : [],
                     );
                     const image = refs.length
-                        ? await requestEdit({ ...generationConfig, count: "1" }, fullPrompt, refs, undefined, { signal: controller.signal }).then((items) => items[0])
-                        : await requestGeneration({ ...generationConfig, count: "1" }, fullPrompt, { signal: controller.signal }).then((items) => items[0]);
+                        ? await requestEdit({ ...generationConfig, count: "1", imageCount: "1" }, fullPrompt, refs, undefined, { signal: controller.signal }).then((items) => items[0])
+                        : await requestGeneration({ ...generationConfig, count: "1", imageCount: "1" }, fullPrompt, { signal: controller.signal }).then((items) => items[0]);
                     const uploaded = await uploadImage(image.dataUrl);
                     setNodes((prev) =>
                         prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, ...imageMetadata(uploaded), prompt: scene, model: generationConfig.model, status: NODE_STATUS_SUCCESS, errorDetails: undefined } } : node)),
@@ -2147,8 +2151,8 @@ function InfiniteCanvasPage() {
                         targetIds.map(async (targetId) => {
                             try {
                                 const image = referenceImages.length
-                                    ? await requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages, undefined, { signal: controller.signal }).then((items) => items[0])
-                                    : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt, { signal: controller.signal }).then((items) => items[0]);
+                                    ? await requestEdit({ ...generationConfig, count: "1", imageCount: "1" }, effectivePrompt, referenceImages, undefined, { signal: controller.signal }).then((items) => items[0])
+                                    : await requestGeneration({ ...generationConfig, count: "1", imageCount: "1" }, effectivePrompt, { signal: controller.signal }).then((items) => items[0]);
                                 const uploaded = await uploadImage(image.dataUrl);
                                 const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
                                 setNodes((prev) => {
@@ -2404,13 +2408,16 @@ function InfiniteCanvasPage() {
                           ...effectiveConfig,
                           model: savedImageMetadata.model || effectiveConfig.imageModel || effectiveConfig.model,
                           quality: savedImageMetadata.quality || effectiveConfig.quality,
-                          size: savedImageMetadata.size || effectiveConfig.size,
+                          size: savedImageMetadata.size || effectiveConfig.imageSize || effectiveConfig.size,
+                          imageSize: savedImageMetadata.size || effectiveConfig.imageSize || effectiveConfig.size,
                           background: savedImageMetadata.background ?? effectiveConfig.background,
                           count: "1",
+                          imageCount: "1",
                       }
-                    : { ...buildGenerationConfig(effectiveConfig, sourceNode, node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image"), count: "1" };
-            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
-                openConfigDialog(true);
+                    : { ...buildGenerationConfig(effectiveConfig, sourceNode, generationCapabilityForNodeType(node.type)), count: "1", imageCount: "1" };
+            const retryCapability = generationCapabilityForNodeType(node.type);
+            if (!isAiConfigReady(generationConfig, retryCapability, generationConfig.model)) {
+                openConfigDialog(true, "channels", retryCapability);
                 return;
             }
 
@@ -2439,7 +2446,7 @@ function InfiniteCanvasPage() {
                 if (node.type === CanvasNodeType.Text) {
                     if (!context) return;
                     let streamed = "";
-                    const answer = await requestImageQuestion(
+                    const answer = await requestCanvasImageQuestion(
                         generationConfig,
                         buildNodeResponseMessages({ ...context, prompt }),
                         (text) => {
@@ -2452,7 +2459,7 @@ function InfiniteCanvasPage() {
                     return;
                 }
                 if (node.type === CanvasNodeType.Video) {
-                    const video = await storeGeneratedVideo(await requestVideoGeneration(generationConfig, prompt, retryImages, context?.referenceVideos || [], context?.referenceAudios || [], { signal: controller.signal }));
+                    const video = await storeGeneratedVideo(await requestCanvasVideoRetry(generationConfig, prompt, retryImages, context?.referenceVideos || [], context?.referenceAudios || [], { signal: controller.signal }));
                     const videoSize = fitNodeSize(video.width || node.width, video.height || node.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
                     setNodes((prev) =>
                         prev.map((item) =>
@@ -2546,9 +2553,7 @@ function InfiniteCanvasPage() {
                 },
                 {
                     prompt: "",
-                    model: effectiveConfig.imageModel || effectiveConfig.model,
-                    size: effectiveConfig.size,
-                    count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count),
+                    ...buildConfigNodeMetadata(effectiveConfig),
                 },
             );
             const connection = { id: nanoid(), fromNodeId: sourceNode.id, toNodeId: configNode.id };
@@ -2562,7 +2567,7 @@ function InfiniteCanvasPage() {
             setSelectedConnectionId(null);
             setDialogNodeId(configNode.id);
         },
-        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, message],
+        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageCount, effectiveConfig.imageSize, effectiveConfig.size, message],
     );
 
     const insertAssistantImage = useCallback(
@@ -2603,6 +2608,118 @@ function InfiniteCanvasPage() {
             setSelectedConnectionId(null);
         },
         [screenToCanvas, size.height, size.width],
+    );
+
+    const createAgentSession = useCallback(() => {
+        const now = new Date().toISOString();
+        const id = nanoid();
+        const session: CanvasAssistantSession = {
+            id,
+            title: "新 Agent 会话",
+            createdAt: now,
+            updatedAt: now,
+            messages: [],
+        };
+        setChatSessions((prev) => [session, ...prev]);
+        setActiveChatId(id);
+    }, []);
+
+    const selectAgentSession = useCallback((sessionId: string) => setActiveChatId(sessionId), []);
+
+    const deleteAgentSession = useCallback(
+        (sessionId: string) => {
+            setChatSessions((prev) => prev.filter((session) => session.id !== sessionId));
+            setActiveChatId((current) => {
+                if (current !== sessionId) return current;
+                const next = chatSessions.find((session) => session.id !== sessionId);
+                return next?.id || null;
+            });
+        },
+        [chatSessions],
+    );
+
+    const sendAgentMessage = useCallback(
+        async (prompt: string) => {
+            const content = prompt.trim();
+            if (!content || agentLoading) return;
+            if (!isAiConfigReady(effectiveConfig, "text")) {
+                openConfigDialog(true, "channels", "text");
+                return;
+            }
+
+            const now = new Date().toISOString();
+            const currentSession = (activeChatId && chatSessions.find((session) => session.id === activeChatId)) || null;
+            const sessionId = currentSession?.id || nanoid();
+            const title = currentSession?.title && currentSession.title !== "新 Agent 会话" ? currentSession.title : content.slice(0, 24) || "Agent 会话";
+            const userMessage = { id: nanoid(), role: "user" as const, text: content };
+            const assistantMessage = { id: nanoid(), role: "assistant" as const, text: "" };
+            const existingMessages = currentSession?.messages || [];
+            const requestMessages = [
+                ...existingMessages.flatMap((message) => {
+                    if (message.role !== "user" && message.role !== "assistant" && message.role !== "system") return [];
+                    return [{ role: message.role, content: message.text }];
+                }),
+                { role: "user" as const, content },
+            ];
+
+            setActiveChatId(sessionId);
+            setChatSessions((prev) => {
+                const exists = prev.some((session) => session.id === sessionId);
+                const nextSession: CanvasAssistantSession = {
+                    id: sessionId,
+                    title,
+                    createdAt: currentSession?.createdAt || now,
+                    updatedAt: now,
+                    messages: [...existingMessages, userMessage, assistantMessage],
+                };
+                return exists ? prev.map((session) => (session.id === sessionId ? nextSession : session)) : [nextSession, ...prev];
+            });
+
+            setAgentLoading(true);
+            try {
+                const finalText = await requestImageQuestion(effectiveConfig, requestMessages, (text) => {
+                    setChatSessions((prev) =>
+                        prev.map((session) =>
+                            session.id === sessionId
+                                ? {
+                                      ...session,
+                                      updatedAt: new Date().toISOString(),
+                                      messages: session.messages.map((message) => (message.id === assistantMessage.id ? { ...message, text } : message)),
+                                  }
+                                : session,
+                        ),
+                    );
+                });
+                setChatSessions((prev) =>
+                    prev.map((session) =>
+                        session.id === sessionId
+                            ? {
+                                  ...session,
+                                  updatedAt: new Date().toISOString(),
+                                  messages: session.messages.map((message) => (message.id === assistantMessage.id ? { ...message, text: finalText } : message)),
+                              }
+                            : session,
+                    ),
+                );
+            } catch (error) {
+                const errorText = error instanceof Error ? error.message : "Agent 请求失败";
+                message.error(errorText);
+                setChatSessions((prev) =>
+                    prev.map((session) =>
+                        session.id === sessionId
+                            ? {
+                                  ...session,
+                                  updatedAt: new Date().toISOString(),
+                                  messages: session.messages.map((item) => (item.id === assistantMessage.id ? { ...item, role: "error", text: errorText } : item)),
+                              }
+                            : session,
+                    ),
+                );
+            } finally {
+                setAgentLoading(false);
+            }
+        },
+        [activeChatId, agentLoading, chatSessions, effectiveConfig, isAiConfigReady, message, openConfigDialog],
     );
 
     const handleAssetInsert = useCallback(
@@ -2704,7 +2821,21 @@ function InfiniteCanvasPage() {
 
     return (
         <main className="flex h-full min-h-0 overflow-hidden" style={{ background: theme.canvas.background, color: theme.node.text }}>
-            <CanvasSidePanel nodes={nodes} selectedNodeIds={selectedNodeIds} onFocusNode={focusNode} onPreviewNode={setPreviewNodeId} onInsertAsset={handleAssetInsert} />
+            <CanvasSidePanel
+                nodes={nodes}
+                selectedNodeIds={selectedNodeIds}
+                chatSessions={chatSessions}
+                activeChatId={activeChatId}
+                agentLoading={agentLoading}
+                onFocusNode={focusNode}
+                onPreviewNode={setPreviewNodeId}
+                onInsertAsset={handleAssetInsert}
+                onCreateAgentSession={createAgentSession}
+                onSelectAgentSession={selectAgentSession}
+                onDeleteAgentSession={deleteAgentSession}
+                onSendAgentMessage={sendAgentMessage}
+                onInsertAgentText={insertAssistantText}
+            />
             <section className="relative min-w-0 flex-1 overflow-hidden">
                 <CanvasTopBar
                     title={currentProject?.title || "未命名画布"}
@@ -2721,6 +2852,7 @@ function InfiniteCanvasPage() {
                     onDeleteProject={deleteCurrentProject}
                     onExportProject={exportCurrentProject}
                     onImportImage={() => handleUploadRequest()}
+                    onModelConfig={() => openConfigDialog(false, "channels")}
                     onUndo={undoCanvas}
                     onRedo={redoCanvas}
                 />
@@ -2966,6 +3098,7 @@ function InfiniteCanvasPage() {
                 </Modal>
 
                 <AssetPickerModal open={assetPickerOpen} onInsert={handleAssetInsert} onClose={() => setAssetPickerOpen(false)} />
+                <CapabilityModelConfigDialog />
             </section>
         </main>
     );

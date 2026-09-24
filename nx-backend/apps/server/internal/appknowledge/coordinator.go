@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -17,12 +18,13 @@ import (
 var ErrInvalidInput = errors.New("app knowledge input is invalid")
 
 type Input struct {
-	RequestID string
-	Scene     string
-	UserID    int64
-	SessionID int64
-	CardID    int64
-	Query     string
+	RequestID      string
+	Scene          string
+	UserID         int64
+	SessionID      int64
+	CardID         int64
+	Query          string
+	RequestedTypes []int
 }
 
 type RemoteRequest struct {
@@ -80,7 +82,7 @@ type ConversationResolution struct {
 }
 
 type ConversationResolver interface {
-	ResolveConversation(ctx context.Context, userID, sessionID, cardID int64) (ConversationResolution, error)
+	ResolveConversation(ctx context.Context, userID, sessionID, cardID int64, requestedTypes []int) (ConversationResolution, error)
 }
 
 type PublicSearcher interface {
@@ -99,6 +101,11 @@ type Limits struct {
 }
 
 var defaultLimits = Limits{Public: 4, Theory: 3, EnneagramType: 3, TotalRunes: 8000}
+var requestedTypeLimits = Limits{Public: 2, Theory: 3, EnneagramType: 9, TotalRunes: 5000}
+
+var enneagramTypeCanonicalNames = [...]string{
+	"", "完美型", "助人型", "成就型", "自我型", "思考型", "忠诚型", "活跃型", "领袖型", "和平型",
+}
 
 type LayerHit struct {
 	LibraryID   int64        `json:"library_id,omitempty"`
@@ -182,7 +189,9 @@ func (c *Coordinator) Retrieve(ctx context.Context, input Input) (Result, error)
 	if c == nil || c.resolver == nil || input.UserID <= 0 || input.SessionID <= 0 || input.CardID <= 0 || input.Query == "" {
 		return Result{}, ErrInvalidInput
 	}
-	resolved, err := c.resolver.ResolveConversation(ctx, input.UserID, input.SessionID, input.CardID)
+	requestedTypes := normalizeRequestedTypes(input.RequestedTypes)
+	input.RequestedTypes = requestedTypes
+	resolved, err := c.resolver.ResolveConversation(ctx, input.UserID, input.SessionID, input.CardID, requestedTypes)
 	if err != nil {
 		return Result{}, fmt.Errorf("resolve conversation knowledge: %w", err)
 	}
@@ -193,12 +202,12 @@ func (c *Coordinator) Retrieve(ctx context.Context, input Input) (Result, error)
 	switch c.backend {
 	case "langchain":
 		if !c.userInRollout(input.UserID) {
-			return c.retrieveLocal(ctx, input.Query, resolved), nil
+			return c.retrieveLocal(ctx, input, resolved), nil
 		}
 		return c.retrieveRemote(ctx, resolved, remoteRequest)
 	case "fallback":
 		if !c.userInRollout(input.UserID) {
-			return c.retrieveLocal(ctx, input.Query, resolved), nil
+			return c.retrieveLocal(ctx, input, resolved), nil
 		}
 		result, remoteErr := c.retrieveRemote(ctx, resolved, remoteRequest)
 		if remoteErr == nil {
@@ -211,13 +220,13 @@ func (c *Coordinator) Retrieve(ctx context.Context, input Input) (Result, error)
 			c.fallbackObserver(remoteErr)
 		}
 	case "shadow":
-		local := c.retrieveLocal(ctx, input.Query, resolved)
+		local := c.retrieveLocal(ctx, input, resolved)
 		if c.remote != nil {
 			go c.compareShadow(context.WithoutCancel(ctx), remoteRequest, local)
 		}
 		return local, nil
 	}
-	return c.retrieveLocal(ctx, input.Query, resolved), nil
+	return c.retrieveLocal(ctx, input, resolved), nil
 }
 
 func (c *Coordinator) userInRollout(userID int64) bool {
@@ -230,15 +239,26 @@ func (c *Coordinator) userInRollout(userID int64) bool {
 	return int(userID%100) < c.rolloutPercent
 }
 
-func (c *Coordinator) retrieveLocal(ctx context.Context, query string, resolved ConversationResolution) Result {
-
+func (c *Coordinator) retrieveLocal(ctx context.Context, input Input, resolved ConversationResolution) Result {
+	requestedTypes := normalizeRequestedTypes(input.RequestedTypes)
+	explicitTypes := len(requestedTypes) > 0
+	limits := c.limits
+	if explicitTypes {
+		limits = requestedTypeLimits
+	}
 	trace := Trace{
 		CardID: resolved.CardID, CardRevision: resolved.CardRevision,
 		LayerHits: map[string]LayerHit{
-			LayerPublic:        {LibraryKey: LayerPublic, ChunkIDs: []string{}},
-			LayerTheory:        {ChunkIDs: []string{}},
-			LayerEnneagramType: {ChunkIDs: []string{}},
+			LayerPublic: {LibraryKey: LayerPublic, ChunkIDs: []string{}},
+			LayerTheory: {ChunkIDs: []string{}},
 		},
+	}
+	if explicitTypes {
+		for _, typeNumber := range requestedTypes {
+			trace.LayerHits[typeTraceKey(typeNumber)] = LayerHit{ChunkIDs: []string{}}
+		}
+	} else {
+		trace.LayerHits[LayerEnneagramType] = LayerHit{ChunkIDs: []string{}}
 	}
 	if resolved.MainType >= 1 && resolved.MainType <= 9 {
 		mainType := resolved.MainType
@@ -248,14 +268,25 @@ func (c *Coordinator) retrieveLocal(ctx context.Context, query string, resolved 
 		addLayerDiagnostic(trace.LayerHits, diagnostic)
 	}
 
-	publicDocs := c.searchPublic(ctx, query, &trace)
-	theoryDocs := c.searchBinding(ctx, query, resolved.Theory, c.limits.Theory, &trace)
-	typeDocs := c.searchType(ctx, query, resolved, &trace)
+	publicDocs := c.searchPublic(ctx, input.Query, limits.Public, &trace)
+	theoryDocs := c.searchBinding(ctx, input.Query, resolved.Theory, limits.Theory, LayerTheory, &trace)
 
 	documentsByLayer := map[string][]rag.Document{
-		LayerPublic: publicDocs, LayerTheory: theoryDocs, LayerEnneagramType: typeDocs,
+		LayerPublic: publicDocs, LayerTheory: theoryDocs,
 	}
-	selected := c.selectDocuments(documentsByLayer)
+	typeLayers := []string{LayerEnneagramType}
+	if explicitTypes {
+		typeLayers = make([]string, 0, len(requestedTypes))
+		for layer, documents := range c.searchRequestedTypes(ctx, input.Query, requestedTypes, resolved.RequestedTypeBindings, &trace) {
+			documentsByLayer[layer] = documents
+		}
+		for _, typeNumber := range requestedTypes {
+			typeLayers = append(typeLayers, typeTraceKey(typeNumber))
+		}
+	} else {
+		documentsByLayer[LayerEnneagramType] = c.searchType(ctx, input.Query, resolved, limits.EnneagramType, &trace)
+	}
+	selected := selectDocuments(documentsByLayer, typeLayers, limits, explicitTypes)
 	for layer, documents := range selected {
 		hit := trace.LayerHits[layer]
 		for _, document := range documents {
@@ -264,8 +295,9 @@ func (c *Coordinator) retrieveLocal(ctx context.Context, query string, resolved 
 		trace.LayerHits[layer] = hit
 	}
 
-	documents := make([]rag.Document, 0, len(selected[LayerPublic])+len(selected[LayerTheory])+len(selected[LayerEnneagramType]))
-	for _, layer := range []string{LayerPublic, LayerTheory, LayerEnneagramType} {
+	documents := make([]rag.Document, 0, len(selected[LayerPublic])+len(selected[LayerTheory])+limits.EnneagramType)
+	outputLayers := append([]string{LayerPublic, LayerTheory}, typeLayers...)
+	for _, layer := range outputLayers {
 		documents = append(documents, selected[layer]...)
 	}
 	return Result{Documents: documents, Trace: trace}
@@ -289,7 +321,13 @@ func remoteRequestFromResolution(input Input, resolved ConversationResolution) R
 	if resolved.Theory != nil {
 		request.TheoryReleaseIDs = []int64{resolved.Theory.ReleaseID}
 	}
-	if resolved.EnneagramType != nil {
+	if len(input.RequestedTypes) > 0 {
+		for _, binding := range resolved.RequestedTypeBindings {
+			if binding != nil {
+				request.EnneagramReleaseIDs = append(request.EnneagramReleaseIDs, binding.ReleaseID)
+			}
+		}
+	} else if resolved.EnneagramType != nil {
 		request.EnneagramReleaseIDs = []int64{resolved.EnneagramType.ReleaseID}
 	}
 	return request
@@ -343,11 +381,11 @@ func RemoteErrorAllowsFallback(err error) bool {
 	return remoteErr.StatusCode == 408 || remoteErr.StatusCode == 429 || remoteErr.StatusCode >= 500
 }
 
-func (c *Coordinator) searchPublic(ctx context.Context, query string, trace *Trace) []rag.Document {
-	if c.public == nil || c.limits.Public == 0 {
+func (c *Coordinator) searchPublic(ctx context.Context, query string, limit int, trace *Trace) []rag.Document {
+	if c.public == nil || limit == 0 {
 		return nil
 	}
-	documents, err := c.public.SearchPublic(ctx, query, searchCandidateLimit(c.limits.Public))
+	documents, err := c.public.SearchPublic(ctx, query, searchCandidateLimit(limit))
 	if err != nil {
 		addLayerDiagnostic(trace.LayerHits, Diagnostic{Layer: LayerPublic, Code: "search_failed"})
 		return nil
@@ -355,37 +393,37 @@ func (c *Coordinator) searchPublic(ctx context.Context, query string, trace *Tra
 	return documents
 }
 
-func (c *Coordinator) searchBinding(ctx context.Context, query string, binding *Binding, limit int, trace *Trace) []rag.Document {
+func (c *Coordinator) searchBinding(ctx context.Context, query string, binding *Binding, limit int, traceLayer string, trace *Trace) []rag.Document {
 	if binding == nil || limit == 0 {
 		return nil
 	}
-	hit := trace.LayerHits[binding.Layer]
+	hit := trace.LayerHits[traceLayer]
 	hit.LibraryID = binding.LibraryID
 	hit.LibraryKey = binding.LibraryKey
 	hit.ReleaseID = binding.ReleaseID
-	trace.LayerHits[binding.Layer] = hit
+	trace.LayerHits[traceLayer] = hit
 	if c.releases == nil {
-		addLayerDiagnostic(trace.LayerHits, Diagnostic{Layer: binding.Layer, Code: "search_unavailable"})
+		addLayerDiagnostic(trace.LayerHits, Diagnostic{Layer: traceLayer, Code: "search_unavailable"})
 		return nil
 	}
 	documents, err := c.releases.SearchReleaseChunks(ctx, binding.ReleaseID, query, searchCandidateLimit(limit), 0.2)
 	if err != nil {
-		addLayerDiagnostic(trace.LayerHits, Diagnostic{Layer: binding.Layer, Code: "search_failed"})
+		addLayerDiagnostic(trace.LayerHits, Diagnostic{Layer: traceLayer, Code: "search_failed"})
 		return nil
 	}
 	return documents
 }
 
-func (c *Coordinator) searchType(ctx context.Context, query string, resolved ConversationResolution, trace *Trace) []rag.Document {
+func (c *Coordinator) searchType(ctx context.Context, query string, resolved ConversationResolution, limit int, trace *Trace) []rag.Document {
 	binding := resolved.EnneagramType
-	if binding == nil || resolved.MainType < 1 || resolved.MainType > 9 || c.limits.EnneagramType == 0 {
+	if binding == nil || resolved.MainType < 1 || resolved.MainType > 9 || limit == 0 {
 		return nil
 	}
 	if binding.EnneagramType == nil || *binding.EnneagramType != resolved.MainType || binding.LibraryKey != fmt.Sprintf("enneagram-type-%02d", resolved.MainType) {
 		addLayerDiagnostic(trace.LayerHits, Diagnostic{Layer: LayerEnneagramType, Code: "cross_type_binding"})
 		return nil
 	}
-	documents := c.searchBinding(ctx, query, binding, c.limits.EnneagramType, trace)
+	documents := c.searchBinding(ctx, query, binding, limit, LayerEnneagramType, trace)
 	filtered := documents[:0]
 	for _, document := range documents {
 		if documentMatchesType(document, resolved.MainType) {
@@ -397,21 +435,119 @@ func (c *Coordinator) searchType(ctx context.Context, query string, resolved Con
 	return filtered
 }
 
-func (c *Coordinator) selectDocuments(byLayer map[string][]rag.Document) map[string][]rag.Document {
-	selected := map[string][]rag.Document{
-		LayerPublic: {}, LayerTheory: {}, LayerEnneagramType: {},
+type requestedTypeSearchResult struct {
+	layer       string
+	documents   []rag.Document
+	hit         LayerHit
+	diagnostics []Diagnostic
+}
+
+func (c *Coordinator) searchRequestedTypes(ctx context.Context, query string, requestedTypes []int, bindings []*Binding, trace *Trace) map[string][]rag.Document {
+	bindingsByType := make(map[int]*Binding, len(bindings))
+	for _, binding := range bindings {
+		if binding == nil || binding.EnneagramType == nil {
+			continue
+		}
+		typeNumber := *binding.EnneagramType
+		if typeNumber < 1 || typeNumber > 9 || binding.LibraryKey != fmt.Sprintf("enneagram-type-%02d", typeNumber) {
+			continue
+		}
+		bindingsByType[typeNumber] = binding
+	}
+	results := make([]requestedTypeSearchResult, len(requestedTypes))
+	var waitGroup sync.WaitGroup
+	for index, typeNumber := range requestedTypes {
+		index, typeNumber := index, typeNumber
+		layer := typeTraceKey(typeNumber)
+		binding := bindingsByType[typeNumber]
+		if binding == nil {
+			results[index] = requestedTypeSearchResult{layer: layer, diagnostics: []Diagnostic{{Layer: layer, Code: "binding_unavailable"}}}
+			continue
+		}
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			result := requestedTypeSearchResult{
+				layer: layer,
+				hit:   LayerHit{LibraryID: binding.LibraryID, LibraryKey: binding.LibraryKey, ReleaseID: binding.ReleaseID, ChunkIDs: []string{}},
+			}
+			if c.releases == nil {
+				result.diagnostics = append(result.diagnostics, Diagnostic{Layer: layer, Code: "search_unavailable"})
+				results[index] = result
+				return
+			}
+			typeQuery := requestedTypeSearchQuery(query, typeNumber)
+			documents, err := c.releases.SearchReleaseChunks(ctx, binding.ReleaseID, typeQuery, searchCandidateLimit(1), 0)
+			if err != nil {
+				result.diagnostics = append(result.diagnostics, Diagnostic{Layer: layer, Code: "search_failed"})
+				results[index] = result
+				return
+			}
+			for _, document := range documents {
+				if !documentMatchesType(document, typeNumber) {
+					result.diagnostics = append(result.diagnostics, Diagnostic{Layer: layer, Code: "cross_type_document"})
+					continue
+				}
+				document.Content = truncateRunes(document.Content, 360)
+				result.documents = []rag.Document{document}
+				break
+			}
+			results[index] = result
+		}()
+	}
+	waitGroup.Wait()
+	documentsByLayer := make(map[string][]rag.Document, len(results))
+	for _, result := range results {
+		hit := trace.LayerHits[result.layer]
+		if result.hit.LibraryID > 0 {
+			hit.LibraryID = result.hit.LibraryID
+			hit.LibraryKey = result.hit.LibraryKey
+			hit.ReleaseID = result.hit.ReleaseID
+		}
+		trace.LayerHits[result.layer] = hit
+		for _, diagnostic := range result.diagnostics {
+			addLayerDiagnostic(trace.LayerHits, diagnostic)
+		}
+		documentsByLayer[result.layer] = result.documents
+	}
+	return documentsByLayer
+}
+
+func requestedTypeSearchQuery(query string, typeNumber int) string {
+	if typeNumber < 1 || typeNumber >= len(enneagramTypeCanonicalNames) {
+		return ""
+	}
+	return fmt.Sprintf(
+		"%s\n九型人格检索锚点：%d号%s；核心欲望、核心恐惧、防御机制、压力表现、关系模式、成长方向",
+		strings.TrimSpace(query),
+		typeNumber,
+		enneagramTypeCanonicalNames[typeNumber],
+	)
+}
+
+func selectDocuments(byLayer map[string][]rag.Document, typeLayers []string, limits Limits, explicitTypes bool) map[string][]rag.Document {
+	selected := map[string][]rag.Document{LayerPublic: {}, LayerTheory: {}}
+	for _, layer := range typeLayers {
+		selected[layer] = []rag.Document{}
 	}
 	seenIDs := map[string]struct{}{}
 	seenContents := map[[sha256.Size]byte]struct{}{}
 	totalRunes := 0
-	limits := map[string]int{
-		LayerPublic: c.limits.Public, LayerTheory: c.limits.Theory, LayerEnneagramType: c.limits.EnneagramType,
+	layerLimits := map[string]int{LayerPublic: limits.Public, LayerTheory: limits.Theory}
+	for _, layer := range typeLayers {
+		layerLimits[layer] = limits.EnneagramType
+		if explicitTypes {
+			layerLimits[layer] = 1
+		}
 	}
 	// Formal definitions win duplicate selection, followed by the current type;
 	// presentation is reordered to public -> theory -> type below.
-	for _, layer := range []string{LayerTheory, LayerEnneagramType, LayerPublic} {
+	priorityLayers := append([]string{LayerTheory}, typeLayers...)
+	priorityLayers = append(priorityLayers, LayerPublic)
+	typeCount := 0
+	for _, layer := range priorityLayers {
 		for _, document := range byLayer[layer] {
-			if len(selected[layer]) >= limits[layer] {
+			if len(selected[layer]) >= layerLimits[layer] || (explicitTypes && strings.HasPrefix(layer, LayerEnneagramType+"_") && typeCount >= limits.EnneagramType) {
 				break
 			}
 			document.ID = strings.TrimSpace(document.ID)
@@ -428,16 +564,30 @@ func (c *Coordinator) selectDocuments(byLayer map[string][]rag.Document) map[str
 				continue
 			}
 			contentRunes := len([]rune(document.Content))
-			if totalRunes+contentRunes > c.limits.TotalRunes {
+			if totalRunes+contentRunes > limits.TotalRunes {
 				continue
 			}
 			selected[layer] = append(selected[layer], document)
 			seenIDs[document.ID] = struct{}{}
 			seenContents[digest] = struct{}{}
 			totalRunes += contentRunes
+			if explicitTypes && strings.HasPrefix(layer, LayerEnneagramType+"_") {
+				typeCount++
+			}
 		}
 	}
 	return selected
+}
+
+func truncateRunes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
 }
 
 func normalizeLimits(limits Limits) Limits {

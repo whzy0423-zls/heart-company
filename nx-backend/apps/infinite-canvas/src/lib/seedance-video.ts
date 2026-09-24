@@ -1,4 +1,4 @@
-import { resolveModelRequestConfig, type AiConfig } from "@/stores/use-config-store";
+import { type AiConfig, type CapabilityRequestSnapshot } from "@/stores/use-config-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
@@ -57,9 +57,13 @@ const seedancePixels = {
     },
 } as const;
 
-export function isSeedanceVideoConfig(config: AiConfig | Pick<AiConfig, "model" | "videoModel" | "apiFormat">) {
-    const requestConfig = "channels" in config ? resolveModelRequestConfig(config, config.model || config.videoModel) : config;
-    return requestConfig.apiFormat === "ark";
+export function isSeedanceVideoConfig(config: AiConfig | CapabilityRequestSnapshot | Pick<AiConfig, "model" | "videoModel" | "apiFormat">) {
+    if ("capability" in config) return config.capability === "video" && config.apiFormat === "ark";
+    if ("capabilityConfigs" in config) {
+        const video = config.capabilityConfigs.video;
+        return video.apiFormat === "ark" && Boolean(video.apiBase.trim() || video.modelId.trim());
+    }
+    return config.apiFormat === "ark";
 }
 
 export function normalizeSeedanceResolution(value: string) {
@@ -120,11 +124,7 @@ export function seedanceReferenceLabel(kind: "image" | "video" | "audio", index:
 }
 
 export function buildSeedancePromptText(prompt: string, images: ReferenceImage[], videos: ReferenceVideo[], audios: ReferenceAudio[]) {
-    const labels = [
-        ...images.map((_, index) => seedanceReferenceLabel("image", index)),
-        ...videos.map((_, index) => seedanceReferenceLabel("video", index)),
-        ...audios.map((_, index) => seedanceReferenceLabel("audio", index)),
-    ];
+    const labels = [...images.map((_, index) => seedanceReferenceLabel("image", index)), ...videos.map((_, index) => seedanceReferenceLabel("video", index)), ...audios.map((_, index) => seedanceReferenceLabel("audio", index))];
     const text = prompt.trim();
     if (!labels.length) return text;
     return `参考资产编号：${labels.join("、")}。请按这些编号理解提示词中的图片、视频和音频引用。\n\n${text}`;

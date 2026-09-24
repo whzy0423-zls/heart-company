@@ -17,10 +17,13 @@ import (
 
 func TestStoreReleaseMetadataJSONContract(t *testing.T) {
 	raw, err := json.Marshal(Release{
-		AppName:     "九星",
-		PackageName: "com.example.ninexing",
-		IconPath:    "private/icon.png",
-		IconURL:     "https://cdn.example.com/icon.png",
+		AppName:                 "九星",
+		PackageName:             "com.example.ninexing",
+		IconPath:                "private/icon.png",
+		IconURL:                 "https://cdn.example.com/icon.png",
+		MinSupportedVersionCode: 120,
+		ForceUpdate:             true,
+		RolloutPercentage:       25,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -32,11 +35,48 @@ func TestStoreReleaseMetadataJSONContract(t *testing.T) {
 	if payload["appName"] != "九星" || payload["packageName"] != "com.example.ninexing" || payload["iconUrl"] != "https://cdn.example.com/icon.png" {
 		t.Fatalf("metadata JSON = %s, want public metadata fields", raw)
 	}
+	if payload["minSupportedVersionCode"] != float64(120) || payload["forceUpdate"] != true || payload["rolloutPercentage"] != float64(25) {
+		t.Fatalf("policy JSON = %s, want camelCase policy fields", raw)
+	}
 	if _, exists := payload["IconPath"]; exists {
 		t.Fatalf("metadata JSON = %s, must not expose IconPath", raw)
 	}
 	if _, exists := payload["iconPath"]; exists {
 		t.Fatalf("metadata JSON = %s, must not expose iconPath", raw)
+	}
+}
+
+func TestScanReleaseIncludesUpdatePolicy(t *testing.T) {
+	publishedAt := time.Date(2026, 9, 15, 8, 0, 0, 0, time.UTC)
+	release, err := scanRelease(releaseScannerFunc(func(dest ...any) error {
+		if len(dest) != 18 {
+			t.Fatalf("scan destinations = %d, want 18", len(dest))
+		}
+		*dest[0].(*int64) = 7
+		*dest[1].(*string) = "android"
+		*dest[2].(*string) = "九星"
+		*dest[3].(*string) = "com.example.ninexing"
+		*dest[4].(*string) = "android/icons/7.png"
+		*dest[5].(*string) = "2.0.0"
+		*dest[6].(*int64) = 200
+		*dest[7].(*int64) = 150
+		*dest[8].(*bool) = true
+		*dest[9].(*int) = 35
+		*dest[10].(*string) = "notes"
+		*dest[11].(*string) = "nine-xing.apk"
+		*dest[12].(*string) = "android/200.apk"
+		*dest[13].(*int64) = 4096
+		*dest[14].(*string) = repeatedSHA("a")
+		*dest[15].(*string) = string(StatusPublished)
+		*dest[16].(*time.Time) = publishedAt
+		*dest[17].(*sql.NullTime) = sql.NullTime{Time: publishedAt, Valid: true}
+		return nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.MinSupportedVersionCode != 150 || !release.ForceUpdate || release.RolloutPercentage != 35 {
+		t.Fatalf("scan policy = (%d, %v, %d), want (150, true, 35)", release.MinSupportedVersionCode, release.ForceUpdate, release.RolloutPercentage)
 	}
 }
 
@@ -66,6 +106,9 @@ func TestStoreCreateDraftAndReadLifecycle(t *testing.T) {
 	}
 	if created.CreatedAt.IsZero() {
 		t.Fatal("created release should include createdAt")
+	}
+	if created.MinSupportedVersionCode != 0 || created.ForceUpdate || created.RolloutPercentage != 100 {
+		t.Fatalf("CreateDraft() policy = (%d, %v, %d), want database defaults (0, false, 100)", created.MinSupportedVersionCode, created.ForceUpdate, created.RolloutPercentage)
 	}
 	if created.AppName != "九星" || created.PackageName != "com.example.ninexing" || created.IconPath != "android/icons/nine-xing.png" {
 		t.Fatalf("CreateDraft() metadata = (%q, %q, %q), want persisted metadata", created.AppName, created.PackageName, created.IconPath)
@@ -119,6 +162,70 @@ func TestStoreReadsDefaultMetadataForExistingRelease(t *testing.T) {
 	}
 	if found.AppName != "" || found.PackageName != "" || found.IconPath != "" {
 		t.Fatalf("legacy metadata = (%q, %q, %q), want empty defaults", found.AppName, found.PackageName, found.IconPath)
+	}
+	if found.MinSupportedVersionCode != 0 || found.ForceUpdate || found.RolloutPercentage != 100 {
+		t.Fatalf("legacy policy = (%d, %v, %d), want defaults (0, false, 100)", found.MinSupportedVersionCode, found.ForceUpdate, found.RolloutPercentage)
+	}
+}
+
+func TestStoreUpdatePolicyPersistsAndReturnsCompletePublishedRelease(t *testing.T) {
+	database := openAppReleaseTestDB(t)
+	store := NewStore(database)
+	current := insertRelease(t, database, releaseFixture(200, StatusPublished))
+
+	updated, err := store.UpdatePolicy(context.Background(), current.ID, AppReleasePolicy{
+		MinSupportedVersionCode: 150,
+		ForceUpdate:             true,
+		RolloutPercentage:       35,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ID != current.ID || updated.Status != StatusPublished || updated.VersionCode != current.VersionCode {
+		t.Fatalf("UpdatePolicy() release = %+v, want complete published release %d", updated, current.ID)
+	}
+	assertReleasePolicy(t, updated, 150, true, 35)
+
+	found, err := store.FindByID(context.Background(), current.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertReleasePolicy(t, found, 150, true, 35)
+	latest, err := store.LatestPublished(context.Background(), "android")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertReleasePolicy(t, latest, 150, true, 35)
+	listed, err := store.List(context.Background(), 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertReleasePolicy(t, *listed.Current, 150, true, 35)
+	assertReleasePolicy(t, listed.Items[0], 150, true, 35)
+}
+
+func TestStoreUpdatePolicyReturnsNotFound(t *testing.T) {
+	database := openAppReleaseTestDB(t)
+	store := NewStore(database)
+
+	_, err := store.UpdatePolicy(context.Background(), 999999, AppReleasePolicy{RolloutPercentage: 100})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("UpdatePolicy() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestStoreDatabaseRejectsInvalidUpdatePolicy(t *testing.T) {
+	database := openAppReleaseTestDB(t)
+	release := insertRelease(t, database, releaseFixture(200, StatusDraft))
+
+	for _, statement := range []string{
+		`UPDATE app_releases SET min_supported_version_code=-1 WHERE id=$1`,
+		`UPDATE app_releases SET rollout_percentage=0 WHERE id=$1`,
+		`UPDATE app_releases SET rollout_percentage=101 WHERE id=$1`,
+	} {
+		if _, err := database.Exec(statement, release.ID); err == nil {
+			t.Fatalf("statement %q succeeded, want check constraint failure", statement)
+		}
 	}
 }
 
@@ -351,19 +458,20 @@ func releaseFixture(versionCode int64, status Status) Release {
 		publishedAt = &now
 	}
 	return Release{
-		Platform:     "android",
-		AppName:      fmt.Sprintf("Nine Xing %d", versionCode),
-		PackageName:  "com.example.ninexing",
-		IconPath:     fmt.Sprintf("android/icons/%d.png", versionCode),
-		VersionName:  fmt.Sprintf("1.0.%d", versionCode),
-		VersionCode:  versionCode,
-		ReleaseNotes: fmt.Sprintf("release %d", versionCode),
-		FileName:     fmt.Sprintf("release-%d.apk", versionCode),
-		FilePath:     fmt.Sprintf("android/%d-fixture.apk", versionCode),
-		FileSize:     versionCode * 10,
-		SHA256:       repeatedSHA(fmt.Sprintf("%x", versionCode%16)),
-		Status:       status,
-		PublishedAt:  publishedAt,
+		Platform:          "android",
+		AppName:           fmt.Sprintf("Nine Xing %d", versionCode),
+		PackageName:       "com.example.ninexing",
+		IconPath:          fmt.Sprintf("android/icons/%d.png", versionCode),
+		VersionName:       fmt.Sprintf("1.0.%d", versionCode),
+		VersionCode:       versionCode,
+		RolloutPercentage: 100,
+		ReleaseNotes:      fmt.Sprintf("release %d", versionCode),
+		FileName:          fmt.Sprintf("release-%d.apk", versionCode),
+		FilePath:          fmt.Sprintf("android/%d-fixture.apk", versionCode),
+		FileSize:          versionCode * 10,
+		SHA256:            repeatedSHA(fmt.Sprintf("%x", versionCode%16)),
+		Status:            status,
+		PublishedAt:       publishedAt,
 	}
 }
 
@@ -390,17 +498,29 @@ func insertRelease(t *testing.T, database *sql.DB, release Release) Release {
 	}
 	err := database.QueryRow(`
 		INSERT INTO app_releases
-		(platform, app_name, package_name, icon_path, version_name, version_code, release_notes, file_name, file_path, file_size, sha256, status, published_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+		(platform, app_name, package_name, icon_path, version_name, version_code, min_supported_version_code, force_update, rollout_percentage, release_notes, file_name, file_path, file_size, sha256, status, published_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		RETURNING id, created_at`,
 		release.Platform, release.AppName, release.PackageName, release.IconPath, release.VersionName, release.VersionCode,
-		release.ReleaseNotes, release.FileName, release.FilePath, release.FileSize, release.SHA256, release.Status, publishedAt,
+		release.MinSupportedVersionCode, release.ForceUpdate, release.RolloutPercentage, release.ReleaseNotes, release.FileName,
+		release.FilePath, release.FileSize, release.SHA256, release.Status, publishedAt,
 	).Scan(&release.ID, &release.CreatedAt)
 	if err != nil {
 		t.Fatalf("insert release: %v", err)
 	}
 	return release
 }
+
+func assertReleasePolicy(t *testing.T, got Release, minVersion int64, force bool, rollout int) {
+	t.Helper()
+	if got.MinSupportedVersionCode != minVersion || got.ForceUpdate != force || got.RolloutPercentage != rollout {
+		t.Fatalf("release policy = (%d, %v, %d), want (%d, %v, %d)", got.MinSupportedVersionCode, got.ForceUpdate, got.RolloutPercentage, minVersion, force, rollout)
+	}
+}
+
+type releaseScannerFunc func(...any) error
+
+func (f releaseScannerFunc) Scan(dest ...any) error { return f(dest...) }
 
 func assertReleaseMetadata(t *testing.T, got, want Release) {
 	t.Helper()

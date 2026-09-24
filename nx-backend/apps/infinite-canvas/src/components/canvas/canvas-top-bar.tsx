@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Download, Images, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Trash2, Undo2, Upload } from "lucide-react";
+import { Download, Images, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Settings2, Trash2, Undo2, Upload } from "lucide-react";
 import { Dropdown, Tooltip } from "antd";
 
 import { canvasThemes } from "@/lib/canvas-theme";
@@ -21,6 +21,7 @@ export function CanvasTopBar({
     onDeleteProject,
     onExportProject,
     onImportImage,
+    onModelConfig,
     onUndo,
     onRedo,
 }: {
@@ -38,6 +39,7 @@ export function CanvasTopBar({
     onDeleteProject: () => void;
     onExportProject: () => void;
     onImportImage: () => void;
+    onModelConfig: () => void;
     onUndo: () => void;
     onRedo: () => void;
 }) {
@@ -83,6 +85,8 @@ export function CanvasTopBar({
                                 { key: "import", icon: <Upload className="size-4" />, label: "导入资产", onClick: onImportImage },
                                 { key: "export", icon: <Download className="size-4" />, label: "导出当前画布", onClick: onExportProject },
                                 { type: "divider" },
+                                { key: "model-config", icon: <Settings2 className="size-4" />, label: "模型配置", onClick: onModelConfig },
+                                { type: "divider" },
                                 { key: "undo", disabled: !canUndo, icon: <Undo2 className="size-4" />, label: <MenuLabel text="撤销" shortcut="⌘ Z" />, onClick: onUndo },
                                 { key: "redo", disabled: !canRedo, icon: <Redo2 className="size-4" />, label: <MenuLabel text="重做" shortcut="⌘ ⇧ Z / ⌘ Y" />, onClick: onRedo },
                             ],
@@ -120,7 +124,17 @@ export function CanvasTopBar({
                     </div>
                 </div>
 
-                <div />
+                <Tooltip title="模型配置">
+                    <button
+                        type="button"
+                        aria-label="模型配置"
+                        onClick={onModelConfig}
+                        className="pointer-events-auto grid size-8 place-items-center rounded-full transition hover:bg-black/5 dark:hover:bg-white/10"
+                        style={{ color: theme.node.text }}
+                    >
+                        <Settings2 className="size-4" />
+                    </button>
+                </Tooltip>
             </div>
         </>
     );

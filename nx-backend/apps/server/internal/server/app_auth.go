@@ -301,6 +301,16 @@ func (s *Server) appUserInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.enrichAppUserRoles(r.Context(), &user)
+	if care, careErr := s.appUsers.CareSnapshot(r.Context(), userInfo.ID); careErr == nil {
+		user.CareLevel = care.CareLevel
+		user.CareLabel = care.CareLabel
+		user.CareSummary = care.CareSummary
+		user.CareTrend = care.CareTrend
+		user.CareDataStatus = care.CareDataStatus
+		user.CareEvaluatedAt = care.CareEvaluatedAt
+		user.CareKnowledgeVersion = care.CareKnowledgeVersion
+		user.CareEvaluationVersion = care.CareEvaluationVersion
+	}
 	httpx.OK(w, user)
 }
 

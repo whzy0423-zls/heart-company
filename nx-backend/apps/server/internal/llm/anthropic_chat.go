@@ -92,13 +92,13 @@ func newAnthropicChatGenerator(cfg ChatGeneratorConfig, client *http.Client) *An
 }
 
 func (g *AnthropicChatGenerator) Generate(ctx context.Context, input rag.GenerateInput) (string, error) {
-	return g.complete(ctx, anthropicChatRequest{
+	return g.completeWithTimeout(ctx, anthropicChatRequest{
 		Model:       g.model,
 		System:      resolveRuntimeSystemPrompt(resolveCompatibleChatSystemPrompt(g.systemPrompt), input),
 		Messages:    g.chatMessages(input),
-		MaxTokens:   chatTokenBudgetForTier(input.Question, input.Tier),
+		MaxTokens:   chatOutputTokenBudget(input),
 		Temperature: 0.55,
-	})
+	}, input.CompletionTimeout)
 }
 
 func (g *AnthropicChatGenerator) GenerateStream(ctx context.Context, input rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
@@ -109,7 +109,7 @@ func (g *AnthropicChatGenerator) GenerateStream(ctx context.Context, input rag.G
 		Model:       g.model,
 		System:      resolveRuntimeSystemPrompt(resolveCompatibleChatSystemPrompt(g.systemPrompt), input),
 		Messages:    g.chatMessages(input),
-		MaxTokens:   chatTokenBudgetForTier(input.Question, input.Tier),
+		MaxTokens:   chatOutputTokenBudget(input),
 		Temperature: 0.55,
 		Stream:      true,
 	})
@@ -122,9 +122,7 @@ func (g *AnthropicChatGenerator) GenerateStream(ctx context.Context, input rag.G
 	}
 	req.Header.Set("Accept", "text/event-stream")
 
-	streamClient := *g.client
-	streamClient.Timeout = 0
-	resp, err := streamClient.Do(req)
+	resp, err := chatRequestClient(g.client, input.CompletionTimeout, true).Do(req)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
@@ -305,6 +303,10 @@ func (g *AnthropicChatGenerator) Ping(ctx context.Context) PingResult {
 }
 
 func (g *AnthropicChatGenerator) complete(ctx context.Context, body anthropicChatRequest) (string, error) {
+	return g.completeWithTimeout(ctx, body, 0)
+}
+
+func (g *AnthropicChatGenerator) completeWithTimeout(ctx context.Context, body anthropicChatRequest, completionTimeout time.Duration) (string, error) {
 	if err := g.requireAPIKey(); err != nil {
 		return "", err
 	}
@@ -316,7 +318,7 @@ func (g *AnthropicChatGenerator) complete(ctx context.Context, body anthropicCha
 	if err != nil {
 		return "", err
 	}
-	resp, err := g.client.Do(req)
+	resp, err := chatRequestClient(g.client, completionTimeout, false).Do(req)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr

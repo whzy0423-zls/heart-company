@@ -106,7 +106,7 @@ function createPoll(signal?: AbortSignal) {
 /**
  * Run a user-authored model call script as an async function body with flat locals (see PLUGIN_VARIABLES):
  *   prompt / images / messages / params        —— 本次请求的输入
- *   model / baseUrl / apiKey / systemPrompt / reasoningEffort     —— 当前渠道与文本设置
+ *   model / baseUrl / apiKey / systemPrompt / reasoningEffort     —— 当前渠道与文本能力设置
  *   http / request / poll / sleep / signal / onDelta    —— 调用辅助
  * The script must `return` the result; each caller normalizes it to its capability's shape.
  */
@@ -152,10 +152,12 @@ export async function runModelPlugin<T = unknown>(args: RunPluginArgs): Promise<
             args.onDelta,
         );
     } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") throw error;
-        if (axios.isCancel(error)) throw error;
+        if ((error instanceof DOMException && error.name === "AbortError") || axios.isCancel(error)) {
+            throw new DOMException("请求已取消", "AbortError");
+        }
         const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`模型调用脚本执行失败：${message}`);
+        const sanitized = config.apiKey ? message.split(config.apiKey).join("[REDACTED]") : message;
+        throw new Error(`模型调用脚本执行失败：${sanitized}`);
     }
 }
 
@@ -163,14 +165,14 @@ export type PluginVariable = { name: string; type: string; desc: string; capabil
 
 /** Documentation surface shown in the script editor. */
 export const PLUGIN_VARIABLES: PluginVariable[] = [
-    { name: "prompt", type: "string", desc: "用户输入的提示词（已拼接系统提示词）", capabilities: ["image", "video", "audio"] },
+    { name: "prompt", type: "string", desc: "用户输入的提示词", capabilities: ["image", "video", "audio"] },
     { name: "images", type: "string[]", desc: "参考图，dataURL 数组（改图 / 图生视频时有值）", capabilities: ["image", "video"] },
     { name: "messages", type: "{ role, content }[]", desc: "对话消息数组，含系统消息", capabilities: ["text"] },
     { name: "params", type: "object", desc: "生成参数：生图 {size,quality,count}、视频 {seconds,size,resolution,ratio,generateAudio,watermark}、音频 {voice,format,speed,instructions}" },
     { name: "model", type: "string", desc: "模型名称（不含渠道前缀）" },
     { name: "baseUrl", type: "string", desc: "渠道接口地址（原样，未拼 /v1）" },
     { name: "apiKey", type: "string", desc: "渠道 API Key，请求头里自己带上" },
-    { name: "systemPrompt", type: "string", desc: "系统提示词原文" },
+    { name: "systemPrompt", type: "string", desc: "文本能力系统提示词原文", capabilities: ["text"] },
     { name: "reasoningEffort", type: '"auto" | "low" | "medium" | "high" | "xhigh"', desc: "文本推理强度；auto 表示由脚本决定是否传递", capabilities: ["text"] },
     { name: "http", type: "object", desc: "便捷请求：http.post(path, body, {headers,params,responseType})、http.get(path, opts)、http.url(path)；默认带 Authorization: Bearer apiKey，可用 headers 覆盖；path 相对时按 baseUrl 拼 /v1" },
     { name: "request", type: "function", desc: "原始请求 request({ method, url, headers, params, data, responseType })，不加任何默认头，鉴权头自己写；url 相对时按 baseUrl 拼接（不加 /v1）" },

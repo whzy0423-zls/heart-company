@@ -1,4 +1,4 @@
-import { defaultConfig, resolveModelForCapability, type AiConfig } from "@/stores/use-config-store";
+import { createCapabilityRequestSnapshot, defaultConfig, resolveModelForCapability, type AiConfig, type CapabilityRequestSnapshot, type ModelCapability } from "@/stores/use-config-store";
 import { resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { imageMetadata, referenceUrl } from "@/lib/canvas/canvas-node-factory";
@@ -6,7 +6,34 @@ import type { NodeGenerationInput } from "@/components/canvas/canvas-node-genera
 import type { CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-prompt-panel";
 import type { CanvasImageAngleParams } from "@/components/canvas/canvas-node-angle-dialog";
 import type { ReferenceImage } from "@/types/image";
-import { CanvasNodeType, type CanvasAssistantSession, type CanvasConnection, type CanvasNodeData, type CanvasNodeMetadata } from "@/types/canvas";
+import { CanvasNodeType, type CanvasAssistantSession, type CanvasConnection, type CanvasNodeData, type CanvasNodeMetadata, type CanvasNodeTypeId } from "@/types/canvas";
+
+export type CanvasGenerationRoute = "image-batch" | "image-edit" | "image-question" | "text-stream" | "video-generate" | "video-retry" | "audio-generate";
+
+export function canvasGenerationCapabilityForRoute(route: CanvasGenerationRoute): ModelCapability {
+    if (route === "image-batch" || route === "image-edit") return "image";
+    if (route === "image-question" || route === "text-stream") return "text";
+    if (route === "video-generate" || route === "video-retry") return "video";
+    return "audio";
+}
+
+export function dispatchCanvasGenerationRoute<T>(route: CanvasGenerationRoute, config: AiConfig, handler: (snapshot: CapabilityRequestSnapshot) => T, modelOverride?: string): T {
+    return handler(createCapabilityRequestSnapshot(config, canvasGenerationCapabilityForRoute(route), modelOverride || config.model));
+}
+
+export function canvasGenerationRouteForMode(mode: CanvasNodeGenerationMode): CanvasGenerationRoute {
+    if (mode === "image") return "image-batch";
+    if (mode === "video") return "video-generate";
+    if (mode === "audio") return "audio-generate";
+    return "text-stream";
+}
+
+export function generationCapabilityForNodeType(type: CanvasNodeTypeId): CanvasNodeGenerationMode {
+    if (type === CanvasNodeType.Video) return canvasGenerationCapabilityForRoute("video-retry");
+    if (type === CanvasNodeType.Text) return canvasGenerationCapabilityForRoute("text-stream");
+    if (type === CanvasNodeType.Audio) return canvasGenerationCapabilityForRoute("audio-generate");
+    return canvasGenerationCapabilityForRoute("image-edit");
+}
 
 export function imageExtension(dataUrl: string) {
     return dataUrl.match(/^data:image[/]([^;]+)/)?.[1] || dataUrl.match(/image[/]([^;]+)/)?.[1] || "png";
@@ -89,13 +116,42 @@ export function getInputSummary(inputs: NodeGenerationInput[]) {
     };
 }
 
+export function buildConfigNodeMetadata(config: AiConfig, mode: CanvasNodeGenerationMode = "image"): CanvasNodeMetadata {
+    if (mode === "image") {
+        return {
+            imageSize: config.imageSize || config.size || defaultConfig.imageSize,
+            imageCount: getGenerationCount(config.imageCount || config.canvasImageCount || config.count || defaultConfig.imageCount),
+        };
+    }
+    if (mode === "video") return { generationMode: "video", videoSize: config.videoSize || config.size || defaultConfig.videoSize };
+    return { generationMode: mode };
+}
+
 export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefined, mode: CanvasNodeGenerationMode): AiConfig {
+    const imageSize = config.imageSize || config.size || defaultConfig.imageSize;
+    const imageCount = config.imageCount || config.canvasImageCount || config.count || defaultConfig.imageCount;
+    const videoSize = config.videoSize || config.size || defaultConfig.videoSize;
+    const isConfigNode = node?.type === CanvasNodeType.Config;
+    const nodeMode = isConfigNode ? node?.metadata?.generationMode : undefined;
+    const legacySizeIsImage = !nodeMode || nodeMode === "image";
+    const legacySizeIsVideo = nodeMode === "video";
+    const nodeImageSize = isConfigNode ? node?.metadata?.imageSize || (legacySizeIsImage ? node?.metadata?.size : undefined) : node?.metadata?.size;
+    const nodeImageCount = isConfigNode ? node?.metadata?.imageCount || (legacySizeIsImage ? node?.metadata?.count : undefined) : node?.metadata?.count;
+    const nodeVideoSize = isConfigNode ? node?.metadata?.videoSize || (legacySizeIsVideo ? node?.metadata?.size : undefined) : node?.metadata?.size;
+    const defaultSize = mode === "video" ? videoSize : mode === "image" ? imageSize : config.size || defaultConfig.size;
+    const defaultCount = mode === "image" ? imageCount : config.count || defaultConfig.count;
+    const effectiveSize = mode === "video" ? nodeVideoSize || defaultSize : mode === "image" ? nodeImageSize || defaultSize : defaultSize;
+    const effectiveCount = String(mode === "image" ? nodeImageCount || defaultCount : defaultCount);
+
     return {
         ...config,
-        model: resolveModelForCapability(config, node?.metadata?.model, mode),
+        model: resolveModelForCapability(config, node?.metadata?.model, canvasGenerationCapabilityForRoute(canvasGenerationRouteForMode(mode))),
         reasoningEffort: node?.metadata?.reasoningEffort || config.reasoningEffort || defaultConfig.reasoningEffort,
         quality: node?.metadata?.quality || config.quality || defaultConfig.quality,
-        size: node?.metadata?.size || config.size || defaultConfig.size,
+        imageSize: mode === "image" ? effectiveSize : imageSize,
+        imageCount: mode === "image" ? effectiveCount : imageCount,
+        videoSize: mode === "video" ? effectiveSize : videoSize,
+        size: effectiveSize,
         background: node?.metadata?.background ?? config.background ?? defaultConfig.background,
         videoSeconds: node?.metadata?.seconds || config.videoSeconds || defaultConfig.videoSeconds,
         vquality: node?.metadata?.vquality || config.vquality || defaultConfig.vquality,
@@ -105,7 +161,7 @@ export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | u
         audioFormat: node?.metadata?.audioFormat || config.audioFormat || defaultConfig.audioFormat,
         audioSpeed: node?.metadata?.audioSpeed || config.audioSpeed || defaultConfig.audioSpeed,
         audioInstructions: node?.metadata?.audioInstructions || config.audioInstructions || defaultConfig.audioInstructions,
-        count: String(node?.metadata?.count || (mode === "image" ? config.canvasImageCount || config.count : config.count) || defaultConfig.count),
+        count: effectiveCount,
     };
 }
 

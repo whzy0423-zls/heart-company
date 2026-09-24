@@ -33,6 +33,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/branding"
 	"nine-xing/nx-backend/apps/server/internal/businessmessage"
+	"nine-xing/nx-backend/apps/server/internal/caresystem"
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/chatappearance"
 	"nine-xing/nx-backend/apps/server/internal/classroom"
@@ -175,6 +176,8 @@ type Server struct {
 	teachers                       *teacher.Store
 	friends                        *friends.Store
 	directMessages                 *directmessage.Store
+	careEvaluator                  *caresystem.Evaluator
+	careWorkerCancel               context.CancelFunc
 	directMedia                    *directmedia.Store
 	chatAppearance                 *chatappearance.Store
 	realtimeTickets                *realtime.TicketStore
@@ -458,6 +461,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.appUsers = appuser.NewStore(database)
 	s.friends = friends.NewStore(database)
 	s.directMessages = directmessage.NewStore(database)
+	s.careEvaluator = caresystem.NewEvaluator(database)
 	s.directMedia = directmedia.NewStore(database, s.uploads)
 	s.chatAppearance = chatappearance.NewStore(database)
 	s.realtimeTickets = realtime.NewTicketStore(database, 60*time.Second)
@@ -582,6 +586,11 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.pushSendSlots = make(chan struct{}, 2)
 	// 启动时应用 DB 中保存的模型配置覆盖（若存在），重建对话/视频客户端。
 	s.applyStoredModelConfig()
+	if database != nil {
+		careCtx, careCancel := context.WithCancel(context.Background())
+		s.careWorkerCancel = careCancel
+		go s.runCareEvaluationSweep(careCtx)
+	}
 	if database != nil {
 		storyGenerator := lifestory.NewGenerator(lifestory.GeneratorConfig{Completer: lifeStoryRuntimeCompleter{server: s}})
 		s.lifeStoryWorker = lifestory.NewWorker(lifestory.WorkerConfig{
@@ -1307,6 +1316,9 @@ func (s *Server) routes() {
 }
 
 func (s *Server) Shutdown() {
+	if s.careWorkerCancel != nil {
+		s.careWorkerCancel()
+	}
 	if s.lifeStoryWorkerCancel != nil {
 		s.lifeStoryWorkerCancel()
 	}

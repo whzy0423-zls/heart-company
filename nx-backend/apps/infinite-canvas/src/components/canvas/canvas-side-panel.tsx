@@ -1,7 +1,7 @@
-import { memo, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { App, Empty, Input, Popconfirm, Select, Spin, Tag } from "antd";
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, Check, ChevronRight, Download, Eye, FileText, Image as ImageIcon, ListChecks, Music2, Plus, Search, Settings2, Square, Trash2, Type, Video } from "lucide-react";
+import { Bot, BookOpen, Check, ChevronRight, Download, Eye, FileText, Image as ImageIcon, ListChecks, Music2, Plus, Search, Send, Settings2, Square, Trash2, Type, Video } from "lucide-react";
 import { motion } from "motion/react";
 
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
@@ -16,21 +16,29 @@ import { useAssetStore, type Asset, type AssetKind } from "@/stores/use-asset-st
 import { usePromptSourceStore } from "@/stores/use-prompt-source-store";
 import { CANVAS_SIDE_PANEL_MAX_WIDTH, CANVAS_SIDE_PANEL_MIN_WIDTH, CANVAS_SIDE_PANEL_MOTION_MS, useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
 import { useThemeStore } from "@/stores/use-theme-store";
-import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
+import { CanvasNodeType, type CanvasAssistantSession, type CanvasNodeData } from "@/types/canvas";
 
 import type { InsertAssetPayload } from "./asset-picker-modal";
 
 const PANEL_MOTION_SECONDS = CANVAS_SIDE_PANEL_MOTION_MS / 1000;
 const PANEL_EASE = [0.22, 1, 0.36, 1] as const;
 
-type PanelTab = "canvas" | "assets" | "prompts";
+type PanelTab = "agent" | "canvas" | "assets" | "prompts";
 
 type Props = {
     nodes: CanvasNodeData[];
     selectedNodeIds: Set<string>;
+    chatSessions: CanvasAssistantSession[];
+    activeChatId: string | null;
+    agentLoading: boolean;
     onFocusNode: (nodeId: string) => void;
     onPreviewNode: (nodeId: string) => void;
     onInsertAsset: (payload: InsertAssetPayload) => void;
+    onCreateAgentSession: () => void;
+    onSelectAgentSession: (sessionId: string) => void;
+    onDeleteAgentSession: (sessionId: string) => void;
+    onSendAgentMessage: (prompt: string) => Promise<void>;
+    onInsertAgentText: (text: string, title?: string) => void;
 };
 
 const NODE_TYPE_ICON: Record<string, typeof Square> = {
@@ -49,9 +57,23 @@ const STATUS_COLOR: Record<string, string> = {
     idle: "transparent",
 };
 
-export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreviewNode, onInsertAsset }: Props) {
+export function CanvasSidePanel({
+    nodes,
+    selectedNodeIds,
+    chatSessions,
+    activeChatId,
+    agentLoading,
+    onFocusNode,
+    onPreviewNode,
+    onInsertAsset,
+    onCreateAgentSession,
+    onSelectAgentSession,
+    onDeleteAgentSession,
+    onSendAgentMessage,
+    onInsertAgentText,
+}: Props) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
-    const [tab, setTab] = useState<PanelTab>("canvas");
+    const [tab, setTab] = useState<PanelTab>("agent");
     const width = useCanvasSidePanelStore((state) => state.width);
     const panelOpen = useCanvasSidePanelStore((state) => state.panelOpen);
     const panelMounted = useCanvasSidePanelStore((state) => state.panelMounted);
@@ -98,12 +120,25 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, onFocusNode, onPreview
                 data-canvas-no-zoom
             >
                 <div className="flex items-center gap-5 px-4 pt-3.5">
+                    <TabButton label="Agent" active={tab === "agent"} theme={theme} onClick={() => setTab("agent")} />
                     <TabButton label="画布" active={tab === "canvas"} theme={theme} onClick={() => setTab("canvas")} />
                     <TabButton label="资产" active={tab === "assets"} theme={theme} onClick={() => setTab("assets")} />
                     <TabButton label="提示词库" active={tab === "prompts"} theme={theme} onClick={() => setTab("prompts")} />
                 </div>
                 <div className="mt-2 min-h-0 flex-1 overflow-hidden">
-                    {tab === "canvas" ? (
+                    {tab === "agent" ? (
+                        <CanvasAgentTab
+                            sessions={chatSessions}
+                            activeSessionId={activeChatId}
+                            loading={agentLoading}
+                            theme={theme}
+                            onCreateSession={onCreateAgentSession}
+                            onSelectSession={onSelectAgentSession}
+                            onDeleteSession={onDeleteAgentSession}
+                            onSend={onSendAgentMessage}
+                            onInsertText={onInsertAgentText}
+                        />
+                    ) : tab === "canvas" ? (
                         <CanvasNodesTab nodes={nodes} selectedNodeIds={selectedNodeIds} onFocusNode={onFocusNode} onPreviewNode={onPreviewNode} theme={theme} />
                     ) : tab === "assets" ? (
                         <CanvasAssetsTab onInsert={onInsertAsset} theme={theme} />
@@ -123,6 +158,162 @@ function TabButton({ label, active, theme, onClick }: { label: string; active: b
             {label}
             {active ? <motion.span layoutId="sidePanelTabIndicator" className="absolute inset-x-0 -bottom-px h-0.5 rounded-full" style={{ background: theme.toolbar.activeText }} transition={{ type: "spring", stiffness: 500, damping: 34 }} /> : null}
         </button>
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Agent Tab —— 画布内助手会话,可把回复插入为文本节点
+// ---------------------------------------------------------------------------
+
+function CanvasAgentTab({
+    sessions,
+    activeSessionId,
+    loading,
+    theme,
+    onCreateSession,
+    onSelectSession,
+    onDeleteSession,
+    onSend,
+    onInsertText,
+}: {
+    sessions: CanvasAssistantSession[];
+    activeSessionId: string | null;
+    loading: boolean;
+    theme: CanvasTheme;
+    onCreateSession: () => void;
+    onSelectSession: (sessionId: string) => void;
+    onDeleteSession: (sessionId: string) => void;
+    onSend: (prompt: string) => Promise<void>;
+    onInsertText: (text: string, title?: string) => void;
+}) {
+    const [draft, setDraft] = useState("");
+    const scrollerRef = useRef<HTMLDivElement>(null);
+    const activeSession = sessions.find((session) => session.id === activeSessionId) || sessions[0] || null;
+
+    useEffect(() => {
+        scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight });
+    }, [activeSession?.messages.length, activeSession?.messages.at(-1)?.text]);
+
+    const submit = async () => {
+        const prompt = draft.trim();
+        if (!prompt || loading) return;
+        setDraft("");
+        await onSend(prompt);
+    };
+
+    return (
+        <div className="flex h-full flex-col">
+            <div className="flex items-center gap-2 px-3 pb-2.5 pt-1">
+                <span className="inline-flex items-center gap-1.5 text-xs font-medium opacity-60">
+                    <Bot className="size-3.5" /> Agent
+                </span>
+                {activeSession ? <span className="min-w-0 truncate text-xs opacity-35">{activeSession.title}</span> : null}
+                <button type="button" onClick={onCreateSession} className="ml-auto flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium opacity-70 transition hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/10">
+                    <Plus className="size-3.5" /> 新会话
+                </button>
+            </div>
+
+            {sessions.length > 1 ? (
+                <div className="flex gap-1 overflow-x-auto px-3 pb-2 thin-scrollbar">
+                    {sessions.map((session) => (
+                        <button
+                            key={session.id}
+                            type="button"
+                            onClick={() => onSelectSession(session.id)}
+                            className="group inline-flex max-w-[180px] shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition"
+                            style={{ borderColor: session.id === activeSession?.id ? theme.toolbar.activeText : theme.toolbar.border, background: session.id === activeSession?.id ? theme.toolbar.activeBg : "transparent" }}
+                            title={session.title}
+                        >
+                            <span className="truncate">{session.title}</span>
+                            <span
+                                role="button"
+                                tabIndex={0}
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    onDeleteSession(session.id);
+                                }}
+                                onKeyDown={(event) => {
+                                    if (event.key !== "Enter" && event.key !== " ") return;
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    onDeleteSession(session.id);
+                                }}
+                                className="grid size-4 place-items-center rounded-full opacity-0 transition hover:bg-black/10 group-hover:opacity-60 dark:hover:bg-white/10"
+                                aria-label={`删除 ${session.title}`}
+                            >
+                                ×
+                            </span>
+                        </button>
+                    ))}
+                </div>
+            ) : null}
+
+            <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 thin-scrollbar">
+                {activeSession?.messages.length ? (
+                    <div className="space-y-3">
+                        {activeSession.messages.map((message) => {
+                            const fromUser = message.role === "user";
+                            const text = message.text || "";
+                            return (
+                                <div key={message.id} className={`flex ${fromUser ? "justify-end" : "justify-start"}`}>
+                                    <div
+                                        className={`max-w-[92%] rounded-2xl px-3 py-2 text-sm leading-6 shadow-sm ${fromUser ? "rounded-br-md" : "rounded-bl-md"}`}
+                                        style={{ background: fromUser ? theme.toolbar.activeBg : theme.node.fill, color: theme.node.text }}
+                                    >
+                                        <div className="whitespace-pre-wrap break-words">{text || (loading && !fromUser ? "正在思考…" : "")}</div>
+                                        {!fromUser && text ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => onInsertText(text, activeSession.title)}
+                                                className="mt-2 rounded-md px-2 py-1 text-xs font-medium opacity-55 transition hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/10"
+                                            >
+                                                插入为文本节点
+                                            </button>
+                                        ) : null}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                ) : (
+                    <div className="flex h-full flex-col items-center justify-center px-6 text-center text-sm opacity-45">
+                        <Bot className="mb-3 size-8" />
+                        <p className="m-0 font-medium">画布 Agent</p>
+                        <p className="mb-0 mt-1 text-xs leading-5">用文本模型帮你写提示词、拆解任务或生成文案，回复可直接插入画布。</p>
+                    </div>
+                )}
+            </div>
+
+            <div className="border-t p-3" style={{ borderColor: theme.toolbar.border }}>
+                <textarea
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                            event.preventDefault();
+                            void submit();
+                        }
+                    }}
+                    placeholder="问 Agent：帮我拆成一组生图提示词…"
+                    rows={3}
+                    className="box-border w-full resize-none rounded-xl border bg-transparent px-3 py-2 text-sm outline-none transition focus:border-current"
+                    style={{ borderColor: theme.toolbar.border, color: theme.node.text }}
+                    disabled={loading}
+                />
+                <div className="mt-2 flex items-center justify-between gap-2">
+                    <span className="text-[11px] opacity-40">⌘/Ctrl + Enter 发送</span>
+                    <button
+                        type="button"
+                        onClick={() => void submit()}
+                        disabled={!draft.trim() || loading}
+                        className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-35"
+                        style={{ background: theme.toolbar.activeText, color: theme.toolbar.panel }}
+                    >
+                        <Send className="size-3.5" /> {loading ? "发送中" : "发送"}
+                    </button>
+                </div>
+            </div>
+        </div>
     );
 }
 
@@ -231,7 +422,13 @@ function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, onPreviewNode, th
                                     </button>
                                     {selectMode || !isImage ? null : (
                                         <div className="flex shrink-0 flex-col items-center gap-0.5 pr-1.5">
-                                            <button type="button" onClick={() => onPreviewNode(node.id)} className="grid size-7 place-items-center rounded-md opacity-55 transition hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10" aria-label="放大预览" title="放大预览">
+                                            <button
+                                                type="button"
+                                                onClick={() => onPreviewNode(node.id)}
+                                                className="grid size-7 place-items-center rounded-md opacity-55 transition hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10"
+                                                aria-label="放大预览"
+                                                title="放大预览"
+                                            >
                                                 <Eye className="size-3.5" />
                                             </button>
                                         </div>
@@ -468,19 +665,23 @@ const CanvasPromptsTab = memo(function CanvasPromptsTab({ onInsert, theme }: { o
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
                 <div className="space-y-1">
-                    {enabledSources.length ? enabledSources.map((source) => (
-                        <PromptSourceGroup
-                            key={source.id}
-                            sourceId={source.id}
-                            sourceName={source.name}
-                            keyword={keyword}
-                            open={!!expanded[source.id]}
-                            theme={theme}
-                            onToggle={() => setExpanded((prev) => ({ ...prev, [source.id]: !prev[source.id] }))}
-                            onInsert={onInsert}
-                            onView={setDetail}
-                        />
-                    )) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无提示词" className="pt-12" />}
+                    {enabledSources.length ? (
+                        enabledSources.map((source) => (
+                            <PromptSourceGroup
+                                key={source.id}
+                                sourceId={source.id}
+                                sourceName={source.name}
+                                keyword={keyword}
+                                open={!!expanded[source.id]}
+                                theme={theme}
+                                onToggle={() => setExpanded((prev) => ({ ...prev, [source.id]: !prev[source.id] }))}
+                                onInsert={onInsert}
+                                onView={setDetail}
+                            />
+                        ))
+                    ) : (
+                        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无提示词" className="pt-12" />
+                    )}
                 </div>
             </div>
             <PromptDetailDialog prompt={detail} onClose={() => setDetail(null)} onCopy={(prompt) => void copyPrompt(prompt)} />

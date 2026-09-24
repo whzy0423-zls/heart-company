@@ -30,12 +30,15 @@ func TestServerXinzhiliLayeredKnowledgeUsesCurrentConversationCard(t *testing.T)
 	searcher := newLayeredKnowledgeSearcher()
 	server := &Server{appKnowledge: appknowledge.NewCoordinator(resolver, searcher, searcher)}
 
-	result, err := (serverXinzhiliLayeredKnowledge{server: server}).Retrieve(context.Background(), 7, 91, 55, layeredKnowledgeQuestion)
+	result, err := (serverXinzhiliLayeredKnowledge{server: server}).Retrieve(context.Background(), 7, 91, 55, "1 2 3 4 这些型号的反馈")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resolver.calls != 1 || resolver.lastUserID != 7 || resolver.lastSessionID != 91 || resolver.lastCardID != 55 {
 		t.Fatalf("resolution calls=%d input=%d/%d/%d", resolver.calls, resolver.lastUserID, resolver.lastSessionID, resolver.lastCardID)
+	}
+	if len(resolver.requestedTypes) != 0 {
+		t.Fatalf("realtime must keep legacy current-card retrieval, requested types = %v", resolver.requestedTypes)
 	}
 	if result.Trace == nil || result.Trace.CardID != 55 || result.Trace.EnneagramType == nil || *result.Trace.EnneagramType != 4 || result.Trace.CardRevision != 12 {
 		t.Fatalf("realtime trace = %+v", result.Trace)

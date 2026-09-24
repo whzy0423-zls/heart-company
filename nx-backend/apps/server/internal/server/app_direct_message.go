@@ -174,6 +174,10 @@ func (s *Server) appDirectMessageRouter(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		s.publishDirectMessageEvent(item)
+		if item.WasCreated {
+			s.enqueueCareEvaluation(item.RecipientID)
+			s.enqueueCareEvaluation(user.ID)
+		}
 		if shouldNotifyDirectMessage(item) {
 			senderName := strings.TrimSpace(user.RealName)
 			if senderName == "" {

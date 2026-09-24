@@ -47,6 +47,12 @@ func TestServiceCreateDraftPersistsMetadataAndIcon(t *testing.T) {
 	if created.AppName != store.created.AppName || created.PackageName != store.created.PackageName || created.IconPath != wantIconKey {
 		t.Fatalf("created release metadata = %+v, want persisted metadata", created)
 	}
+	if store.created.MinSupportedVersionCode != 0 || store.created.ForceUpdate || store.created.RolloutPercentage != 100 {
+		t.Fatalf("CreateDraft input policy = (%d, %v, %d), want defaults (0, false, 100)", store.created.MinSupportedVersionCode, store.created.ForceUpdate, store.created.RolloutPercentage)
+	}
+	if created.MinSupportedVersionCode != 0 || created.ForceUpdate || created.RolloutPercentage != 100 {
+		t.Fatalf("created release policy = (%d, %v, %d), want defaults (0, false, 100)", created.MinSupportedVersionCode, created.ForceUpdate, created.RolloutPercentage)
+	}
 	if created.IconURL != "/api/app-release-icons/42" || !created.FileAvailable {
 		t.Fatalf("created release enrichment = iconURL %q fileAvailable %v", created.IconURL, created.FileAvailable)
 	}
@@ -199,6 +205,92 @@ func TestServiceEnrichesEveryReleaseResponseConsistently(t *testing.T) {
 	assertEnriched(t, opened)
 }
 
+func TestServiceUpdatePolicyValidatesAndReturnsEnrichedRelease(t *testing.T) {
+	files, release := managedReleaseFixture(t)
+	release.Status = StatusPublished
+	store := &stubReleaseStore{release: release}
+	service := &Service{store: store, files: files}
+	policy := AppReleasePolicy{
+		MinSupportedVersionCode: 100,
+		ForceUpdate:             true,
+		RolloutPercentage:       35,
+	}
+
+	updated, err := service.UpdatePolicy(context.Background(), release.ID, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.updateCalls != 1 || store.updatedPolicy != policy {
+		t.Fatalf("store update calls=%d policy=%+v, want one call with %+v", store.updateCalls, store.updatedPolicy, policy)
+	}
+	if updated.ID != release.ID || updated.Status != StatusPublished || updated.VersionCode != release.VersionCode {
+		t.Fatalf("UpdatePolicy() = %+v, want complete published release", updated)
+	}
+	if updated.MinSupportedVersionCode != 100 || !updated.ForceUpdate || updated.RolloutPercentage != 35 {
+		t.Fatalf("updated policy = (%d, %v, %d), want (100, true, 35)", updated.MinSupportedVersionCode, updated.ForceUpdate, updated.RolloutPercentage)
+	}
+	if !updated.FileAvailable || updated.IconURL != "/api/app-release-icons/7" {
+		t.Fatalf("updated enrichment = fileAvailable %v iconURL %q", updated.FileAvailable, updated.IconURL)
+	}
+}
+
+func TestServiceUpdatePolicyRejectsInvalidValuesWithoutStoreUpdate(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy AppReleasePolicy
+	}{
+		{name: "negative minimum", policy: AppReleasePolicy{MinSupportedVersionCode: -1, RolloutPercentage: 100}},
+		{name: "zero rollout", policy: AppReleasePolicy{RolloutPercentage: 0}},
+		{name: "rollout above one hundred", policy: AppReleasePolicy{RolloutPercentage: 101}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &stubReleaseStore{release: Release{ID: 7, VersionCode: 200}}
+			service := &Service{store: store}
+
+			_, err := service.UpdatePolicy(context.Background(), 7, test.policy)
+			if !errors.Is(err, ErrInvalidPolicy) {
+				t.Fatalf("UpdatePolicy() error = %v, want ErrInvalidPolicy", err)
+			}
+			if store.updateCalls != 0 {
+				t.Fatalf("store update calls = %d, want 0", store.updateCalls)
+			}
+		})
+	}
+}
+
+func TestServiceUpdatePolicyRejectsMinimumAboveReleaseVersion(t *testing.T) {
+	store := &stubReleaseStore{release: Release{ID: 7, VersionCode: 200}}
+	service := &Service{store: store}
+
+	_, err := service.UpdatePolicy(context.Background(), 7, AppReleasePolicy{MinSupportedVersionCode: 201, RolloutPercentage: 100})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("UpdatePolicy() error = %v, want ErrConflict", err)
+	}
+	if store.updateCalls != 0 {
+		t.Fatalf("store update calls = %d, want 0", store.updateCalls)
+	}
+}
+
+func TestServiceUpdatePolicyPropagatesLookupAndUpdateErrors(t *testing.T) {
+	t.Run("not found", func(t *testing.T) {
+		store := &stubReleaseStore{findErr: ErrNotFound}
+		service := &Service{store: store}
+		_, err := service.UpdatePolicy(context.Background(), 7, AppReleasePolicy{RolloutPercentage: 100})
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("UpdatePolicy() error = %v, want ErrNotFound", err)
+		}
+	})
+	t.Run("conflict", func(t *testing.T) {
+		store := &stubReleaseStore{release: Release{ID: 7, VersionCode: 200}, updateErr: ErrConflict}
+		service := &Service{store: store}
+		_, err := service.UpdatePolicy(context.Background(), 7, AppReleasePolicy{RolloutPercentage: 100})
+		if !errors.Is(err, ErrConflict) {
+			t.Fatalf("UpdatePolicy() error = %v, want ErrConflict", err)
+		}
+	})
+}
+
 func TestServiceOpenIconOpensRegularManagedPNG(t *testing.T) {
 	files, release := managedReleaseFixture(t)
 	service := &Service{store: &stubReleaseStore{release: release}, files: files}
@@ -267,10 +359,14 @@ func (s *rollbackFailureFileStore) Remove(key string) error {
 func (s stubAPKInspector) Inspect(string) (APKInfo, error) { return s.info, s.err }
 
 type stubReleaseStore struct {
-	created   Release
-	createErr error
-	release   Release
-	list      ListResult
+	created       Release
+	createErr     error
+	release       Release
+	findErr       error
+	updatedPolicy AppReleasePolicy
+	updateErr     error
+	updateCalls   int
+	list          ListResult
 }
 
 func (s *stubReleaseStore) CreateDraft(_ context.Context, input Release) (Release, error) {
@@ -284,9 +380,24 @@ func (s *stubReleaseStore) CreateDraft(_ context.Context, input Release) (Releas
 }
 
 func (s *stubReleaseStore) FindByID(context.Context, int64) (Release, error) {
+	if s.findErr != nil {
+		return Release{}, s.findErr
+	}
 	if s.release.ID == 0 {
 		return Release{}, ErrNotFound
 	}
+	return s.release, nil
+}
+
+func (s *stubReleaseStore) UpdatePolicy(_ context.Context, _ int64, policy AppReleasePolicy) (Release, error) {
+	s.updateCalls++
+	s.updatedPolicy = policy
+	if s.updateErr != nil {
+		return Release{}, s.updateErr
+	}
+	s.release.MinSupportedVersionCode = policy.MinSupportedVersionCode
+	s.release.ForceUpdate = policy.ForceUpdate
+	s.release.RolloutPercentage = policy.RolloutPercentage
 	return s.release, nil
 }
 

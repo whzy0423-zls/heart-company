@@ -15,6 +15,12 @@ export interface AppCustomer {
   remainingDays?: number;
   status: string;
   updateTime: string;
+  careLevel?: number | null;
+  careLabel?: string;
+  careSummary?: string;
+  careTrend?: string;
+  careDataStatus?: string;
+  careEvaluatedAt?: string;
 }
 
 export interface AppCustomerPageResult<T> {
@@ -49,6 +55,12 @@ export interface AppUserInsight {
   status: string;
   updateTime: string;
   wingType: number;
+  careLevel?: number | null;
+  careLabel?: string;
+  careSummary?: string;
+  careTrend?: string;
+  careDataStatus?: string;
+  careEvaluatedAt?: string;
 }
 
 export interface UpdateAppCustomerInput {
