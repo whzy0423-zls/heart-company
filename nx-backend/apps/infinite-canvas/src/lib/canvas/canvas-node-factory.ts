@@ -9,6 +9,7 @@ import { CanvasNodeType, type CanvasImageGenerationType, type CanvasNodeData, ty
 export function createCanvasNode(type: CanvasNodeTypeId, position: Position, metadata?: CanvasNodeMetadata): CanvasNodeData {
     const spec = getNodeSpec(type);
     const id = `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const initialMetadata = { ...spec.metadata, ...metadata };
 
     return {
         id,
@@ -20,7 +21,7 @@ export function createCanvasNode(type: CanvasNodeTypeId, position: Position, met
         },
         width: spec.width,
         height: spec.height,
-        metadata: { ...spec.metadata, ...metadata },
+        metadata: initialMetadata,
     };
 }
 
