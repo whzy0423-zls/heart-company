@@ -681,13 +681,15 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		ConversationCard:    conversationCard,
 		UserPreferences:     preferences,
 		CurrentDirectives:   directives,
-		RuntimeInstructions: enneagramDialogueInstructions(ctx),
-		Tier:                tier,
-		RuntimeInstructions: replyPlan.RuntimeInstructions,
-		MaxOutputTokens:     replyPlan.MaxOutputTokens,
-		CompletionTimeout:   replyPlan.CompletionTimeout,
-		SourceLimit:         replyPlan.SourceLimit,
-		SourceSnippetRunes:  replyPlan.SourceSnippetRunes,
+		RuntimeInstructions: strings.TrimSpace(strings.Join([]string{
+			enneagramDialogueInstructions(ctx),
+			replyPlan.RuntimeInstructions,
+		}, "\n\n")),
+		Tier:               tier,
+		MaxOutputTokens:    replyPlan.MaxOutputTokens,
+		CompletionTimeout:  replyPlan.CompletionTimeout,
+		SourceLimit:        replyPlan.SourceLimit,
+		SourceSnippetRunes: replyPlan.SourceSnippetRunes,
 	})
 	if err != nil {
 		logAppChatTerminalTiming("sync", "error", userInfo.ID, sessionID, requestStartedAt, appChatFailurePhase(ctx, "provider"), 0)
@@ -1024,13 +1026,15 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			ConversationCard:    conversationCard,
 			UserPreferences:     preferences,
 			CurrentDirectives:   directives,
-			RuntimeInstructions: enneagramDialogueInstructions(ctx),
-			Tier:                input.tier,
-			RuntimeInstructions: input.replyPlan.RuntimeInstructions,
-			MaxOutputTokens:     input.replyPlan.MaxOutputTokens,
-			CompletionTimeout:   input.replyPlan.CompletionTimeout,
-			SourceLimit:         input.replyPlan.SourceLimit,
-			SourceSnippetRunes:  input.replyPlan.SourceSnippetRunes,
+			RuntimeInstructions: strings.TrimSpace(strings.Join([]string{
+				enneagramDialogueInstructions(ctx),
+				input.replyPlan.RuntimeInstructions,
+			}, "\n\n")),
+			Tier:               input.tier,
+			MaxOutputTokens:    input.replyPlan.MaxOutputTokens,
+			CompletionTimeout:  input.replyPlan.CompletionTimeout,
+			SourceLimit:        input.replyPlan.SourceLimit,
+			SourceSnippetRunes: input.replyPlan.SourceSnippetRunes,
 		}, func(delta string) error {
 			if delta == "" {
 				return nil
