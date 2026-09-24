@@ -28,6 +28,12 @@ type portraitResp struct {
 	MainType             int      `json:"mainType,omitempty"`             // 主型 id
 	UpdatedAt            string   `json:"updatedAt,omitempty"`            // 更新时间，格式 YYYY/MM/DD HH:mm:ss
 	membershipResourceMetadata
+	CareLevel       *int   `json:"careLevel,omitempty"`
+	CareLabel       string `json:"careLabel,omitempty"`
+	CareSummary     string `json:"careSummary,omitempty"`
+	CareTrend       string `json:"careTrend,omitempty"`
+	CareDataStatus  string `json:"careDataStatus,omitempty"`
+	CareEvaluatedAt string `json:"careEvaluatedAt,omitempty"`
 }
 
 // appCardPortrait 返回指定人物卡的成长状态画像。
@@ -63,6 +69,16 @@ func (s *Server) appCardPortrait(w http.ResponseWriter, r *http.Request, userID 
 	}
 	resp.membershipResourceMetadata = access
 	redactPortraitContent(&resp, access)
+	if s.appUsers != nil {
+		if care, careErr := s.appUsers.CareSnapshot(r.Context(), userID); careErr == nil {
+			resp.CareLevel = care.CareLevel
+			resp.CareLabel = care.CareLabel
+			resp.CareSummary = care.CareSummary
+			resp.CareTrend = care.CareTrend
+			resp.CareDataStatus = care.CareDataStatus
+			resp.CareEvaluatedAt = care.CareEvaluatedAt
+		}
+	}
 	httpx.OK(w, resp)
 }
 

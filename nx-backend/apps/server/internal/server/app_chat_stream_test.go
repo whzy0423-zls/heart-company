@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -267,7 +269,7 @@ func TestAppChatAskStreamFlushesFirstDeltaBeforeGenerationCompletes(t *testing.T
 	store := newFakeAppChatStreamStore()
 	generator := &controlledAppChatStreamingGenerator{
 		generateStream: func(ctx context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
-			if err := emit("第一段。"); err != nil {
+			if err := emit("第一段未完"); err != nil {
 				return "", err
 			}
 			close(firstEmitted)
@@ -276,10 +278,10 @@ func TestAppChatAskStreamFlushesFirstDeltaBeforeGenerationCompletes(t *testing.T
 			case <-ctx.Done():
 				return "", ctx.Err()
 			}
-			if err := emit("第二段"); err != nil {
+			if err := emit("，第二段。"); err != nil {
 				return "", err
 			}
-			return "第一段。第二段", nil
+			return "第一段未完，第二段。", nil
 		},
 	}
 	httpServer := newAppChatStreamHTTPServer(t, store, generator)
@@ -323,7 +325,7 @@ func TestAppChatAskStreamFlushesFirstDeltaBeforeGenerationCompletes(t *testing.T
 		close(releaseSecond)
 		t.Fatal(err)
 	}
-	if !strings.Contains(firstEvent, "event: delta\n") || !strings.Contains(firstEvent, `"content":"第一段。"`) {
+	if !strings.Contains(firstEvent, "event: delta\n") || !strings.Contains(firstEvent, `"content":"第一段未完"`) {
 		close(releaseSecond)
 		t.Fatalf("unexpected first event: %q", firstEvent)
 	}
@@ -944,6 +946,100 @@ func TestAppChatStreamTimingBoundsIdleByTotalDeadline(t *testing.T) {
 	}
 }
 
+func TestAppChatTimingCompletionRuneAndPhase(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		generator  rag.Generator
+		configure  func(*Server, *fakeAppChatStreamStore)
+		wantPrefix string
+		wantPhase  string
+		wantRunes  int
+	}{
+		{
+			name: "sync success", path: "/api/app/chat/sessions/42/ask",
+			generator:  &timingAppChatGenerator{answer: "完整回答"},
+			wantPrefix: "app_chat_sync stage=completed", wantPhase: "complete", wantRunes: 4,
+		},
+		{
+			name: "stream success", path: "/api/app/chat/sessions/42/ask/stream",
+			generator:  &timingAppChatGenerator{answer: "完整回答"},
+			wantPrefix: "app_chat_stream stage=completed", wantPhase: "complete", wantRunes: 4,
+		},
+		{
+			name: "generation error", path: "/api/app/chat/sessions/42/ask/stream",
+			generator:  &timingAppChatGenerator{answer: "部分", err: errors.New("provider token_usage=99 finish_reason=stop secret-answer")},
+			wantPrefix: "app_chat_stream stage=error", wantPhase: "provider", wantRunes: 2,
+		},
+		{
+			name: "persistence error", path: "/api/app/chat/sessions/42/ask/stream",
+			generator: &timingAppChatGenerator{answer: "完整回答"},
+			configure: func(_ *Server, store *fakeAppChatStreamStore) {
+				store.saveErr = errors.New("save failed")
+			},
+			wantPrefix: "app_chat_stream stage=error", wantPhase: "save", wantRunes: 4,
+		},
+		{
+			name: "timeout", path: "/api/app/chat/sessions/42/ask/stream",
+			generator: &timingAppChatGenerator{answer: "部分", waitForContext: true},
+			configure: func(server *Server, _ *fakeAppChatStreamStore) {
+				server.chatTimeout = 35 * time.Millisecond
+				server.chatHeartbeatInterval = 10 * time.Millisecond
+				server.chatProviderIdleTimeout = time.Second
+			},
+			wantPrefix: "app_chat_stream stage=error", wantPhase: "provider_timeout", wantRunes: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeAppChatStreamStore()
+			server := newAppChatStreamServer(store, tt.generator)
+			server.chatLimiter = newFixedWindowRateLimiter(100, time.Minute)
+			if tt.configure != nil {
+				tt.configure(server, store)
+			}
+
+			logs := captureAppChatLogs(t, func() {
+				request := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(`{"question":"怎么做？"}`))
+				request = request.WithContext(context.WithValue(request.Context(), appContextKey{}, auth.UserInfo{ID: 7}))
+				if strings.HasSuffix(tt.path, "/stream") {
+					server.appChatRouter(newAppChatBlockingStreamWriter(), request)
+					return
+				}
+				server.appChatRouter(httptest.NewRecorder(), request)
+			})
+
+			if !strings.Contains(logs, tt.wantPrefix) || !strings.Contains(logs, "phase="+tt.wantPhase) || !strings.Contains(logs, "response_runes="+strconv.Itoa(tt.wantRunes)) {
+				t.Fatalf("terminal timing log missing prefix/phase/runes: %q", logs)
+			}
+			for _, forbidden := range []string{"完整回答", "secret-answer", "token_usage", "finish_reason"} {
+				if strings.Contains(logs, forbidden) {
+					t.Fatalf("timing log contains forbidden answer/provider metadata %q: %q", forbidden, logs)
+				}
+			}
+		})
+	}
+}
+
+func captureAppChatLogs(t *testing.T, run func()) string {
+	t.Helper()
+	var output bytes.Buffer
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
+	previousPrefix := log.Prefix()
+	log.SetOutput(&output)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	t.Cleanup(func() {
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+		log.SetPrefix(previousPrefix)
+	})
+	run()
+	return output.String()
+}
+
 func TestAppChatStreamLifecycleArbitratesTimeoutAndPersistence(t *testing.T) {
 	t.Run("timeout wins", func(t *testing.T) {
 		lifecycle := &appChatStreamLifecycle{}
@@ -1387,6 +1483,36 @@ func (f *appChatStreamTestFlusher) Flush() {
 
 type controlledAppChatStreamingGenerator struct {
 	generateStream func(context.Context, rag.GenerateInput, rag.StreamEmitter) (string, error)
+}
+
+type timingAppChatGenerator struct {
+	answer         string
+	err            error
+	waitForContext bool
+}
+
+func (g *timingAppChatGenerator) Generate(ctx context.Context, _ rag.GenerateInput) (string, error) {
+	if g.waitForContext {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	return g.answer, g.err
+}
+
+func (g *timingAppChatGenerator) GenerateStream(ctx context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+	if g.answer != "" {
+		if err := emit(g.answer); err != nil {
+			return "", err
+		}
+	}
+	if g.waitForContext {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	if g.err != nil {
+		return "", g.err
+	}
+	return g.answer, nil
 }
 
 type hygieneAppChatGenerator struct {

@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,10 +18,12 @@ type coordinatorResolverStub struct {
 	resolution ConversationResolution
 	err        error
 	input      Input
+	requested  []int
 }
 
-func (s *coordinatorResolverStub) ResolveConversation(_ context.Context, userID, sessionID, cardID int64) (ConversationResolution, error) {
+func (s *coordinatorResolverStub) ResolveConversation(_ context.Context, userID, sessionID, cardID int64, requestedTypes []int) (ConversationResolution, error) {
 	s.input = Input{UserID: userID, SessionID: sessionID, CardID: cardID}
+	s.requested = append([]int(nil), requestedTypes...)
 	return s.resolution, s.err
 }
 
@@ -26,10 +31,12 @@ type publicSearchStub struct {
 	docs  []rag.Document
 	err   error
 	calls int
+	topKs []int
 }
 
-func (s *publicSearchStub) SearchPublic(_ context.Context, _ string, _ int) ([]rag.Document, error) {
+func (s *publicSearchStub) SearchPublic(_ context.Context, _ string, topK int) ([]rag.Document, error) {
 	s.calls++
+	s.topKs = append(s.topKs, topK)
 	return append([]rag.Document(nil), s.docs...), s.err
 }
 
@@ -37,6 +44,9 @@ type releaseSearchStub struct {
 	docsByRelease map[int64][]rag.Document
 	errors        map[int64]error
 	releaseIDs    []int64
+	topKs         map[int64][]int
+	minScores     map[int64][]float64
+	mu            sync.Mutex
 }
 
 type remoteRetrieverStub struct {
@@ -91,6 +101,31 @@ func TestCoordinatorGeneratesRemoteRequestIDWhenCallerHasNone(t *testing.T) {
 	}
 	if remote.input.RequestID == "" {
 		t.Fatal("remote request ID must not be empty")
+	}
+}
+
+func TestCoordinatorLangChainUsesExplicitTypeBindingsWithoutCardTypeLeak(t *testing.T) {
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{
+		CardID: 9, CardRevision: 4, MainType: 6,
+		Resolution: Resolution{
+			Theory:        &Binding{Layer: LayerTheory, ReleaseID: 100},
+			EnneagramType: &Binding{Layer: LayerEnneagramType, ReleaseID: 106},
+			RequestedTypeBindings: []*Binding{
+				{Layer: LayerEnneagramType, ReleaseID: 101},
+				{Layer: LayerEnneagramType, ReleaseID: 104},
+			},
+		},
+	}}
+	remote := &remoteRetrieverStub{}
+	coordinator := NewCoordinator(resolver, &publicSearchStub{}, &releaseSearchStub{}, WithRemote("langchain", remote, nil))
+	if _, err := coordinator.Retrieve(context.Background(), Input{UserID: 7, SessionID: 8, CardID: 9, Query: "比较1号与4号", RequestedTypes: []int{1, 4}}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(remote.input.EnneagramReleaseIDs, []int64{101, 104}) {
+		t.Fatalf("explicit remote releases = %v", remote.input.EnneagramReleaseIDs)
+	}
+	if !reflect.DeepEqual(remote.input.TheoryReleaseIDs, []int64{100}) {
+		t.Fatalf("theory releases = %v", remote.input.TheoryReleaseIDs)
 	}
 }
 
@@ -279,8 +314,18 @@ func TestCoordinatorShadowReturnsLocalAndReportsComparison(t *testing.T) {
 	}
 }
 
-func (s *releaseSearchStub) SearchReleaseChunks(_ context.Context, releaseID int64, _ string, _ int, _ float64) ([]rag.Document, error) {
+func (s *releaseSearchStub) SearchReleaseChunks(_ context.Context, releaseID int64, _ string, topK int, minScore float64) ([]rag.Document, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.releaseIDs = append(s.releaseIDs, releaseID)
+	if s.topKs == nil {
+		s.topKs = make(map[int64][]int)
+	}
+	if s.minScores == nil {
+		s.minScores = make(map[int64][]float64)
+	}
+	s.topKs[releaseID] = append(s.topKs[releaseID], topK)
+	s.minScores[releaseID] = append(s.minScores[releaseID], minScore)
 	return append([]rag.Document(nil), s.docsByRelease[releaseID]...), s.errors[releaseID]
 }
 
@@ -320,6 +365,308 @@ func TestCoordinatorReturnsPublicTheoryAndCurrentTypeWithTrace(t *testing.T) {
 		result.Trace.LayerHits[LayerEnneagramType].LibraryID != 13 ||
 		result.Trace.LayerHits[LayerEnneagramType].ReleaseID != 103 {
 		t.Fatalf("layer hits = %+v", result.Trace.LayerHits)
+	}
+}
+
+func TestCoordinatorRequestedTypesSearchesOnlyExplicitBindingsInStableOrder(t *testing.T) {
+	bindings := make([]*Binding, 0, 4)
+	docsByRelease := map[int64][]rag.Document{100: {{ID: "theory", Title: "理论", Content: "正式理论"}}}
+	for _, typeNumber := range []int{1, 2, 3, 4} {
+		typeValue := typeNumber
+		bindings = append(bindings, &Binding{
+			Layer: LayerEnneagramType, EnneagramType: &typeValue,
+			LibraryID: int64(10 + typeNumber), LibraryKey: "enneagram-type-0" + string(rune('0'+typeNumber)),
+			ReleaseID: int64(100 + typeNumber),
+		})
+		docsByRelease[int64(100+typeNumber)] = []rag.Document{{
+			ID: "type-" + string(rune('0'+typeNumber)), Title: "型号", Content: string(rune('A'+typeNumber)) + strings.Repeat("深", 400),
+			Tags: []string{"type-0" + string(rune('0'+typeNumber))},
+		}}
+	}
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{
+		CardID: 9, CardRevision: 3, MainType: 6,
+		Resolution: Resolution{
+			Theory:                &Binding{Layer: LayerTheory, LibraryID: 10, LibraryKey: "enneagram-core", ReleaseID: 100},
+			RequestedTypeBindings: bindings,
+		},
+	}}
+	public := &publicSearchStub{docs: []rag.Document{
+		{ID: "public-1", Title: "公共一", Content: "公共一"},
+		{ID: "public-2", Title: "公共二", Content: "公共二"},
+		{ID: "public-3", Title: "公共三", Content: "不应入选"},
+	}}
+	releases := &releaseSearchStub{docsByRelease: docsByRelease, errors: map[int64]error{102: errors.New("type 2 failed")}}
+
+	result, err := NewCoordinator(resolver, public, releases).Retrieve(context.Background(), Input{
+		UserID: 7, SessionID: 8, CardID: 9, Query: "1 2 3 4号分别是什么", RequestedTypes: []int{4, 1, 2, 3, 4, 0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(resolver.requested, []int{1, 2, 3, 4}) {
+		t.Fatalf("resolver requested types = %v, want [1 2 3 4]", resolver.requested)
+	}
+	gotReleaseIDs := append([]int64(nil), releases.releaseIDs...)
+	sort.Slice(gotReleaseIDs, func(i, j int) bool { return gotReleaseIDs[i] < gotReleaseIDs[j] })
+	if !reflect.DeepEqual(gotReleaseIDs, []int64{100, 101, 102, 103, 104}) {
+		t.Fatalf("release searches = %v; current-card type 6 must not be queried", gotReleaseIDs)
+	}
+	if got := documentIDs(result.Documents); !reflect.DeepEqual(got, []string{"public-1", "public-2", "theory", "type-1", "type-3", "type-4"}) {
+		t.Fatalf("documents = %v", got)
+	}
+	for _, document := range result.Documents {
+		if strings.HasPrefix(document.ID, "type-") && len([]rune(document.Content)) > 360 {
+			t.Fatalf("%s snippet has %d runes, want <= 360", document.ID, len([]rune(document.Content)))
+		}
+	}
+	for _, typeNumber := range []int{1, 2, 3, 4} {
+		key := typeTraceKey(typeNumber)
+		if _, ok := result.Trace.LayerHits[key]; !ok {
+			t.Fatalf("trace missing %q: %+v", key, result.Trace.LayerHits)
+		}
+	}
+	if !containsDiagnostic(result.Trace.LayerHits[typeTraceKey(2)].Diagnostics, "search_failed") {
+		t.Fatalf("type 2 diagnostics = %+v", result.Trace.LayerHits[typeTraceKey(2)].Diagnostics)
+	}
+	if _, leaked := result.Trace.LayerHits[typeTraceKey(6)]; leaked {
+		t.Fatalf("unrequested current-card type trace leaked: %+v", result.Trace.LayerHits)
+	}
+	if !reflect.DeepEqual(public.topKs, []int{6}) || !reflect.DeepEqual(releases.topKs[100], []int{9}) {
+		t.Fatalf("explicit candidate limits public=%v theory=%v", public.topKs, releases.topKs[100])
+	}
+	for _, releaseID := range []int64{101, 102, 103, 104} {
+		if !reflect.DeepEqual(releases.topKs[releaseID], []int{3}) {
+			t.Fatalf("type release %d topKs = %v, want [3]", releaseID, releases.topKs[releaseID])
+		}
+		if !reflect.DeepEqual(releases.minScores[releaseID], []float64{0}) {
+			t.Fatalf("type release %d minScores = %v, want [0]", releaseID, releases.minScores[releaseID])
+		}
+	}
+	if !reflect.DeepEqual(releases.minScores[100], []float64{0.2}) {
+		t.Fatalf("explicit theory minScores = %v, want [0.2]", releases.minScores[100])
+	}
+	if runeLength(result.Documents) > 5000 {
+		t.Fatalf("combined reference = %d runes, want <= 5000", runeLength(result.Documents))
+	}
+}
+
+func TestCoordinatorEmptyRequestedTypesPreservesLegacyLimitsAndCurrentCard(t *testing.T) {
+	typeSix := 6
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{
+		CardID: 9, CardRevision: 1, MainType: 6,
+		Resolution: Resolution{
+			Theory:        &Binding{Layer: LayerTheory, ReleaseID: 100},
+			EnneagramType: &Binding{Layer: LayerEnneagramType, EnneagramType: &typeSix, LibraryKey: "enneagram-type-06", ReleaseID: 106},
+		},
+	}}
+	public := &publicSearchStub{}
+	releases := &releaseSearchStub{docsByRelease: map[int64][]rag.Document{}}
+
+	_, err := NewCoordinator(resolver, public, releases).Retrieve(context.Background(), Input{
+		UserID: 7, SessionID: 8, CardID: 9, Query: "最近关系压力很大", RequestedTypes: []int{0, 10},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resolver.requested) != 0 {
+		t.Fatalf("resolver requested = %v, want empty normalized list", resolver.requested)
+	}
+	if !reflect.DeepEqual(public.topKs, []int{12}) || !reflect.DeepEqual(releases.topKs[100], []int{9}) || !reflect.DeepEqual(releases.topKs[106], []int{9}) {
+		t.Fatalf("legacy candidate limits public=%v theory=%v type=%v", public.topKs, releases.topKs[100], releases.topKs[106])
+	}
+	if !reflect.DeepEqual(releases.minScores[100], []float64{0.2}) || !reflect.DeepEqual(releases.minScores[106], []float64{0.2}) {
+		t.Fatalf("legacy minScores theory=%v type=%v, want [0.2]/[0.2]", releases.minScores[100], releases.minScores[106])
+	}
+}
+
+type concurrentRequestedTypeSearcher struct {
+	started chan int64
+	release chan struct{}
+}
+
+func (s *concurrentRequestedTypeSearcher) SearchReleaseChunks(ctx context.Context, releaseID int64, _ string, _ int, _ float64) ([]rag.Document, error) {
+	if releaseID == 100 {
+		return []rag.Document{{ID: "theory", Title: "理论", Content: "正式理论"}}, nil
+	}
+	select {
+	case s.started <- releaseID:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	typeNumber := int(releaseID - 100)
+	return []rag.Document{{
+		ID: "type-" + string(rune('0'+typeNumber)), Title: "型号", Content: "型号知识" + string(rune('0'+typeNumber)),
+		Tags: []string{"type-0" + string(rune('0'+typeNumber))},
+	}}, nil
+}
+
+func TestCoordinatorRequestedTypeSearchesRunConcurrentlyAndCollectInNumericOrder(t *testing.T) {
+	typeOne, typeTwo := 1, 2
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{
+		CardID: 9, CardRevision: 1, MainType: 6,
+		Resolution: Resolution{
+			Theory: &Binding{Layer: LayerTheory, ReleaseID: 100},
+			RequestedTypeBindings: []*Binding{
+				{Layer: LayerEnneagramType, EnneagramType: &typeOne, LibraryKey: "enneagram-type-01", ReleaseID: 101},
+				{Layer: LayerEnneagramType, EnneagramType: &typeTwo, LibraryKey: "enneagram-type-02", ReleaseID: 102},
+			},
+		},
+	}}
+	searcher := &concurrentRequestedTypeSearcher{started: make(chan int64, 2), release: make(chan struct{})}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	resultChannel := make(chan Result, 1)
+	errorChannel := make(chan error, 1)
+	go func() {
+		result, err := NewCoordinator(resolver, &publicSearchStub{}, searcher).Retrieve(ctx, Input{
+			UserID: 7, SessionID: 8, CardID: 9, Query: "1号和2号", RequestedTypes: []int{2, 1},
+		})
+		resultChannel <- result
+		errorChannel <- err
+	}()
+
+	started := make([]int64, 0, 2)
+	for len(started) < 2 {
+		select {
+		case releaseID := <-searcher.started:
+			started = append(started, releaseID)
+		case <-ctx.Done():
+			close(searcher.release)
+			t.Fatalf("only %d requested type search(es) started before timeout; searches are not concurrent", len(started))
+		}
+	}
+	close(searcher.release)
+	if err := <-errorChannel; err != nil {
+		t.Fatal(err)
+	}
+	result := <-resultChannel
+	if got := documentIDs(result.Documents); !reflect.DeepEqual(got, []string{"theory", "type-1", "type-2"}) {
+		t.Fatalf("stable documents = %v", got)
+	}
+}
+
+type lexicalRequestedTypeSearcher struct {
+	mu    sync.Mutex
+	calls map[int]requestedTypeSearchCall
+}
+
+type requestedTypeSearchCall struct {
+	query    string
+	minScore float64
+}
+
+func (s *lexicalRequestedTypeSearcher) SearchReleaseChunks(_ context.Context, releaseID int64, query string, _ int, minScore float64) ([]rag.Document, error) {
+	if releaseID == 100 {
+		return []rag.Document{{ID: "theory", Title: "理论", Content: "正式理论"}}, nil
+	}
+	typeNumber := int(releaseID - 100)
+	s.mu.Lock()
+	if s.calls == nil {
+		s.calls = make(map[int]requestedTypeSearchCall)
+	}
+	s.calls[typeNumber] = requestedTypeSearchCall{query: query, minScore: minScore}
+	s.mu.Unlock()
+	// Mirrors theorystore's score gate for a valid release chunk whose weak
+	// metadata has zero lexical overlap with this particular user wording.
+	if minScore > 0 {
+		return nil, nil
+	}
+	return []rag.Document{{
+		ID: fmt.Sprintf("type-%d", typeNumber), Title: "观察记录", Content: "行为线索" + string(rune('A'+typeNumber)),
+		Tags: []string{fmt.Sprintf("type-%02d", typeNumber)},
+	}}, nil
+}
+
+func TestCoordinatorRequestedTypeQueriesPreserveQuestionUseOnlyCurrentAnchorAndAllowWeakFallback(t *testing.T) {
+	bindings := make([]*Binding, 0, 4)
+	requestedTypes := []int{1, 2, 3, 4}
+	for _, typeNumber := range requestedTypes {
+		typeValue := typeNumber
+		bindings = append(bindings, &Binding{
+			Layer: LayerEnneagramType, EnneagramType: &typeValue,
+			LibraryKey: fmt.Sprintf("enneagram-type-%02d", typeNumber), ReleaseID: int64(100 + typeNumber),
+		})
+	}
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{
+		CardID: 9, CardRevision: 1, MainType: 6,
+		Resolution: Resolution{
+			Theory: &Binding{Layer: LayerTheory, ReleaseID: 100}, RequestedTypeBindings: bindings,
+		},
+	}}
+	searcher := &lexicalRequestedTypeSearcher{}
+	question := "1 2 3 4 这些型号在关系压力下有什么不同表现"
+
+	result, err := NewCoordinator(resolver, &publicSearchStub{}, searcher).Retrieve(context.Background(), Input{
+		UserID: 7, SessionID: 8, CardID: 9,
+		Query:          question,
+		RequestedTypes: requestedTypes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := documentIDs(result.Documents); len(got) != 5 {
+		t.Fatalf("documents = %v, want theory plus all four weak-metadata type fallbacks", got)
+	}
+	names := []string{"", "完美型", "助人型", "成就型", "自我型", "思考型", "忠诚型", "活跃型", "领袖型", "和平型"}
+	for _, typeNumber := range requestedTypes {
+		call, ok := searcher.calls[typeNumber]
+		if !ok {
+			t.Fatalf("type %d query was not captured", typeNumber)
+		}
+		if call.minScore != 0 {
+			t.Fatalf("type %d minScore = %v, want deterministic fallback threshold 0", typeNumber, call.minScore)
+		}
+		if !strings.Contains(call.query, question) || !strings.Contains(call.query, "九型人格") {
+			t.Fatalf("type %d query = %q, want original question and stable enneagram anchor", typeNumber, call.query)
+		}
+		wantAnchor := fmt.Sprintf("%d号%s", typeNumber, names[typeNumber])
+		if !strings.Contains(call.query, wantAnchor) {
+			t.Fatalf("type %d query = %q, missing %q", typeNumber, call.query, wantAnchor)
+		}
+		for _, otherType := range requestedTypes {
+			if otherType != typeNumber && strings.Contains(call.query, fmt.Sprintf("%d号%s", otherType, names[otherType])) {
+				t.Fatalf("type %d query contains unrelated type %d anchor: %q", typeNumber, otherType, call.query)
+			}
+		}
+	}
+}
+
+func TestSelectRequestedTypeDocumentsEnforcesExactCombinedRuneBoundaryAndPriority(t *testing.T) {
+	document := func(id string, marker rune, runes int) rag.Document {
+		return rag.Document{ID: id, Title: id, Content: string(marker) + strings.Repeat("文", runes-1)}
+	}
+	byLayer := map[string][]rag.Document{
+		LayerTheory: {
+			document("theory-1", 'A', 1000), document("theory-2", 'B', 1000), document("theory-3", 'C', 1000),
+		},
+		typeTraceKey(1): {document("type-1", 'D', 360)},
+		typeTraceKey(2): {document("type-2", 'E', 360)},
+		LayerPublic: {
+			document("public-exact", 'F', 1280), document("public-over-budget", 'G', 1),
+		},
+	}
+
+	selected := selectDocuments(byLayer, []string{typeTraceKey(1), typeTraceKey(2)}, requestedTypeLimits, true)
+	selectedDocuments := append([]rag.Document{}, selected[LayerTheory]...)
+	selectedDocuments = append(selectedDocuments, selected[typeTraceKey(1)]...)
+	selectedDocuments = append(selectedDocuments, selected[typeTraceKey(2)]...)
+	selectedDocuments = append(selectedDocuments, selected[LayerPublic]...)
+	if got := runeLength(selectedDocuments); got != 5000 {
+		t.Fatalf("selected runes = %d, want exact 5000 boundary", got)
+	}
+	if got := documentIDs(selected[LayerPublic]); !reflect.DeepEqual(got, []string{"public-exact"}) {
+		t.Fatalf("public selection = %v; lower-priority over-budget chunk must be excluded", got)
+	}
+	if got := documentIDs(selected[LayerTheory]); !reflect.DeepEqual(got, []string{"theory-1", "theory-2", "theory-3"}) {
+		t.Fatalf("higher-priority theory selection = %v", got)
+	}
+	if len(selected[typeTraceKey(1)]) != 1 || len(selected[typeTraceKey(2)]) != 1 {
+		t.Fatalf("requested type selections = %+v", selected)
 	}
 }
 

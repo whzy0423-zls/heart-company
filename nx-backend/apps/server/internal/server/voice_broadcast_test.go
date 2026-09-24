@@ -15,6 +15,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/auth"
 	"nine-xing/nx-backend/apps/server/internal/bailianconfig"
 	"nine-xing/nx-backend/apps/server/internal/config"
+	"nine-xing/nx-backend/apps/server/internal/rag"
 	"nine-xing/nx-backend/apps/server/internal/voicebroadcastconfig"
 	"nine-xing/nx-backend/apps/server/internal/xinzhili"
 )
@@ -483,6 +484,59 @@ func TestAppChatReportsProviderDeadlineAsVoiceTimeout(t *testing.T) {
 	body := w.BodyString()
 	if !strings.Contains(body, "event: voice_error\n") || !strings.Contains(body, `"code":"synthesis_timeout"`) {
 		t.Fatalf("provider deadline must emit voice timeout: %q", body)
+	}
+}
+
+func TestAppChatFirstPartialDeltaIsSpokenOnceAndRepeatedPrefixesArePreserved(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	generator := &controlledAppChatStreamingGenerator{
+		generateStream: func(_ context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+			for _, delta := range []string{"今天", "先休息。今天再行动。"} {
+				if err := emit(delta); err != nil {
+					return "", err
+				}
+			}
+			return "今天先休息。今天再行动。", nil
+		},
+	}
+	s := newAppChatStreamServer(store, generator)
+	s.voiceBroadcastPreferences = newMemoryVoiceBroadcastPreferenceStore()
+	if err := s.voiceBroadcastPreferences.Set(context.Background(), 7, true); err != nil {
+		t.Fatal(err)
+	}
+	s.voiceBroadcastConfigLoader = func(context.Context) (voiceBroadcastConfig, error) {
+		return voiceBroadcastConfig{Enabled: true, Provider: voiceBroadcastProviderBailian, APIKey: "test", Model: voiceBroadcastDefaultModel, Voice: voiceBroadcastDefaultVoice}, nil
+	}
+	s.voiceBroadcastSynthesizerFactory = func(context.Context) (voiceBroadcastSynthesizer, error) {
+		return recordingVoiceBroadcastProvider{}, nil
+	}
+	w := newAppChatBlockingStreamWriter()
+	s.appChatRouter(w, newAppChatStreamRequest(context.Background()))
+	var text, speech strings.Builder
+	for _, frame := range strings.Split(w.BodyString(), "\n\n") {
+		lines := strings.Split(frame, "\n")
+		if len(lines) < 2 || !strings.HasPrefix(lines[1], "data: ") {
+			continue
+		}
+		var payload struct {
+			Content string `json:"content"`
+			Audio   []byte `json:"audioBase64"`
+		}
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(lines[1], "data: ")), &payload); err != nil {
+			t.Fatal(err)
+		}
+		switch lines[0] {
+		case "event: delta":
+			text.WriteString(payload.Content)
+		case "event: voice":
+			speech.Write(payload.Audio)
+		}
+	}
+	if got := text.String(); got != "今天先休息。\n今天再行动。" {
+		t.Fatalf("stream text = %q", got)
+	}
+	if got := speech.String(); got != "今天先休息。今天再行动。" {
+		t.Fatalf("spoken text = %q", got)
 	}
 }
 
