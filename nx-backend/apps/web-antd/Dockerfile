@@ -29,6 +29,7 @@ RUN echo "types { application/javascript js mjs; }" > /etc/nginx/conf.d/mjs.conf
     && rm -rf /etc/nginx/conf.d/default.conf
 
 COPY --from=builder /app/apps/web-antd/dist /usr/share/nginx/html
+RUN chmod -R a+rX /usr/share/nginx/html
 COPY nx-backend/scripts/deploy/nginx.conf /etc/nginx/nginx.conf
 
 EXPOSE 8080

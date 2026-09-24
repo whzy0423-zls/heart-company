@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { onLoad, onUnload } from '@dcloudio/uni-app'
 import { TYPES_INFO, CENTERS } from '../../data/enneagramGame'
 import { isValidTypeId, normalizeTypeId } from '../../utils/session'
+import { previewImage } from '../../utils/imagePreview'
 
 const myType = ref(0)
 const taType = ref(0)
@@ -58,6 +59,31 @@ function onMyAvatarError() {
 
 function onTaAvatarError() {
   taAvatarFailed.value = true
+}
+
+function typeAvatarSource(typeId) {
+  const id = normalizeTypeId(typeId)
+  return id ? `/static/avatars/${id}.png` : ''
+}
+
+function previewMyAvatar() {
+  const current = !myAvatarFailed.value ? typeAvatarSource(myInfo.value?.id) : ''
+  if (!current) return
+  const urls = [
+    current,
+    !taAvatarFailed.value ? typeAvatarSource(taInfo.value?.id) : '',
+  ].filter(Boolean)
+  previewImage(current, { urls })
+}
+
+function previewTaAvatar() {
+  const current = !taAvatarFailed.value ? typeAvatarSource(taInfo.value?.id) : ''
+  if (!current) return
+  const urls = [
+    !myAvatarFailed.value ? typeAvatarSource(myInfo.value?.id) : '',
+    current,
+  ].filter(Boolean)
+  previewImage(current, { urls })
 }
 
 function rejectInvalidType() {
@@ -211,7 +237,15 @@ function reset() {
     <template v-else-if="stage === 'result'">
       <view class="pair nx-page-hero">
         <view class="pair__side">
-          <image v-if="!myAvatarFailed" class="pair__avatar" :src="`/static/avatars/${myInfo.id}.png`" mode="aspectFill" lazy-load @error="onMyAvatarError" />
+          <button
+            v-if="!myAvatarFailed"
+            class="pair__avatar-action"
+            aria-label="预览我的能量头像"
+            hover-class="pair__avatar-action--pressed"
+            @click="previewMyAvatar()"
+          >
+            <image class="pair__avatar" :src="`/static/avatars/${myInfo.id}.png`" mode="aspectFill" lazy-load @error="onMyAvatarError" />
+          </button>
           <view v-else class="pair__avatar-fallback">{{ myInfo.id }}</view>
           <text class="pair__role">我的能量</text>
           <text class="pair__name">{{ myInfo.id }}号 · {{ myInfo.name }}</text>
@@ -223,7 +257,15 @@ function reset() {
           <view class="pair-connection__line" />
         </view>
         <view class="pair__side">
-          <image v-if="!taAvatarFailed" class="pair__avatar" :src="`/static/avatars/${taInfo.id}.png`" mode="aspectFill" lazy-load @error="onTaAvatarError" />
+          <button
+            v-if="!taAvatarFailed"
+            class="pair__avatar-action"
+            aria-label="预览 TA 的能量头像"
+            hover-class="pair__avatar-action--pressed"
+            @click="previewTaAvatar()"
+          >
+            <image class="pair__avatar" :src="`/static/avatars/${taInfo.id}.png`" mode="aspectFill" lazy-load @error="onTaAvatarError" />
+          </button>
           <view v-else class="pair__avatar-fallback">{{ taInfo.id }}</view>
           <text class="pair__role">TA 的能量</text>
           <text class="pair__name">{{ taInfo.id }}号 · {{ taInfo.name }}</text>
@@ -412,6 +454,21 @@ function reset() {
   background: rgba(255, 255, 255, .08);
 }
 .pair__side { position: relative; z-index: 1; flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; }
+.pair__avatar-action {
+  display: block;
+  flex: 0 0 112rpx;
+  width: 112rpx;
+  height: 112rpx;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  line-height: 1;
+}
+.pair__avatar-action::after { border: 0; }
+.pair__avatar-action--pressed { opacity: .82; }
 .pair__avatar {
   width: 112rpx;
   height: 112rpx;

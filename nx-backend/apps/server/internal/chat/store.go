@@ -81,7 +81,7 @@ func scanSession(row interface{ Scan(...interface{}) error }) (Session, error) {
 	return s, err
 }
 
-func scanMessage(row interface{ Scan(...interface{}) error }) (Message, error) {
+func scanMessage(ctx context.Context, row interface{ Scan(...interface{}) error }) (Message, error) {
 	var message Message
 	var audioAssetID sql.NullInt64
 	var createTime time.Time
@@ -105,7 +105,7 @@ func scanMessage(row interface{ Scan(...interface{}) error }) (Message, error) {
 	message.AudioAssetID = audioAssetID.Int64
 	message.CreateTime = formatTime(createTime)
 	if message.MessageType == "voice" && message.AudioAssetID > 0 {
-		message.AudioURL = fmt.Sprintf("/api/app/chat/messages/%d/audio", message.ID)
+		message.AudioURL = VoiceAudioURL(ctx, message.ID)
 	}
 	return message, nil
 }
@@ -114,7 +114,7 @@ func scanMessage(row interface{ Scan(...interface{}) error }) (Message, error) {
 func (s *Store) ListSessions(ctx context.Context, appUserID int64) ([]Session, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, app_user_id, card_id, title, updated_at, create_time
-		 FROM app_chat_sessions WHERE app_user_id = $1 AND scene = 'chat'
+		 FROM app_chat_sessions WHERE app_user_id = $1 AND scene = `+publicChatSceneSQL(ctx)+`
 		 ORDER BY updated_at DESC`, appUserID)
 	if err != nil {
 		return nil, err
@@ -133,7 +133,7 @@ func (s *Store) ListSessions(ctx context.Context, appUserID int64) ([]Session, e
 
 // GetOrCreateSession 找到 card 的最近会话，若无则新建。
 func (s *Store) GetOrCreateSession(ctx context.Context, appUserID, cardID int64) (Session, error) {
-	return s.GetOrCreateSceneSession(ctx, appUserID, cardID, "chat")
+	return s.GetOrCreateSceneSession(ctx, appUserID, cardID, publicChatScene(ctx))
 }
 
 // GetOrCreateSceneSession finds the most recent session for an explicitly
@@ -143,7 +143,7 @@ func (s *Store) GetOrCreateSceneSession(ctx context.Context, appUserID, cardID i
 	if scene == "" {
 		scene = "chat"
 	}
-	if scene == "xinzhili_voice" {
+	if scene == "xinzhili_voice" || EnneagramType(ctx) > 0 {
 		return s.getOrCreateSerializedSceneSession(ctx, appUserID, cardID, scene)
 	}
 	return getOrCreateSceneSession(ctx, s.db, appUserID, cardID, scene)
@@ -368,7 +368,7 @@ func (s *Store) completeSceneAssistant(ctx context.Context, messageID int64, con
 func (s *Store) GetSession(ctx context.Context, appUserID, sessionID int64) (Session, error) {
 	sess, err := scanSession(s.db.QueryRowContext(ctx,
 		`SELECT id, app_user_id, card_id, title, updated_at, create_time
-		 FROM app_chat_sessions WHERE id = $1 AND app_user_id = $2 AND scene = 'chat'`,
+		 FROM app_chat_sessions WHERE id = $1 AND app_user_id = $2 AND scene = `+publicChatSceneSQL(ctx),
 		sessionID, appUserID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return sess, ErrNotFound
@@ -384,7 +384,7 @@ func (s *Store) GetMessageSession(ctx context.Context, appUserID, messageID int6
 		`SELECT s.id, s.app_user_id, s.card_id, s.title, s.updated_at, s.create_time
 		 FROM app_chat_messages m
 		 JOIN app_chat_sessions s ON s.id = m.session_id
-		 WHERE m.id = $1 AND s.app_user_id = $2 AND s.scene = 'chat'`,
+		 WHERE m.id = $1 AND s.app_user_id = $2 AND s.scene = `+publicChatSceneSQL(ctx),
 		messageID, appUserID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return sess, ErrNotFound
@@ -399,7 +399,7 @@ func (s *Store) ListMessages(ctx context.Context, sessionID int64) ([]Message, e
 		        m.message_type, m.audio_asset_id, m.audio_duration_ms, m.transcript, m.create_time
 		 FROM app_chat_messages m
 		 JOIN app_chat_sessions s ON s.id = m.session_id
-		 WHERE m.session_id = $1 AND s.scene = 'chat' ORDER BY m.create_time, m.id`,
+		 WHERE m.session_id = $1 AND s.scene = `+publicChatSceneSQL(ctx)+` ORDER BY m.create_time, m.id`,
 		sessionID)
 	if err != nil {
 		return nil, err
@@ -407,7 +407,7 @@ func (s *Store) ListMessages(ctx context.Context, sessionID int64) ([]Message, e
 	defer rows.Close()
 	var out []Message
 	for rows.Next() {
-		m, err := scanMessage(rows)
+		m, err := scanMessage(ctx, rows)
 		if err != nil {
 			return nil, err
 		}
@@ -436,7 +436,7 @@ func (s *Store) ListRecentMessages(ctx context.Context, sessionID int64, limit i
 	defer rows.Close()
 	out := make([]Message, 0, limit)
 	for rows.Next() {
-		m, e := scanMessage(rows)
+		m, e := scanMessage(ctx, rows)
 		if e != nil {
 			return nil, e
 		}
@@ -468,7 +468,7 @@ func (s *Store) ListMessagesAfter(ctx context.Context, sessionID, afterMessageID
 	defer rows.Close()
 	out := []Message{}
 	for rows.Next() {
-		m, e := scanMessage(rows)
+		m, e := scanMessage(ctx, rows)
 		if e != nil {
 			return nil, e
 		}
@@ -669,7 +669,7 @@ func (s *Store) GetVoiceAudioAssetID(ctx context.Context, appUserID, messageID i
 		 FROM app_chat_messages m
 		 JOIN app_chat_sessions s ON s.id = m.session_id
 		 WHERE m.id = $1 AND s.app_user_id = $2
-		   AND s.scene = 'chat'
+		   AND s.scene = `+publicChatSceneSQL(ctx)+`
 		   AND m.role = 'user' AND m.message_type = 'voice'
 		   AND m.audio_asset_id IS NOT NULL`,
 		messageID, appUserID,
@@ -689,7 +689,7 @@ func (s *Store) GetVoiceTranscript(ctx context.Context, appUserID, messageID int
 		 FROM app_chat_messages m
 		 JOIN app_chat_sessions s ON s.id = m.session_id
 		 WHERE m.id = $1 AND s.app_user_id = $2
-		   AND s.scene = 'chat'
+		   AND s.scene = `+publicChatSceneSQL(ctx)+`
 		   AND m.role = 'user' AND m.message_type = 'voice'`,
 		messageID, appUserID,
 	).Scan(&transcript)
@@ -705,7 +705,7 @@ func (s *Store) SetFeedback(ctx context.Context, appUserID, messageID int64, fee
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE app_chat_messages m SET feedback = $3
 		 FROM app_chat_sessions s
-		 WHERE m.id = $1 AND m.session_id = s.id AND s.app_user_id = $2 AND s.scene = 'chat' AND m.role = 'assistant'`,
+		 WHERE m.id = $1 AND m.session_id = s.id AND s.app_user_id = $2 AND s.scene = `+publicChatSceneSQL(ctx)+` AND m.role = 'assistant'`,
 		messageID, appUserID, feedback)
 	if err != nil {
 		return err
@@ -723,7 +723,7 @@ func (s *Store) ToggleFavorite(ctx context.Context, appUserID, messageID int64) 
 	err := s.db.QueryRowContext(ctx,
 		`UPDATE app_chat_messages m SET favorite = NOT m.favorite
 		 FROM app_chat_sessions s
-		 WHERE m.id = $1 AND m.session_id = s.id AND s.app_user_id = $2 AND s.scene = 'chat' AND m.role = 'assistant'
+		 WHERE m.id = $1 AND m.session_id = s.id AND s.app_user_id = $2 AND s.scene = `+publicChatSceneSQL(ctx)+` AND m.role = 'assistant'
 		 RETURNING m.favorite`,
 		messageID, appUserID).Scan(&favorite)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -748,7 +748,7 @@ func (s *Store) ListFavorites(ctx context.Context, appUserID, cardID int64) ([]F
 		`SELECT m.id, m.session_id, s.card_id, m.content, m.sources, m.create_time
 		 FROM app_chat_messages m
 		 JOIN app_chat_sessions s ON s.id = m.session_id
-		 WHERE s.app_user_id = $1 AND s.scene = 'chat' AND m.favorite = true
+		 WHERE s.app_user_id = $1 AND s.scene = `+publicChatSceneSQL(ctx)+` AND m.favorite = true
 		   AND ($2 = 0 OR s.card_id = $2)
 		 ORDER BY m.create_time DESC, m.id DESC`,
 		appUserID, cardID)
@@ -788,7 +788,7 @@ func (s *Store) SearchMessages(ctx context.Context, appUserID, cardID int64, key
 		 FROM app_chat_messages m
 		 JOIN app_chat_sessions s ON s.id = m.session_id
 		 WHERE s.app_user_id = $1
-		   AND s.scene = 'chat'
+		   AND s.scene = `+publicChatSceneSQL(ctx)+`
 		   AND ($2 = 0 OR s.card_id = $2)
 		   AND m.content ILIKE '%' || $3 || '%'
 		 ORDER BY m.create_time DESC, m.id DESC

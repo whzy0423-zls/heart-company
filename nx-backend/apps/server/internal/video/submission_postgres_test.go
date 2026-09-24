@@ -2,7 +2,6 @@ package video
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -11,22 +10,20 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
-
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"nine-xing/nx-backend/apps/server/internal/testdb"
 )
 
 func TestSubmissionPostgresConcurrencyAndReconciliation(t *testing.T) {
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("set TEST_DATABASE_URL to run PostgreSQL submission integration test")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	database, err := sql.Open("pgx", dsn)
+	database, _ := testdb.OpenEnvIsolatedSchema(t, "video_submission")
+	schema, err := os.ReadFile("../db/schema.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = database.Close() })
+	if _, err := database.ExecContext(ctx, string(schema)); err != nil {
+		t.Fatal(err)
+	}
 
 	var projectID string
 	if err := database.QueryRowContext(ctx,

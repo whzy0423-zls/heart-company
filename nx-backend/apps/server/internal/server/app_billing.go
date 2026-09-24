@@ -69,6 +69,7 @@ type appProductResp struct {
 
 type appUpgradeQuoteReq struct {
 	TargetProductID string `json:"targetProductId"`
+	AgentCode       string `json:"agentCode"`
 }
 
 type appUpgradeQuoteResp struct {
@@ -81,6 +82,8 @@ type appUpgradeQuoteResp struct {
 	CurrentPriceCents int    `json:"currentPriceCents"`
 	TargetPriceCents  int    `json:"targetPriceCents"`
 	CreditCents       int    `json:"creditCents"`
+	BasePayableCents  int    `json:"basePayableCents"`
+	DiscountCents     int    `json:"discountCents"`
 	PayableCents      int    `json:"payableCents"`
 	SameCycle         bool   `json:"sameCycle"`
 	QuoteExpiresAt    string `json:"quoteExpiresAt"`
@@ -125,23 +128,36 @@ func (s *Server) appBillingUpgradeQuote(w http.ResponseWriter, r *http.Request) 
 		httpx.Fail(w, http.StatusConflict, "当前套餐缺少有效价格配置")
 		return
 	}
+	currentBasePrice, currentPaidPrice, err := s.appUpgradePaidPrice(r.Context(), userInfo.ID, current)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "读取当前会员订单失败")
+		return
+	}
 	remaining := int(time.Until(expiresAt.Time).Hours() / 24)
 	quote, err := calculateMembershipUpgradeQuote(membershipUpgradeQuoteInput{
 		CurrentPlan: current.Code, TargetPlan: target.Code,
-		CurrentPriceCents: current.PriceCents, TargetPriceCents: target.PriceCents,
+		CurrentPriceCents: currentBasePrice, TargetPriceCents: target.PriceCents,
 		CurrentDurationDays: current.DurationDays, RemainingDays: remaining,
 	})
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "无法计算升级报价")
 		return
 	}
+	quote = adjustMembershipUpgradeQuoteForPaidDiscount(quote, currentBasePrice, currentPaidPrice, current.DurationDays)
+	discountQuote, err := s.quoteAppAgentDiscount(r.Context(), userInfo.ID, targetID, body.AgentCode, target.PriceCents)
+	if err != nil {
+		failAppAgentDiscountQuote(w, err)
+		return
+	}
+	discountCents, payableCents := appOrderDiscountForCharge(quote.PayableCents, discountQuote)
 	now := time.Now()
 	httpx.OK(w, appUpgradeQuoteResp{
 		CurrentPlan: quote.CurrentPlan, TargetPlan: quote.TargetPlan,
 		CurrentLevel: currentLevel, TargetLevel: targetLevel,
 		CurrentExpiresAt: expiresAt.Time.Format(time.RFC3339), RemainingDays: quote.RemainingDays,
-		CurrentPriceCents: current.PriceCents, TargetPriceCents: target.PriceCents,
-		CreditCents: quote.CreditCents, PayableCents: quote.PayableCents,
+		CurrentPriceCents: currentBasePrice, TargetPriceCents: target.PriceCents,
+		CreditCents: quote.CreditCents, BasePayableCents: quote.PayableCents,
+		DiscountCents: discountCents, PayableCents: payableCents,
 		SameCycle: quote.SameCycle, QuoteExpiresAt: now.Add(10 * time.Minute).Format(time.RFC3339),
 	})
 }
@@ -446,9 +462,11 @@ func appXZNProductWithStatus(product appProductResp, status, reason string) appP
 }
 
 type appOrderCreateReq struct {
-	ProductID       string `json:"productId"`
-	PayChannel      string `json:"payChannel"`
-	UpgradeFromPlan string `json:"upgradeFromPlan"`
+	ProductID           string `json:"productId"`
+	PayChannel          string `json:"payChannel"`
+	UpgradeFromPlan     string `json:"upgradeFromPlan"`
+	AgentCode           string `json:"agentCode"`
+	ExpectedAmountCents *int   `json:"expectedAmountCents"`
 }
 
 type appOrderResp struct {
@@ -456,6 +474,9 @@ type appOrderResp struct {
 	ProductID            string         `json:"productId"`
 	Title                string         `json:"title"`
 	Amount               int            `json:"amount"`
+	BasePriceCents       int            `json:"basePriceCents"`
+	DiscountCents        int            `json:"discountCents"`
+	DiscountAgentCode    string         `json:"discountAgentCode,omitempty"`
 	Status               string         `json:"status"`
 	PayStatus            string         `json:"payStatus"`
 	PayEnabled           bool           `json:"payEnabled"`
@@ -480,6 +501,91 @@ type appOrderResp struct {
 	UpgradeFromPlan      string         `json:"upgradeFromPlan,omitempty"`
 	UpgradeCreditCents   int            `json:"upgradeCreditCents,omitempty"`
 	UpgradeQuoteSnapshot map[string]any `json:"upgradeQuoteSnapshot,omitempty"`
+}
+
+type appOrderPricing struct {
+	BasePriceCents       int
+	DiscountCents        int
+	PayableCents         int
+	DiscountAgentCode    string
+	DiscountSnapshot     []byte
+	UpgradeFromPlan      string
+	UpgradeCreditCents   int
+	UpgradeQuoteSnapshot []byte
+}
+
+type appOrderDiscountSnapshot struct {
+	appAgentDiscountQuote
+	UpgradeCreditCents int `json:"upgradeCreditCents"`
+}
+
+func applyAppAgentDiscountToCharge(chargeCents, discountCents int) (appliedDiscountCents, payableCents int) {
+	if chargeCents <= 0 {
+		return 0, chargeCents
+	}
+	if discountCents < 0 {
+		discountCents = 0
+	}
+	if discountCents >= chargeCents {
+		discountCents = chargeCents - 1
+	}
+	return discountCents, chargeCents - discountCents
+}
+
+func appOrderDiscountForCharge(chargeCents int, discount appAgentDiscountQuote) (discountCents, payableCents int) {
+	if discount.RuleMode == "" {
+		return 0, chargeCents
+	}
+	calculatedDiscount, _ := calculateAppAgentDiscount(chargeCents, discount.RuleMode, discount.RuleValue)
+	return applyAppAgentDiscountToCharge(chargeCents, calculatedDiscount)
+}
+
+func adjustMembershipUpgradeQuoteForPaidDiscount(quote membershipUpgradeQuote, currentBasePrice, currentPaidPrice, currentDurationDays int) membershipUpgradeQuote {
+	if currentBasePrice <= 0 || currentPaidPrice <= 0 || currentPaidPrice >= currentBasePrice || currentDurationDays <= 0 {
+		return quote
+	}
+	creditReduction := roundDivide((currentBasePrice-currentPaidPrice)*quote.RemainingDays, currentDurationDays)
+	if creditReduction > quote.CreditCents {
+		creditReduction = quote.CreditCents
+	}
+	quote.CreditCents -= creditReduction
+	quote.PayableCents += creditReduction
+	return quote
+}
+
+func (s *Server) appUpgradePaidPrice(ctx context.Context, userID int64, current appPlanConfig) (basePriceCents, paidPriceCents int, err error) {
+	var base, paid int
+	err = s.db.QueryRowContext(ctx, `
+		SELECT base_price_cents,amount FROM app_orders
+		WHERE app_user_id=$1 AND product_id=$2 AND status='paid'
+		ORDER BY COALESCE(activation_at,paid_at,create_time) DESC,id DESC LIMIT 1`, userID, current.Code).Scan(&base, &paid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return current.PriceCents, current.PriceCents, nil
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	if base <= 0 || paid <= 0 || paid > base {
+		return current.PriceCents, current.PriceCents, nil
+	}
+	return base, paid, nil
+}
+
+func appOrderMatchesPricing(existing appOrderResp, productID string, amount int, upgradeFrom, agentCode string) bool {
+	return existing.ProductID == productID && existing.Amount == amount &&
+		strings.TrimSpace(existing.UpgradeFromPlan) == strings.TrimSpace(upgradeFrom) &&
+		strings.EqualFold(strings.TrimSpace(existing.DiscountAgentCode), strings.TrimSpace(agentCode))
+}
+
+func failAppAgentDiscountQuote(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errAppAgentDiscountInvalidCode), errors.Is(err, errAppAgentDiscountSelfInvite):
+		httpx.Fail(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, errAppAgentDiscountAttributionConflict):
+		httpx.Fail(w, http.StatusConflict, err.Error())
+	default:
+		httpx.Fail(w, http.StatusInternalServerError, "读取代理优惠失败")
+	}
 }
 
 func appProductTitle(productID string) string {
@@ -633,12 +739,23 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	productID := strings.TrimSpace(body.ProductID)
 	plan := s.appPlan(r.Context(), productID)
-	title, amount, durationDays := plan.Name, plan.PriceCents, plan.DurationDays
-	var upgradeFrom string
-	var upgradeCredit int
-	var upgradeSnapshot []byte
+	title, durationDays := plan.Name, plan.DurationDays
+	if productID == "free" || plan.Code != productID || !plan.Enabled || title == "" || plan.PriceCents <= 0 || durationDays <= 0 {
+		httpx.Fail(w, http.StatusBadRequest, "invalid product")
+		return
+	}
+	discountQuote, err := s.quoteAppAgentDiscount(r.Context(), userInfo.ID, productID, body.AgentCode, plan.PriceCents)
+	if err != nil {
+		failAppAgentDiscountQuote(w, err)
+		return
+	}
+	pricing := appOrderPricing{
+		BasePriceCents:    plan.PriceCents,
+		PayableCents:      plan.PriceCents,
+		DiscountAgentCode: discountQuote.AgentCode,
+	}
 	if strings.TrimSpace(body.UpgradeFromPlan) != "" {
-		upgradeFrom = strings.TrimSpace(body.UpgradeFromPlan)
+		pricing.UpgradeFromPlan = strings.TrimSpace(body.UpgradeFromPlan)
 		var memberLevel string
 		var expiresAt sql.NullTime
 		if err := s.db.QueryRowContext(r.Context(), `SELECT member_level,member_expires_at FROM app_users WHERE id=$1 AND status='active'`, userInfo.ID).Scan(&memberLevel, &expiresAt); err != nil || !expiresAt.Valid || !expiresAt.Time.After(time.Now()) {
@@ -650,33 +767,56 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusConflict, "当前套餐不支持升级")
 			return
 		}
+		currentBasePrice, currentPaidPrice, priceErr := s.appUpgradePaidPrice(r.Context(), userInfo.ID, current)
+		if priceErr != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "读取当前会员订单失败")
+			return
+		}
 		remaining := int(time.Until(expiresAt.Time).Hours() / 24)
 		quote, err := calculateMembershipUpgradeQuote(membershipUpgradeQuoteInput{
 			CurrentPlan: current.Code, TargetPlan: plan.Code,
-			CurrentPriceCents: current.PriceCents, TargetPriceCents: plan.PriceCents,
+			CurrentPriceCents: currentBasePrice, TargetPriceCents: plan.PriceCents,
 			CurrentDurationDays: current.DurationDays, RemainingDays: remaining,
 		})
 		if err != nil {
 			httpx.Fail(w, http.StatusConflict, "升级报价已失效，请重新获取")
 			return
 		}
-		amount = quote.PayableCents
-		upgradeCredit = quote.CreditCents
-		upgradeSnapshot, _ = json.Marshal(map[string]any{
+		quote = adjustMembershipUpgradeQuoteForPaidDiscount(quote, currentBasePrice, currentPaidPrice, current.DurationDays)
+		pricing.PayableCents = quote.PayableCents
+		pricing.UpgradeCreditCents = quote.CreditCents
+		pricing.UpgradeQuoteSnapshot, _ = json.Marshal(map[string]any{
 			"currentPlan": quote.CurrentPlan, "targetPlan": quote.TargetPlan,
 			"remainingDays": quote.RemainingDays, "creditCents": quote.CreditCents,
-			"payableCents": quote.PayableCents, "sameCycle": quote.SameCycle,
+			"basePayableCents": quote.PayableCents, "sameCycle": quote.SameCycle,
 			"currentExpiresAt": expiresAt.Time.Format(time.RFC3339),
 		})
 	}
-	if productID == "free" || plan.Code != productID || !plan.Enabled || title == "" || amount <= 0 || durationDays <= 0 {
-		httpx.Fail(w, http.StatusBadRequest, "invalid product")
+	pricing.DiscountCents, pricing.PayableCents = appOrderDiscountForCharge(pricing.PayableCents, discountQuote)
+	discountQuote.DiscountCents, discountQuote.PayableCents = pricing.DiscountCents, pricing.PayableCents
+	pricing.DiscountSnapshot, _ = json.Marshal(appOrderDiscountSnapshot{
+		appAgentDiscountQuote: discountQuote,
+		UpgradeCreditCents:    pricing.UpgradeCreditCents,
+	})
+	if len(pricing.UpgradeQuoteSnapshot) > 0 {
+		var snapshot map[string]any
+		_ = json.Unmarshal(pricing.UpgradeQuoteSnapshot, &snapshot)
+		snapshot["discountCents"] = pricing.DiscountCents
+		snapshot["payableCents"] = pricing.PayableCents
+		pricing.UpgradeQuoteSnapshot, _ = json.Marshal(snapshot)
+	}
+	if body.ExpectedAmountCents != nil && *body.ExpectedAmountCents != pricing.PayableCents {
+		httpx.Fail(w, http.StatusConflict, "优惠价格已变化，请刷新后重试")
 		return
 	}
 	if existing, found, err := s.findPendingAppOrder(r.Context(), userInfo.ID); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	} else if found {
+		if !appOrderMatchesPricing(existing, productID, pricing.PayableCents, pricing.UpgradeFromPlan, pricing.DiscountAgentCode) {
+			httpx.Fail(w, http.StatusConflict, "已有待支付订单，请先取消后重新下单")
+			return
+		}
 		enriched, enrichErr := s.enrichCustomerServiceOrder(r.Context(), userInfo.ID, existing)
 		if enrichErr != nil {
 			httpx.Fail(w, http.StatusInternalServerError, "server error")
@@ -691,7 +831,7 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if mode == appPurchaseModeCustomerService {
-		s.createCustomerServiceAppOrder(w, r, userInfo.ID, productID, title, amount, durationDays)
+		s.createCustomerServiceAppOrder(w, r, userInfo.ID, productID, title, durationDays, pricing)
 		return
 	}
 	cfg, _ := s.loadXZNConfig(r.Context())
@@ -719,14 +859,18 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 	outTradeNo := fmt.Sprintf("app%d-%s-%d", userInfo.ID, productID, time.Now().UnixNano())
 	if online {
 		if _, err := s.db.ExecContext(r.Context(), `
-				INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, duration_days, status, purchase_mode, payment_provider, pay_channel, gateway_id, upgrade_from_plan, upgrade_credit_cents, upgrade_quote_snapshot)
-				VALUES ($1, $2, $3, $4, $5, $6, 'pending', 'xzn', 'xzn', $7, $8, $9, $10, COALESCE($11::jsonb, '{}'::jsonb))`,
-			outTradeNo, userInfo.ID, productID, title, amount, durationDays, payChannel, gatewayID, upgradeFrom, upgradeCredit, nullableJSONArgument(upgradeSnapshot)); err != nil {
+				INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, base_price_cents, discount_cents, discount_snapshot, duration_days, status, purchase_mode, payment_provider, pay_channel, gateway_id, upgrade_from_plan, upgrade_credit_cents, upgrade_quote_snapshot)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8::jsonb, '{}'::jsonb), $9, 'pending', 'xzn', 'xzn', $10, $11, $12, $13, COALESCE($14::jsonb, '{}'::jsonb))`,
+			outTradeNo, userInfo.ID, productID, title, pricing.PayableCents, pricing.BasePriceCents, pricing.DiscountCents, nullableJSONArgument(pricing.DiscountSnapshot), durationDays, payChannel, gatewayID, pricing.UpgradeFromPlan, pricing.UpgradeCreditCents, nullableJSONArgument(pricing.UpgradeQuoteSnapshot)); err != nil {
 			if existing, found, findErr := s.findPendingAppOrder(r.Context(), userInfo.ID); findErr == nil && found {
-				if enriched, enrichErr := s.enrichCustomerServiceOrder(r.Context(), userInfo.ID, existing); enrichErr == nil {
-					httpx.OK(w, enriched)
-					return
+				if appOrderMatchesPricing(existing, productID, pricing.PayableCents, pricing.UpgradeFromPlan, pricing.DiscountAgentCode) {
+					if enriched, enrichErr := s.enrichCustomerServiceOrder(r.Context(), userInfo.ID, existing); enrichErr == nil {
+						httpx.OK(w, enriched)
+						return
+					}
 				}
+				httpx.Fail(w, http.StatusConflict, "已有待支付订单，请先取消后重新下单")
+				return
 			}
 			httpx.Fail(w, http.StatusInternalServerError, "创建支付订单失败")
 			return
@@ -739,14 +883,14 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 		}
 		created, createErr := client.Create(r.Context(), xznpay.CreateRequest{
 			OutTradeNo:  outTradeNo,
-			TotalAmount: fmt.Sprintf("%d.%02d", amount/100, amount%100),
+			TotalAmount: fmt.Sprintf("%d.%02d", pricing.PayableCents/100, pricing.PayableCents%100),
 			Subject:     title,
 			PaytypeCode: payChannel,
 			ChannelID:   gatewayID,
 			Attach:      strconv.FormatInt(userInfo.ID, 10),
 			ClientIP:    s.clientIP(r),
 			NotifyURL:   cfg.NotifyURL,
-			ReturnURL:   xznOrderReturnURL(cfg.ReturnURL, outTradeNo),
+			ReturnURL:   appXZNOrderReturnURL(cfg.ReturnURL, outTradeNo),
 		})
 		if createErr != nil {
 			_, _ = s.db.ExecContext(r.Context(), `UPDATE app_orders SET status='failed', payment_error=$2, update_time=now() WHERE out_trade_no=$1`, outTradeNo, createErr.Error())
@@ -761,18 +905,23 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		order, err := s.enrichCustomerServiceOrder(r.Context(), userInfo.ID, appOrderResp{
-			OutTradeNo:      outTradeNo,
-			ProductID:       productID,
-			Title:           title,
-			Amount:          amount,
-			DurationDays:    durationDays,
-			Status:          "pending",
-			PaymentProvider: appPaymentProviderXZN,
-			PayChannel:      payChannel,
-			GatewayID:       gatewayID,
-			ProviderTradeNo: created.TradeNo,
-			ProviderStatus:  "WAIT_BUYER_PAY",
-			PayURL:          created.PayURL,
+			OutTradeNo:         outTradeNo,
+			ProductID:          productID,
+			Title:              title,
+			Amount:             pricing.PayableCents,
+			BasePriceCents:     pricing.BasePriceCents,
+			DiscountCents:      pricing.DiscountCents,
+			DiscountAgentCode:  pricing.DiscountAgentCode,
+			UpgradeFromPlan:    pricing.UpgradeFromPlan,
+			UpgradeCreditCents: pricing.UpgradeCreditCents,
+			DurationDays:       durationDays,
+			Status:             "pending",
+			PaymentProvider:    appPaymentProviderXZN,
+			PayChannel:         payChannel,
+			GatewayID:          gatewayID,
+			ProviderTradeNo:    created.TradeNo,
+			ProviderStatus:     "WAIT_BUYER_PAY",
+			PayURL:             created.PayURL,
 		})
 		if err != nil {
 			httpx.Fail(w, http.StatusInternalServerError, "读取支付订单失败")
@@ -791,22 +940,27 @@ func nullableJSONArgument(value []byte) any {
 	return string(value)
 }
 
-func (s *Server) createCustomerServiceAppOrder(w http.ResponseWriter, r *http.Request, appUserID int64, productID, title string, amount, durationDays int) {
+func (s *Server) createCustomerServiceAppOrder(w http.ResponseWriter, r *http.Request, appUserID int64, productID, title string, durationDays int, pricing appOrderPricing) {
 	outTradeNo := fmt.Sprintf("app%d-%s-%d", appUserID, productID, time.Now().UnixNano())
 	if _, err := s.db.ExecContext(r.Context(),
-		`INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, duration_days, status, purchase_mode, payment_provider)
-			 VALUES ($1, $2, $3, $4, $5, $6, 'pending_confirmation', 'customer_service', 'manual')`,
-		outTradeNo, appUserID, productID, title, amount, durationDays); err != nil {
+		`INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, base_price_cents, discount_cents, discount_snapshot, duration_days, status, purchase_mode, payment_provider, upgrade_from_plan, upgrade_credit_cents, upgrade_quote_snapshot)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8::jsonb, '{}'::jsonb), $9, 'pending_confirmation', 'customer_service', 'manual', $10, $11, COALESCE($12::jsonb, '{}'::jsonb))`,
+		outTradeNo, appUserID, productID, title, pricing.PayableCents, pricing.BasePriceCents, pricing.DiscountCents, nullableJSONArgument(pricing.DiscountSnapshot), durationDays, pricing.UpgradeFromPlan, pricing.UpgradeCreditCents, nullableJSONArgument(pricing.UpgradeQuoteSnapshot)); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
 	order, err := s.enrichCustomerServiceOrder(r.Context(), appUserID, appOrderResp{
-		OutTradeNo:   outTradeNo,
-		ProductID:    productID,
-		Title:        title,
-		Amount:       amount,
-		DurationDays: durationDays,
-		Status:       appOrderPendingConfirmation,
+		OutTradeNo:         outTradeNo,
+		ProductID:          productID,
+		Title:              title,
+		Amount:             pricing.PayableCents,
+		BasePriceCents:     pricing.BasePriceCents,
+		DiscountCents:      pricing.DiscountCents,
+		DiscountAgentCode:  pricing.DiscountAgentCode,
+		UpgradeFromPlan:    pricing.UpgradeFromPlan,
+		UpgradeCreditCents: pricing.UpgradeCreditCents,
+		DurationDays:       durationDays,
+		Status:             appOrderPendingConfirmation,
 	})
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
@@ -898,16 +1052,17 @@ func (s *Server) appBillingCancelOrder(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
-	if provider != appPaymentProviderXZN {
-		httpx.Fail(w, http.StatusConflict, "只有在线待支付订单可以取消")
+	if provider != appPaymentProviderXZN && provider != "manual" {
+		httpx.Fail(w, http.StatusConflict, "当前订单不能取消")
 		return
 	}
 	if status != "closed" {
-		if status != "pending" && status != "paying" {
+		if (provider == appPaymentProviderXZN && status != "pending" && status != "paying") ||
+			(provider == "manual" && status != appOrderPendingConfirmation) {
 			httpx.Fail(w, http.StatusConflict, "当前订单状态不能取消")
 			return
 		}
-		if _, err := tx.ExecContext(r.Context(), `UPDATE app_orders SET status='closed',update_time=now() WHERE id=$1`, orderID); err != nil {
+		if _, err := tx.ExecContext(r.Context(), `UPDATE app_orders SET status='closed',payment_error='用户已取消',update_time=now() WHERE id=$1`, orderID); err != nil {
 			httpx.Fail(w, http.StatusInternalServerError, "server error")
 			return
 		}
@@ -1032,7 +1187,7 @@ func (s *Server) enrichOnlineOrder(ctx context.Context, appUserID int64, resp ap
 			"payChannel": resp.PayChannel,
 			"url":        resp.PayURL,
 			"payUrl":     resp.PayURL,
-			"returnUrl":  xznOrderReturnURL(cfg.ReturnURL, resp.OutTradeNo),
+			"returnUrl":  appXZNOrderReturnURL(cfg.ReturnURL, resp.OutTradeNo),
 		}
 	}
 	switch {
@@ -1103,6 +1258,19 @@ func (s *Server) loadAppOrderPaymentMeta(ctx context.Context, appUserID int64, o
 	if err := s.db.QueryRowContext(ctx, `SELECT duration_days FROM app_orders WHERE app_user_id=$1 AND out_trade_no=$2`, appUserID, outTradeNo).Scan(&durationDays); err == nil && durationDays > 0 {
 		resp.DurationDays = durationDays
 	}
+	var discountSnapshot, upgradeSnapshot []byte
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT base_price_cents,discount_cents,discount_snapshot,upgrade_from_plan,upgrade_credit_cents,upgrade_quote_snapshot
+		FROM app_orders WHERE app_user_id=$1 AND out_trade_no=$2`, appUserID, outTradeNo).Scan(
+		&resp.BasePriceCents, &resp.DiscountCents, &discountSnapshot,
+		&resp.UpgradeFromPlan, &resp.UpgradeCreditCents, &upgradeSnapshot,
+	); err == nil {
+		var discount appAgentDiscountQuote
+		if json.Unmarshal(discountSnapshot, &discount) == nil {
+			resp.DiscountAgentCode = discount.AgentCode
+		}
+		_ = json.Unmarshal(upgradeSnapshot, &resp.UpgradeQuoteSnapshot)
+	}
 }
 
 func (s *Server) loadAppOrderByOutTradeNo(ctx context.Context, appUserID int64, outTradeNo string) (appOrderResp, error) {
@@ -1126,7 +1294,11 @@ func appCustomerServiceOrder(resp appOrderResp) appOrderResp {
 	} else if resp.Status == "refunded" {
 		resp.Message = "订单已退款，会员权益已同步回退"
 	} else if resp.Status == "closed" {
-		resp.Message = appOrderExpirationMessage
+		if resp.PaymentError == "用户已取消" {
+			resp.Message = "订单已取消，可以重新选择套餐或填写邀请码"
+		} else {
+			resp.Message = appOrderExpirationMessage
+		}
 	} else {
 		resp.Message = "请添加客服微信并提供手机号和订单号，转账后由客服确认开通"
 	}

@@ -89,10 +89,63 @@ func (r *teacherVideoTestRows) Next(dst []driver.Value) error {
 	return nil
 }
 
-type teacherVideoPublicStub struct{ classroomPublicService }
+type teacherVideoPublicStub struct {
+	classroomPublicService
+	errorsByID map[int64]error
+}
 
-func (teacherVideoPublicStub) GetContent(_ context.Context, id, _ int64) (classroomPublicContent, error) {
+func (f teacherVideoPublicStub) GetContent(_ context.Context, id, _ int64) (classroomPublicContent, error) {
+	if err := f.errorsByID[id]; err != nil {
+		return classroomPublicContent{}, err
+	}
 	return classroomPublicContent{ID: id, Title: map[int64]string{1: "课程一", 2: "日常二"}[id], CoverURL: "https://cdn.example/cover.jpg", ContentType: classroom.ContentVideo, DurationSeconds: 90}, nil
+}
+
+func TestTeacherVideosSkipsContentNoLongerPublic(t *testing.T) {
+	for _, missing := range []error{classroom.ErrNotFound, sql.ErrNoRows} {
+		t.Run(missing.Error(), func(t *testing.T) {
+			name := "teacher-video-missing-" + t.Name()
+			sql.Register(name, &teacherVideoTestDriver{})
+			db, err := sql.Open(name, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			s := &Server{teachers: teacher.NewStore(db), classroomPublic: teacherVideoPublicStub{errorsByID: map[int64]error{2: missing}}}
+			rr := httptest.NewRecorder()
+			s.appTeacherVideoList(rr, httptest.NewRequest(http.MethodGet, "/api/app/teachers/han/videos", nil), "han")
+			if rr.Code != http.StatusOK {
+				t.Fatalf("unavailable video must not hide ready videos: status=%d body=%s", rr.Code, rr.Body.String())
+			}
+			var body struct {
+				Data struct {
+					Items []classroomPublicContent `json:"items"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if len(body.Data.Items) != 1 || body.Data.Items[0].ID != 1 {
+				t.Fatalf("visible videos=%+v", body.Data.Items)
+			}
+		})
+	}
+}
+
+func TestTeacherVideosReportsUnexpectedContentFailure(t *testing.T) {
+	name := "teacher-video-error-" + t.Name()
+	sql.Register(name, &teacherVideoTestDriver{})
+	db, err := sql.Open(name, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := &Server{teachers: teacher.NewStore(db), classroomPublic: teacherVideoPublicStub{errorsByID: map[int64]error{2: errors.New("database offline")}}}
+	rr := httptest.NewRecorder()
+	s.appTeacherVideoList(rr, httptest.NewRequest(http.MethodGet, "/api/app/teachers/han/videos", nil), "han")
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("unexpected errors must remain visible: status=%d body=%s", rr.Code, rr.Body.String())
+	}
 }
 
 func TestTeacherVideosAggregatesVisibleCourseAndDailyUsingPublicDTO(t *testing.T) {

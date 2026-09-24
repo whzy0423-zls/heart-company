@@ -165,6 +165,9 @@ func appChatModelIdentityAnswer(question string) (rag.Answer, bool) {
 }
 
 func (s *Server) appChatProfilesForCard(ctx context.Context, appUserID, cardID int64) (rag.UserProfile, rag.ConversationCard) {
+	if chat.EnneagramType(ctx) > 0 {
+		return rag.UserProfile{}, rag.ConversationCard{}
+	}
 	if s.appChatProfilesForCardOverride != nil {
 		profile, cardContext := s.appChatProfilesForCardOverride(ctx, appUserID, cardID)
 		return normalizeAppChatProfileForConversationCard(profile, cardContext)
@@ -290,6 +293,10 @@ func (s *Server) ensureAppChatMessageWritable(ctx context.Context, appUserID, me
 }
 
 func (s *Server) retrieveAppChatKnowledge(ctx context.Context, userID, sessionID, cardID int64, query string) ([]rag.Document, *chat.KnowledgeTrace, error) {
+	if chat.EnneagramType(ctx) > 0 {
+		// A selected role must not bind the user's measured-type knowledge or memories.
+		return nil, nil, nil
+	}
 	return s.retrieveKnowledgeForScene(ctx, s.appKnowledge, "app_chat", userID, sessionID, cardID, query)
 }
 
@@ -610,7 +617,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.rememberChatAnswer(ctx, userInfo.ID, sess.CardID, body.Question, answer.Answer)
-		if messageID > 0 {
+		if messageID > 0 && chat.EnneagramType(ctx) == 0 {
 			s.recordAppProfileEvidenceAsync(userInfo.ID, sess.CardID, "chat", messageID, body.Question)
 		}
 		httpx.OK(w, askResponse{Answer: answer, MessageID: messageID})
@@ -624,7 +631,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 	defer s.releaseAppChatQuota(quotaKey)
 	preferenceExtraction := userpreference.Extract(body.Question)
 	preferenceTurn := appChatPreferenceTurn{userID: userInfo.ID}
-	if len(preferenceExtraction.Mutations) > 0 || userpreference.NeedsLLMFallback(body.Question) {
+	if chat.EnneagramType(r.Context()) == 0 && (len(preferenceExtraction.Mutations) > 0 || userpreference.NeedsLLMFallback(body.Question)) {
 		preferenceTurn = s.beginAppChatPreferenceTurn(userInfo.ID)
 	}
 	defer s.finishAppChatPreferenceTurn(preferenceTurn)
@@ -657,6 +664,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		ConversationCard:    conversationCard,
 		UserPreferences:     preferences,
 		CurrentDirectives:   directives,
+		RuntimeInstructions: enneagramDialogueInstructions(ctx),
 		Tier:                tier,
 	})
 	if err != nil {
@@ -673,9 +681,11 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.commitAppChatQuota(quotaKey)
-	s.scheduleAppChatPreferenceFallback(preferenceTurn, body.Question)
+	if chat.EnneagramType(ctx) == 0 {
+		s.scheduleAppChatPreferenceFallback(preferenceTurn, body.Question)
+	}
 	s.rememberChatAnswer(ctx, userInfo.ID, sess.CardID, body.Question, ans.Answer)
-	if messageID > 0 {
+	if messageID > 0 && chat.EnneagramType(ctx) == 0 {
 		s.recordAppProfileEvidenceAsync(userInfo.ID, sess.CardID, "chat", messageID, body.Question)
 	}
 
@@ -747,7 +757,7 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 	}
 	preferenceExtraction := userpreference.Extraction{}
 	preferenceTurn := appChatPreferenceTurn{userID: userInfo.ID}
-	if !isModelIdentity {
+	if !isModelIdentity && chat.EnneagramType(r.Context()) == 0 {
 		preferenceExtraction = userpreference.Extract(body.Question)
 		if len(preferenceExtraction.Mutations) > 0 || userpreference.NeedsLLMFallback(body.Question) {
 			preferenceTurn = s.beginAppChatPreferenceTurn(userInfo.ID)
@@ -976,6 +986,7 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			ConversationCard:    conversationCard,
 			UserPreferences:     preferences,
 			CurrentDirectives:   directives,
+			RuntimeInstructions: enneagramDialogueInstructions(ctx),
 			Tier:                input.tier,
 		}, func(delta string) error {
 			if delta == "" {
@@ -1027,7 +1038,10 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 	sourcesJSON, _ := json.Marshal(ans.Sources)
 	// Reserve the original turn state before SavePair can outlive the handler.
 	// This keeps later same-user turns in the same ticket-ordering domain.
-	fallback := s.reserveAppChatPreferenceFallback(input.preferenceTurn, input.question)
+	var fallback *appChatPreferenceFallbackReservation
+	if chat.EnneagramType(ctx) == 0 {
+		fallback = s.reserveAppChatPreferenceFallback(input.preferenceTurn, input.question)
+	}
 	// Atomically arbitrate with total/idle timeout before entering SavePair's
 	// may-commit window. Once persistence wins, the pump waits for its terminal.
 	if !input.lifecycle.beginPersistence() {
@@ -1064,10 +1078,10 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 		response: askResponse{Answer: ans, MessageID: messageID},
 	}
 
-	postSaveCtx, cancelPostSave := context.WithTimeout(context.Background(), defaultAppChatPostSaveTimeout)
+	postSaveCtx, cancelPostSave := context.WithTimeout(context.WithoutCancel(ctx), defaultAppChatPostSaveTimeout)
 	s.rememberChatAnswer(postSaveCtx, input.userID, input.cardID, input.question, ans.Answer)
 	cancelPostSave()
-	if messageID > 0 {
+	if messageID > 0 && chat.EnneagramType(ctx) == 0 {
 		s.recordAppProfileEvidenceAsync(input.userID, input.cardID, "chat", messageID, input.question)
 	}
 }
@@ -1371,6 +1385,9 @@ func (s *Server) cleanupAppChatPreferenceTurn(turn appChatPreferenceTurn) {
 }
 
 func (s *Server) prepareAppChatPreferences(ctx context.Context, turn appChatPreferenceTurn, extraction userpreference.Extraction) ([]string, []string, error) {
+	if chat.EnneagramType(ctx) > 0 {
+		return nil, nil, nil
+	}
 	if turn.state != nil {
 		turn.state.mu.Lock()
 		defer turn.state.mu.Unlock()
@@ -1407,6 +1424,9 @@ func (s *Server) prepareAppChatPreferences(ctx context.Context, turn appChatPref
 }
 
 func (s *Server) prepareAppChatPreferencesLegacy(ctx context.Context, userID int64, question string) ([]string, []string, userpreference.Extraction, error) {
+	if chat.EnneagramType(ctx) > 0 {
+		return nil, nil, userpreference.Extraction{}, nil
+	}
 	extraction := userpreference.Extract(question)
 	directives := append([]string(nil), extraction.CurrentDirectives...)
 	if s.userPreferences == nil {
@@ -1427,6 +1447,9 @@ func (s *Server) prepareAppChatPreferencesLegacy(ctx context.Context, userID int
 }
 
 func (s *Server) persistAppChatPreferences(ctx context.Context, userID int64, extraction userpreference.Extraction) error {
+	if chat.EnneagramType(ctx) > 0 {
+		return nil
+	}
 	if len(extraction.Mutations) == 0 || s.userPreferences == nil {
 		return nil
 	}
@@ -1573,6 +1596,9 @@ func appChatSessionIDFromPath(path, suffix string) (int64, bool) {
 }
 
 func (s *Server) rememberChatAnswer(ctx context.Context, appUserID, cardID int64, question, answer string) {
+	if chat.EnneagramType(ctx) > 0 {
+		return
+	}
 	answer = strings.TrimSpace(answer)
 	content := chatMemoryContent(question)
 	if cardID <= 0 || content == "" || answer == "" {
@@ -1672,6 +1698,9 @@ func chatMemoryContent(question string) string {
 }
 
 func (s *Server) appChatMemoriesForPrompt(ctx context.Context, appUserID, cardID int64, limit int) ([]string, error) {
+	if chat.EnneagramType(ctx) > 0 {
+		return nil, nil
+	}
 	if appUserID <= 0 || cardID <= 0 || limit <= 0 {
 		return nil, nil
 	}

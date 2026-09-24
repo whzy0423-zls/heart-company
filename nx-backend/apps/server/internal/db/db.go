@@ -160,6 +160,9 @@ func seed(ctx context.Context, database *sql.DB, adminUser, adminPassword string
 	if err := seedAppPlanManagementMenu(ctx, database); err != nil {
 		return fmt.Errorf("seed app plan management menu: %w", err)
 	}
+	if err := seedAppAgentDiscountMenu(ctx, database); err != nil {
+		return fmt.Errorf("seed app agent discount menu: %w", err)
+	}
 	if err := seedVoiceBroadcastMenu(ctx, database); err != nil {
 		return fmt.Errorf("seed voice broadcast menu: %w", err)
 	}
@@ -229,6 +232,7 @@ var defaultMenus = []seedMenu{
 	{ID: 1409, PID: 1408, Name: "MiniappTeacherManagement", Path: "/teachers/manage", Component: "/teacher/index", AuthCode: "Miniapp:Teacher:Manage", Type: "menu", Sort: 1, Icon: "lucide:graduation-cap", Title: "老师资料与审核"},
 	{ID: 1600, PID: 0, Name: "AppManage", Path: "/app", Type: "catalog", Sort: 14, Icon: "lucide:panels-top-left", Title: "App 管理"},
 	{ID: 1614, PID: 1600, Name: "AppPlanManagement", Path: "/app/plan-management", Component: "/app/plan-management", AuthCode: "App:PlanManagement:View", Type: "menu", Sort: 12, Icon: "lucide:badge-dollar-sign", Title: "套餐管理"},
+	{ID: 1622, PID: 1600, Name: "AppAgentDiscounts", Path: "/app/agent-discounts", Component: "/app/agent-discounts", AuthCode: "App:PlanManagement:View", Type: "menu", Sort: 12, Icon: "lucide:badge-percent", Title: "代理购卡优惠"},
 	{ID: 1615, PID: 1600, Name: "AppDistributionManagement", Path: "/app/distribution", Component: "/app/distribution-management", AuthCode: "Customer:App:List", Type: "menu", Sort: 13, Icon: "lucide:share-2", Title: "代理管理"},
 	{ID: 1616, PID: 1600, Name: "AppDistributionCommissions", Path: "/app/distribution-commissions", Component: "/app/distribution-commissions", AuthCode: "Customer:App:List", Type: "menu", Sort: 14, Icon: "lucide:coins", Title: "佣金明细"},
 	{ID: 1617, PID: 1600, Name: "AppDistributionRules", Path: "/app/distribution-rules", Component: "/app/distribution-rules", AuthCode: "Customer:App:List", Type: "menu", Sort: 15, Icon: "lucide:percent", Title: "佣金规则"},

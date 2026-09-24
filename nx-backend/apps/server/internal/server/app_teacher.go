@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/classroom"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/storage"
 	"nine-xing/nx-backend/apps/server/internal/teacher"
@@ -99,8 +100,13 @@ func (s *Server) appTeacherVideoList(w http.ResponseWriter, r *http.Request, key
 	items := make([]classroomPublicContent, 0, len(drafts))
 	for _, draft := range drafts {
 		item, err := s.classroomPublic.GetContent(r.Context(), draft.ID, appUserID(r))
+		// Media can be removed or its parent unpublished after the teacher
+		// feed was read. Keep the remaining public videos available.
+		if errors.Is(err, classroom.ErrNotFound) || errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
 		if err != nil {
-			httpx.Fail(w, http.StatusInternalServerError, "list teacher videos failed")
+			failClassroomInternal(w, "list_teacher_videos", err)
 			return
 		}
 		if item.PublishedAt == nil {

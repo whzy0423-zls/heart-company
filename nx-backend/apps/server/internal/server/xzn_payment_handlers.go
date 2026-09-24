@@ -255,6 +255,23 @@ func xznOrderReturnURL(raw, outTradeNo string) string {
 	return u.String()
 }
 
+func appXZNOrderReturnURL(raw, outTradeNo string) string {
+	const defaultReturn = "ninexing://billing/result"
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw)
+	if err != nil || validateXZNReturnURL(raw) != nil || u == nil {
+		return xznOrderReturnURL(defaultReturn, outTradeNo)
+	}
+	scheme, host := strings.ToLower(u.Scheme), strings.ToLower(u.Host)
+	appLink := scheme == "https" && host == "xinzhili.app" &&
+		(u.Path == "/billing" || strings.HasPrefix(u.Path, "/billing/"))
+	deepLink := scheme == "ninexing" && host == "billing" && u.Path == "/result"
+	if !appLink && !deepLink {
+		raw = defaultReturn
+	}
+	return xznOrderReturnURL(raw, outTradeNo)
+}
+
 func (s *Server) xznPayCreate(w http.ResponseWriter, r *http.Request) {
 	var in struct{ OutTradeNo, TotalAmount, Subject, PaytypeCode, ChannelID, Attach string }
 	if json.NewDecoder(r.Body).Decode(&in) != nil || strings.TrimSpace(in.OutTradeNo) == "" || strings.TrimSpace(in.TotalAmount) == "" || strings.TrimSpace(in.Subject) == "" || strings.TrimSpace(in.PaytypeCode) == "" {

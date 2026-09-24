@@ -66,6 +66,33 @@ func TestXZNOrderReturnURLCarriesOrderIdentity(t *testing.T) {
 	}
 }
 
+func TestAppXZNOrderReturnURLAlwaysReturnsToSupportedAppRoute(t *testing.T) {
+	for _, configured := range []string{
+		"", "  ", "https://shop.example.test/paid", "ninexing://other/result",
+		"https://xinzhili.app/billingevil", "https://xinzhili.app:8443/billing",
+	} {
+		got := appXZNOrderReturnURL(configured, "app7-vip_month-1")
+		u, err := url.Parse(got)
+		if err != nil || u.Scheme != "ninexing" || u.Host != "billing" || u.Path != "/result" || u.Query().Get("outTradeNo") != "app7-vip_month-1" || u.Query().Get("payment_return") != "1" {
+			t.Errorf("App fallback for %q: %q %v", configured, got, err)
+		}
+	}
+	for _, configured := range []string{
+		"ninexing://billing/result?source=xzn",
+		"https://xinzhili.app/billing?source=xzn",
+		"https://xinzhili.app/billing/payment-return?source=xzn",
+	} {
+		got := appXZNOrderReturnURL(configured, "app7-vip_month-1")
+		u, err := url.Parse(got)
+		if err != nil || u.Query().Get("source") != "xzn" || u.Query().Get("outTradeNo") != "app7-vip_month-1" {
+			t.Errorf("configured App return lost: %q %v", got, err)
+		}
+	}
+	if got := appXZNOrderReturnURL("", ""); got != "" {
+		t.Errorf("empty order identity must not create a return URL: %q", got)
+	}
+}
+
 func TestValidateXZNBaseURLAllowlist(t *testing.T) {
 	for _, raw := range []string{
 		"https://pay.xzncraft.cn/openapi",

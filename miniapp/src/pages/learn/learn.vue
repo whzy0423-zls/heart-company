@@ -26,6 +26,7 @@ import { mapPublishedClassroomItems } from '../../utils/classroomCourseware'
 import { classroomContentRoute } from '../../utils/classroomDisplay'
 import { normalizeMiniappLearn } from '../../utils/miniappPages'
 import { userErrorMessage } from '../../utils/userMessage'
+import { previewImage } from '../../utils/imagePreview'
 
 const TEACHER_FALLBACK = ''
 const COURSE_FALLBACKS = [
@@ -100,6 +101,10 @@ function applyContent(config, options = {}) {
 function onTeacherImageError() {
   if (!teacherImageFallbackUsed.consume('portrait')) return
   teacherImage.value = TEACHER_FALLBACK
+}
+
+function previewTeacherAvatar() {
+  previewImage(teacherImage.value)
 }
 
 function onCourseImageError(courseKey) {
@@ -230,15 +235,23 @@ onMounted(() => {
         <view v-if="teacher" class="learn-teacher__content">
           <view class="learn-teacher__summary">
             <view class="learn-teacher__portrait">
-              <image
+              <button
                 v-if="teacherImage"
-                class="learn-teacher__image"
-                :src="teacherImage"
-                mode="aspectFill"
-                role="img"
-                :aria-label="teacherImageLabel"
-                @error="onTeacherImageError"
-              />
+                class="teacher-card__avatar-action"
+                type="button"
+                :aria-label="`预览${teacherImageLabel}`"
+                hover-class="teacher-card__avatar-action--pressed"
+                @click="previewTeacherAvatar"
+              >
+                <image
+                  class="learn-teacher__image"
+                  :src="teacherImage"
+                  mode="aspectFill"
+                  role="img"
+                  :aria-label="teacherImageLabel"
+                  @error="onTeacherImageError"
+                />
+              </button>
               <view v-else class="learn-teacher__image learn-teacher__image--placeholder" aria-hidden="true">韩</view>
             </view>
             <view class="learn-teacher__identity">
@@ -550,6 +563,18 @@ onMounted(() => {
 }
 
 .learn-teacher__portrait { flex-basis: 124rpx; width: 124rpx; border-radius: 20rpx; background: var(--nx-surface-soft); }
+.learn-teacher__portrait .teacher-card__avatar-action {
+  width: 124rpx;
+  height: 124rpx;
+  padding: 0;
+  border: 0;
+  border-radius: 20rpx;
+  background: var(--nx-surface-soft);
+  overflow: hidden;
+}
+.learn-teacher__portrait .teacher-card__avatar-action::after { border: 0; }
+.learn-teacher__portrait .teacher-card__avatar-action--pressed { opacity: .78; transform: scale(.97); }
+.learn-teacher__portrait .learn-teacher__image { width: 124rpx; height: 124rpx; display: block; }
 .learn-teacher__summary { gap: 20rpx; }
 .section-label { color: var(--nx-brand-700); font-weight: 900; letter-spacing: 1rpx; }
 .learn-teacher__name { color: var(--nx-brand-900); font-size: 32rpx; }
@@ -623,4 +648,13 @@ onMounted(() => {
 .learn-retry:focus-visible,
 .learn-teacher__toggle:focus-visible,
 .learn-tab:focus-visible { outline-color: var(--nx-accent-gold); }
+
+/* Local rhythm pass: preserve the dark hero and existing card palette while
+ * reducing the visual jumps between teacher, tabs and course content. */
+.learn-content { padding-left: 20rpx; padding-right: 20rpx; }
+.learn-header { margin-bottom: 2rpx; }
+.learn-teacher { margin-top: 16rpx; padding: 22rpx; }
+.learn-tabs { margin-top: 16rpx; }
+.learning-panel { margin-top: 14rpx; }
+.course-row { padding-top: 22rpx; padding-bottom: 22rpx; }
 </style>

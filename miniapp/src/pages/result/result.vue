@@ -19,6 +19,7 @@ import {
 import { setBookingIntent } from '../../utils/bookingIntent'
 import { normalizeMiniappLearn } from '../../utils/miniappPages'
 import { getStoredSiteConfig } from '../../utils/siteConfig'
+import { previewImage } from '../../utils/imagePreview'
 
 const result = ref(null)
 const gender = ref(null)
@@ -229,6 +230,20 @@ function resultShareImage(type) {
   return `/static/share/result-${normalizedType}.jpg`
 }
 
+function resultAvatarSource() {
+  const type = Number(result.value?.type)
+  return Number.isInteger(type) && type >= 1 && type <= 9
+    ? `/static/avatars/${type}.png`
+    : ''
+}
+
+function previewResultAvatar() {
+  if (avatarFailed.value) return
+  const source = resultAvatarSource()
+  if (!source) return
+  previewImage(source, { urls: [source] })
+}
+
 // 微信好友转发
 onShareAppMessage(() => ({
   title: `我是 ${result.value?.type} 号「${r.value?.title}」｜你是哪一型？`,
@@ -280,7 +295,15 @@ function savePoster() {
   <view class="wrap page-stack ios-page ios-safe-bottom result-page" v-if="result">
     <view class="result-hero nx-page-hero" :class="`result-hero--${info.color}`">
       <view class="result-hero__avatar-wrap">
-        <image v-if="!avatarFailed" class="result-hero__avatar" :src="`/static/avatars/${result.type}.png`" mode="aspectFill" lazy-load @error="avatarFailed = true" />
+        <button
+          v-if="!avatarFailed"
+          class="result-hero__avatar-action"
+          aria-label="预览测试结果头像"
+          hover-class="result-hero__avatar-action--pressed"
+          @click="previewResultAvatar()"
+        >
+          <image class="result-hero__avatar" :src="`/static/avatars/${result.type}.png`" mode="aspectFill" lazy-load @error="avatarFailed = true" />
+        </button>
         <view v-else class="result-hero__avatar-fallback">{{ result.type }}</view>
         <view class="result-hero__number">{{ result.type }}</view>
       </view>
@@ -546,6 +569,20 @@ function savePoster() {
 .result-hero--green { background: linear-gradient(145deg, #314052, #526579); }
 .result-hero--red { background: linear-gradient(145deg, #5B3F35, #8A6252); }
 .result-hero__avatar-wrap { position: relative; width: 184rpx; height: 184rpx; }
+.result-hero__avatar-action {
+  display: block;
+  width: 184rpx;
+  height: 184rpx;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  line-height: 1;
+}
+.result-hero__avatar-action::after { border: 0; }
+.result-hero__avatar-action--pressed { opacity: .82; }
 .result-hero__avatar {
   width: 184rpx;
   height: 184rpx;

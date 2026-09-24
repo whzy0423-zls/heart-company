@@ -192,10 +192,26 @@ www.example.com    → 127.0.0.1:8000
 
 ### 主会话与技能会话 SSE 的外层代理检查清单
 
-主会话、合盘卡片会话和技能独立会话都必须绕过宿主机 nginx/宝塔/CDN 的响应缓冲、缓存和压缩。否则 Go 服务已经发送的 delta 会被外层代理聚合，客户端看起来仍是一次性返回。将下面两条规则放在通用 `/api/` 规则之前，并将 `<port>` 替换为对应容器入口端口：
+主会话、合盘卡片会话、九型角色会话和技能独立会话都必须绕过宿主机 nginx/宝塔/CDN 的响应缓冲、缓存和压缩。否则 Go 服务已经发送的 delta 会被外层代理聚合，客户端看起来仍是一次性返回。将下面三条规则放在通用 `/api/` 规则之前，并将 `<port>` 替换为对应容器入口端口：
 
 ```nginx
 location ^~ /api/app/chat/ {
+    proxy_pass http://127.0.0.1:<port>;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    proxy_connect_timeout 30s;
+    proxy_read_timeout 180s;
+    proxy_send_timeout 180s;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location ^~ /api/app/enneagram/ {
     proxy_pass http://127.0.0.1:<port>;
     proxy_http_version 1.1;
     proxy_set_header Connection "";

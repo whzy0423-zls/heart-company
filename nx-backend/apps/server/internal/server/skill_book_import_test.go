@@ -3,38 +3,32 @@ package server
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
-	_ "github.com/jackc/pgx/v5/stdlib"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"nine-xing/nx-backend/apps/server/internal/testutil"
 	"os"
 	"strconv"
 	"strings"
 	"testing"
 
 	"nine-xing/nx-backend/apps/server/internal/skillcatalog"
+	"nine-xing/nx-backend/apps/server/internal/testdb"
 	"nine-xing/nx-backend/apps/server/internal/theorystore"
 )
 
 // Uses a disposable *_test database, never production. Validates the actual
 // multipart handler and publishing transaction against real schema constraints.
 func TestBookUploadPublishRenameAppCatalogPostgres(t *testing.T) {
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("set TEST_DATABASE_URL")
-	}
-	if err := testutil.ValidateIsolatedPostgresDSN(dsn); err != nil {
-		t.Fatal(err)
-	}
-	db, err := sql.Open("pgx", dsn)
+	db, _ := testdb.OpenEnvIsolatedSchema(t, "skill_book_import")
+	schema, err := os.ReadFile("../db/schema.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	if _, err := db.Exec(string(schema)); err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 	var libraryID, categoryID int64
 	err = db.QueryRow(`INSERT INTO app_skill_libraries(key,name,status) VALUES('learning-growth-books','书籍测试库','enabled') ON CONFLICT(key) DO UPDATE SET status='enabled' RETURNING id`).Scan(&libraryID)
@@ -55,7 +49,13 @@ func TestBookUploadPublishRenameAppCatalogPostgres(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/api/skill-library-management/books/import", &body)
 	request.Header.Set("Content-Type", form.FormDataContentType())
 	response := httptest.NewRecorder()
-	server := &Server{db: db}
+	server := &Server{db: db, ragGen: &preferenceJSONGenerator{name: `{
+		"overviewMarkdown":"每天完成十分钟刻意练习，通过反馈调整行动。",
+		"coreMarkdown":"观察练习结果，获取反馈，调整下一次行动。",
+		"whenToUse":["建立练习习惯","回顾练习结果","调整下一次行动"],
+		"workflow":["安排十分钟练习","观察反馈","调整行动"],
+		"topics":["刻意练习","反馈","行动"]
+	}`}}
 	server.importSkillBook(response, request)
 	if response.Code != 200 {
 		t.Fatalf("upload %d: %s", response.Code, response.Body)

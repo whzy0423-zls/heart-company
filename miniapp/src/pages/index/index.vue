@@ -9,6 +9,7 @@ import { mapPublishedClassroomItems } from '../../utils/classroomCourseware'
 import { clearLearningNavIntent, setLearningNavIntent } from '../../utils/learningNavIntent'
 import { normalizeMiniappLearn } from '../../utils/miniappPages'
 import { userErrorMessage } from '../../utils/userMessage'
+import { previewImage } from '../../utils/imagePreview'
 
 const TEACHER_FALLBACK = ''
 const COURSE_FALLBACKS = [
@@ -97,6 +98,10 @@ function onTeacherImageError() {
   if (teacherImageFallbackUsed.value) return
   teacherImageFallbackUsed.value = true
   teacherImage.value = TEACHER_FALLBACK
+}
+
+function previewTeacherAvatar() {
+  previewImage(teacherImage.value)
 }
 
 function onCourseImageError(index) {
@@ -237,15 +242,23 @@ function goEnneagram() {
 
       <section class="teacher-welcome" aria-labelledby="teacher-heading">
         <template v-if="teacher">
-          <image
+          <button
             v-if="teacherImage"
-            class="teacher-hero__image"
-            :src="teacherImage"
-            mode="aspectFill"
-            role="img"
-            :aria-label="teacherImageLabel"
-            @error="onTeacherImageError"
-          />
+            class="teacher-card__avatar-action"
+            type="button"
+            :aria-label="`预览${teacherImageLabel}`"
+            hover-class="teacher-card__avatar-action--pressed"
+            @click="previewTeacherAvatar"
+          >
+            <image
+              class="teacher-hero__image"
+              :src="teacherImage"
+              mode="aspectFill"
+              role="img"
+              :aria-label="teacherImageLabel"
+              @error="onTeacherImageError"
+            />
+          </button>
           <view v-else class="teacher-hero__image teacher-hero__image--placeholder" aria-hidden="true">韩</view>
           <view class="teacher-copy">
             <text class="teacher-eyebrow">你好，我是</text>
@@ -450,7 +463,7 @@ function goEnneagram() {
 
 .teacher-welcome {
   display: grid;
-  grid-template-columns: 112rpx minmax(0, 1fr);
+  grid-template-columns: 128rpx minmax(0, 1fr);
   column-gap: 20rpx;
   padding: 24rpx;
   border: 2rpx solid #E6EAE6;
@@ -459,12 +472,27 @@ function goEnneagram() {
 }
 
 .teacher-hero__image {
-  grid-row: 1 / span 2;
   width: 112rpx;
   height: 112rpx;
   border-radius: 16rpx;
   background: #EEF1EE;
 }
+
+.teacher-card__avatar-action {
+  grid-row: 1 / span 2;
+  width: 128rpx;
+  height: 128rpx;
+  padding: 0;
+  border: 0;
+  border-radius: 22rpx;
+  background: var(--nx-surface-soft);
+  overflow: hidden;
+  box-shadow: 0 10rpx 24rpx rgba(32, 42, 55, .12);
+}
+
+.teacher-card__avatar-action::after { border: 0; }
+.teacher-card__avatar-action--pressed { opacity: .78; transform: scale(.97); }
+.teacher-card__avatar-action .teacher-hero__image { width: 128rpx; height: 128rpx; display: block; }
 
 .teacher-hero__image--placeholder {
   display: flex;
@@ -866,6 +894,16 @@ function goEnneagram() {
 .service-entry--booking { align-items: flex-start; }
 .service-entry--booking .service-title { font-size: 28rpx; }
 .service-entry:focus-visible { outline-color: var(--nx-accent-gold); }
+
+/* Keep the existing card language, but make the home page breathe better on
+ * smaller phones and keep the teacher portrait a clear interactive anchor. */
+.home__content { padding-bottom: 12rpx; }
+.teacher-welcome { grid-template-columns: 128rpx minmax(0, 1fr); gap: 20rpx; padding: 26rpx; border-radius: 24rpx; }
+.service-section,
+.content-section { margin-top: 28rpx; }
+.service-grid { gap: 16rpx; }
+.featured-course,
+.latest-material { border-radius: 22rpx; }
 
 @media screen and (max-width: 600rpx) {
   .service-entry--course,

@@ -247,18 +247,113 @@ func TestAppBillingCreateOrderUsesDefaultCustomerServiceMode(t *testing.T) {
 	}
 }
 
-func TestAppBillingCreateOrderReusesExistingPendingOrder(t *testing.T) {
+func TestAppBillingCreateOrderPersistsAgentDiscountedAmount(t *testing.T) {
+	appBillingInsertCount.Store(0)
+	appBillingLastAmount.Store(0)
+	s := newAppBillingEntitlementTestServer(t, "agent_self")
+	response := performAppBillingRequest(t, s.appBillingCreateOrder, http.MethodPost, "/api/app/billing/orders", map[string]any{
+		"productId": "vip_month", "expectedAmountCents": 2320,
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", response.Code, response.Body.String())
+	}
+	order := decodeAppBillingResponse(t, response).Data
+	if order.BasePriceCents != 2900 || order.DiscountCents != 580 || order.Amount != 2320 || order.DiscountAgentCode != "A10" {
+		t.Fatalf("unexpected discounted order: %+v", order)
+	}
+	if got := appBillingLastAmount.Load(); got != 2320 {
+		t.Fatalf("inserted amount=%d, want 2320", got)
+	}
+
+	appBillingInsertCount.Store(0)
+	stale := performAppBillingRequest(t, s.appBillingCreateOrder, http.MethodPost, "/api/app/billing/orders", map[string]any{
+		"productId": "vip_month", "expectedAmountCents": 2900,
+	})
+	if stale.Code != http.StatusConflict || appBillingInsertCount.Load() != 0 {
+		t.Fatalf("stale checkout must not create an order: code=%d body=%s", stale.Code, stale.Body.String())
+	}
+}
+
+func TestAppBillingCreateOrderRejectsDifferentPendingOrder(t *testing.T) {
 	appBillingInsertCount.Store(0)
 	s := newAppBillingEntitlementTestServer(t, "pending|active:vip_month")
 	response := performAppBillingRequest(t, s.appBillingCreateOrder, http.MethodPost, "/api/app/billing/orders", map[string]any{
 		"productId": "vip_year",
 	})
-	body := decodeAppBillingResponse(t, response)
-	if body.Data.OutTradeNo != "app7-vip_month-existing" || body.Data.ProductID != "vip_month" {
-		t.Fatalf("expected existing pending order to be reused, got %+v", body.Data)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("expected conflict for a different pending product, got %d body=%s", response.Code, response.Body.String())
 	}
 	if got := appBillingInsertCount.Load(); got != 0 {
-		t.Fatalf("expected no insert for duplicate pending order, got %d", got)
+		t.Fatalf("expected no insert while prior order is pending, got %d", got)
+	}
+}
+
+func TestApplyAppAgentDiscountToCharge(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		baseCharge  int
+		discount    int
+		wantApplied int
+		wantPayable int
+	}{
+		{"ordinary order", 2900, 580, 580, 2320},
+		{"upgrade after credit", 4400, 1180, 1180, 3220},
+		{"discount cannot make upgrade free", 500, 1000, 499, 1},
+		{"no rule", 2900, 0, 0, 2900},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			applied, payable := applyAppAgentDiscountToCharge(tt.baseCharge, tt.discount)
+			if applied != tt.wantApplied || payable != tt.wantPayable {
+				t.Fatalf("got applied=%d payable=%d, want %d/%d", applied, payable, tt.wantApplied, tt.wantPayable)
+			}
+		})
+	}
+}
+
+func TestAppOrderDiscountForChargeUsesUpgradeBalance(t *testing.T) {
+	percentage := appAgentDiscountQuote{BasePriceCents: 5900, DiscountCents: 1180, RuleMode: appAgentDiscountPercentOff, RuleValue: 2000}
+	off, payable := appOrderDiscountForCharge(4400, percentage)
+	if off != 880 || payable != 3520 {
+		t.Fatalf("percentage should apply to upgrade balance, got discount=%d payable=%d", off, payable)
+	}
+	fixed := appAgentDiscountQuote{BasePriceCents: 5900, DiscountCents: 1000, RuleMode: appAgentDiscountAmountOff, RuleValue: 1000}
+	off, payable = appOrderDiscountForCharge(500, fixed)
+	if off != 499 || payable != 1 {
+		t.Fatalf("fixed discount should keep one cent payable, got discount=%d payable=%d", off, payable)
+	}
+}
+
+func TestAdjustMembershipUpgradeQuoteForPaidDiscount(t *testing.T) {
+	quote := membershipUpgradeQuote{CreditCents: 1500, PayableCents: 4400, RemainingDays: 15}
+	adjusted := adjustMembershipUpgradeQuoteForPaidDiscount(quote, 2900, 2000, 30)
+	if adjusted.CreditCents != 1050 || adjusted.PayableCents != 4850 {
+		t.Fatalf("prior VIP discount must reduce remaining credit, got %+v", adjusted)
+	}
+	if unchanged := adjustMembershipUpgradeQuoteForPaidDiscount(quote, 2900, 2900, 30); unchanged != quote {
+		t.Fatalf("full-price prior purchase changed: %+v", unchanged)
+	}
+	if exhausted := adjustMembershipUpgradeQuoteForPaidDiscount(quote, 2900, 100, 1); exhausted.CreditCents != 0 || exhausted.PayableCents != 5900 {
+		t.Fatalf("credit must not become negative: %+v", exhausted)
+	}
+}
+
+func TestAppOrderMatchesPricing(t *testing.T) {
+	existing := appOrderResp{ProductID: "vip_month", Amount: 2320, DiscountAgentCode: "AGENT1"}
+	if !appOrderMatchesPricing(existing, "vip_month", 2320, "", "AGENT1") {
+		t.Fatal("matching order should be reusable")
+	}
+	for _, tt := range []struct {
+		productID, agentCode, upgradeFrom string
+		amount                            int
+	}{
+		{"vip_year", "AGENT1", "", 2320},
+		{"vip_month", "AGENT1", "", 2900},
+		{"vip_month", "OTHER", "", 2320},
+		{"vip_month", "AGENT1", "vip_month", 2320},
+	} {
+		if appOrderMatchesPricing(existing, tt.productID, tt.amount, tt.upgradeFrom, tt.agentCode) {
+			t.Fatalf("different checkout was incorrectly reusable: %+v", tt)
+		}
 	}
 }
 
@@ -445,6 +540,7 @@ const appBillingTestDriverName = "app_billing_test"
 
 var registerAppBillingTestDriverOnce sync.Once
 var appBillingInsertCount atomic.Int64
+var appBillingLastAmount atomic.Int64
 
 func registerAppBillingTestDriver() {
 	registerAppBillingTestDriverOnce.Do(func() {
@@ -471,7 +567,7 @@ func (c *appBillingTestConn) BeginTx(context.Context, driver.TxOptions) (driver.
 	return appBillingTestTx{}, nil
 }
 
-func (c *appBillingTestConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+func (c *appBillingTestConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	if strings.Contains(query, "UPDATE app_orders") && strings.Contains(query, "INTERVAL '15 minutes'") {
 		if strings.HasPrefix(c.memberLevel, "expired_pending|") {
 			c.expired = true
@@ -481,6 +577,11 @@ func (c *appBillingTestConn) ExecContext(_ context.Context, query string, _ []dr
 	}
 	if strings.Contains(query, "INSERT INTO app_orders") && strings.Contains(query, "pending_confirmation") {
 		appBillingInsertCount.Add(1)
+		if len(args) >= 5 {
+			if amount, ok := args[4].Value.(int64); ok {
+				appBillingLastAmount.Store(amount)
+			}
+		}
 		return driver.RowsAffected(1), nil
 	}
 	return nil, driver.ErrSkip
@@ -489,6 +590,15 @@ func (c *appBillingTestConn) ExecContext(_ context.Context, query string, _ []dr
 func (c *appBillingTestConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	if strings.Contains(query, "FROM site_configs") {
 		return &appBillingTestRows{columns: []string{"config"}}, nil
+	}
+	if c.memberLevel == "agent_self" && strings.Contains(query, "FROM distribution_agents") && strings.Contains(query, "app_user_id=$1") {
+		return &appBillingTestRows{columns: []string{"id", "level", "status", "agent_code"}, values: [][]driver.Value{{int64(1), int64(1), "active", "A10"}}}, nil
+	}
+	if c.memberLevel == "agent_self" && strings.Contains(query, "FROM app_agent_discount_rules") {
+		return &appBillingTestRows{columns: []string{"mode", "value"}, values: [][]driver.Value{{"percent_off", int64(2000)}}}, nil
+	}
+	if strings.Contains(query, "FROM distribution_agents") || strings.Contains(query, "FROM distribution_user_relations") || strings.Contains(query, "FROM app_agent_discount_rules") {
+		return &appBillingTestRows{columns: []string{"id"}}, nil
 	}
 	if strings.Contains(query, "SELECT member_expires_at FROM app_users") {
 		level := strings.TrimPrefix(c.memberLevel, "pending|")

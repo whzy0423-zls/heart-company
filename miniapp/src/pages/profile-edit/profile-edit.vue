@@ -8,6 +8,7 @@ import { getWechatProfilePayload } from '../../utils/wechatProfile'
 // #endif
 import { userErrorMessage } from '../../utils/userMessage'
 import { getUserInfoApi, updateUserInfoApi } from '../../api'
+import { previewImage } from '../../utils/imagePreview'
 
 const user = ref(null)
 const nicknameDraft = ref('')
@@ -188,6 +189,11 @@ function onAvatarError() {
   avatarFailed.value = true
 }
 
+function previewProfileAvatar() {
+  if (!avatarDraft.value || avatarFailed.value) return
+  previewImage(avatarDraft.value)
+}
+
 onShow(() => {
   pageActive = true
   authRedirected = false
@@ -207,14 +213,22 @@ onUnload(invalidateProfileSession)
       <text class="profile-edit-hero__title">让资料更像现在的你</text>
       <text class="profile-edit-hero__lead">更新头像和昵称后，“我的”页面会在下次打开时同步展示。</text>
       <view class="profile-edit-hero__identity">
-        <image
+        <button
           v-if="avatarDraft && !avatarFailed"
-          class="profile-edit-hero__avatar"
-          :src="avatarDraft"
-          mode="aspectFill"
-          lazy-load
-          @error="onAvatarError"
-        />
+          class="profile-edit-avatar-action"
+          type="button"
+          aria-label="预览当前头像"
+          hover-class="profile-edit-avatar-action--pressed"
+          @click="previewProfileAvatar"
+        >
+          <image
+            class="profile-edit-hero__avatar"
+            :src="avatarDraft"
+            mode="aspectFill"
+            lazy-load
+            @error="onAvatarError"
+          />
+        </button>
         <view v-else class="profile-edit-hero__avatar profile-edit-hero__avatar--fallback">{{ nicknameDraft.slice(0, 1) || '九' }}</view>
         <view class="profile-edit-hero__copy">
           <text class="profile-edit-hero__name">{{ nicknameDraft || '九型用户' }}</text>
@@ -314,6 +328,10 @@ onUnload(invalidateProfileSession)
 .profile-edit-hero__lead { display: block; margin-top: 14rpx; color: rgba(255, 255, 255, .80); font-size: 25rpx; line-height: 1.65; }
 .profile-edit-hero__identity { display: flex; align-items: center; gap: 22rpx; margin-top: 30rpx; padding: 22rpx; border-radius: 28rpx; background: rgba(255, 255, 255, .10); border: 2rpx solid rgba(223, 188, 127, .34); }
 .profile-edit-hero__avatar { box-sizing: border-box; width: 104rpx; height: 104rpx; flex: 0 0 104rpx; border-radius: 34rpx; border: 3rpx solid rgba(223, 188, 127, .72); }
+.profile-edit-avatar-action { width: 104rpx; height: 104rpx; min-height: 104rpx; flex: 0 0 104rpx; padding: 0; border: 0; border-radius: 34rpx; background: transparent; overflow: hidden; }
+.profile-edit-avatar-action::after { border: 0; }
+.profile-edit-avatar-action--pressed { opacity: .78; transform: scale(.96); }
+.profile-edit-avatar-action .profile-edit-hero__avatar { width: 104rpx; height: 104rpx; display: block; }
 .profile-edit-hero__avatar--fallback { display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, .10); color: var(--nx-accent-gold); font-size: 42rpx; font-weight: 900; }
 .profile-edit-hero__copy { flex: 1; min-width: 0; }
 .profile-edit-hero__name { display: block; color: var(--nx-surface); font-size: 34rpx; font-weight: 900; line-height: 1.3; }

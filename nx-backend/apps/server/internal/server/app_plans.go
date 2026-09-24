@@ -446,7 +446,25 @@ func (s *Server) adminAppPlanUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	before := s.appPlan(r.Context(), code)
-	row := s.db.QueryRowContext(r.Context(), `UPDATE app_plans SET
+	tx, err := s.db.BeginTx(r.Context(), &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "套餐配置保存失败")
+		return
+	}
+	defer tx.Rollback()
+	var conflictingDiscount bool
+	if err := tx.QueryRowContext(r.Context(), `SELECT EXISTS (
+		SELECT 1 FROM app_agent_discount_rules
+		WHERE product_id=$1 AND enabled=true AND mode='amount_off' AND value >= $2
+	)`, code, input.PriceCents).Scan(&conflictingDiscount); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "套餐配置保存失败")
+		return
+	}
+	if conflictingDiscount {
+		httpx.Fail(w, http.StatusBadRequest, "套餐价格必须高于已启用的代理固定减免金额")
+		return
+	}
+	row := tx.QueryRowContext(r.Context(), `UPDATE app_plans SET
 		name=$2,subtitle=$3,price_cents=$4,original_price_cents=$5,badge=$6,features=$7::jsonb,
 		enabled=$8,sort_order=$9,duration_days=$10,daily_chat_limit=$11,story_monthly_limit=$12,
 		card_limit=$13,deep_chat_enabled=$14,companion_enabled=$15,member_poster_enabled=$16,
@@ -462,6 +480,10 @@ func (s *Server) adminAppPlanUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "套餐配置保存失败")
+		return
+	}
+	if err := tx.Commit(); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "套餐配置保存失败")
 		return
 	}

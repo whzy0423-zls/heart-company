@@ -105,6 +105,16 @@ const routes: RouteRecordRaw[] = [
         name: 'AppPlanManagement',
         path: 'plan-management',
       },
+      {
+        component: () => import('#/views/app/agent-discounts.vue'),
+        meta: {
+          authority: ['App:PlanManagement:View'],
+          icon: 'lucide:badge-percent',
+          title: '代理购卡优惠',
+        },
+        name: 'AppAgentDiscounts',
+        path: 'agent-discounts',
+      },
     ],
   },
 ];

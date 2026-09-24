@@ -12,6 +12,7 @@ export default {
 
 <style>
 @import './styles/apple-mobile.css';
+@import './styles/ui-polish.css';
 
 view,
 text,

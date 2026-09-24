@@ -3500,6 +3500,21 @@ CREATE TABLE IF NOT EXISTS app_plans (
   CHECK (jsonb_typeof(limits) = 'object')
 );
 
+-- 一级代理本人和直属用户的会员套餐优惠；无记录即无额外优惠。
+CREATE TABLE IF NOT EXISTS app_agent_discount_rules (
+  product_id TEXT NOT NULL REFERENCES app_plans(code) ON DELETE CASCADE,
+  audience TEXT NOT NULL CHECK (audience IN ('agent_self','invited_user')),
+  mode TEXT NOT NULL CHECK (mode IN ('percent_off','amount_off')),
+  value INT NOT NULL CHECK (value >= 0),
+  enabled BOOLEAN NOT NULL DEFAULT false,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (product_id, audience),
+  CHECK (product_id IN ('vip_month','vip_quarter','vip_year','svip_month','svip_quarter','svip_year')),
+  CHECK (mode <> 'percent_off' OR value < 10000),
+  CHECK (NOT enabled OR value > 0)
+);
+ALTER TABLE app_agent_discount_rules ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT false;
+
 -- Additive columns are declared before the seed so this file also upgrades an
 -- existing database whose app_plans table predates the membership levels.
 ALTER TABLE app_plans ADD COLUMN IF NOT EXISTS plan_level TEXT NOT NULL DEFAULT 'free';
@@ -3647,6 +3662,9 @@ CREATE TABLE IF NOT EXISTS app_orders (
   product_id      TEXT NOT NULL DEFAULT '',
   title           TEXT NOT NULL DEFAULT '',
   amount          INT NOT NULL DEFAULT 0,
+  base_price_cents INT NOT NULL DEFAULT 0 CHECK (base_price_cents >= 0),
+  discount_cents  INT NOT NULL DEFAULT 0 CHECK (discount_cents >= 0),
+  discount_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(discount_snapshot) = 'object'),
   status          TEXT NOT NULL DEFAULT 'pending',
   transaction_id  TEXT NOT NULL DEFAULT '',
   purchase_mode   TEXT NOT NULL DEFAULT 'customer_service',
@@ -3694,8 +3712,12 @@ ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS member_expires_at_before TIMESTA
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS upgrade_from_plan TEXT NOT NULL DEFAULT '';
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS upgrade_credit_cents INT NOT NULL DEFAULT 0;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS upgrade_quote_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS base_price_cents INT NOT NULL DEFAULT 0;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS discount_cents INT NOT NULL DEFAULT 0;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS discount_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS refund_reason TEXT NOT NULL DEFAULT '';
+UPDATE app_orders SET base_price_cents=amount WHERE base_price_cents=0 AND amount>0;
 UPDATE app_orders SET duration_days=CASE product_id
   WHEN 'vip_month' THEN 30 WHEN 'vip_quarter' THEN 90 WHEN 'vip_year' THEN 365 ELSE 0 END
 WHERE duration_days=0;

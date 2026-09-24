@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -148,7 +147,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 				Sources:         json.RawMessage("[]"),
 				MessageType:     "voice",
 				AudioDurationMs: durationMs,
-				AudioURL:        fmt.Sprintf("/api/app/chat/messages/%d/audio", userMessageID),
+				AudioURL:        chat.VoiceAudioURL(ctx, userMessageID),
 			},
 			Answer: rag.Answer{
 				Answer:  "我没有听清你说了什么。请按住麦克风说话，靠近手机一些，松开后发送。",
@@ -202,6 +201,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 			ConversationCard:    conversationCard,
 			UserPreferences:     preferences,
 			CurrentDirectives:   directives,
+			RuntimeInstructions: enneagramDialogueInstructions(ctx),
 			Tier:                tier,
 		})
 		if err != nil {
@@ -246,7 +246,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.rememberChatAnswer(ctx, userInfo.ID, sess.CardID, transcript, answer.Answer)
-	if assistantMessageID > 0 {
+	if assistantMessageID > 0 && chat.EnneagramType(ctx) == 0 {
 		s.recordAppProfileEvidenceAsync(userInfo.ID, sess.CardID, "voice_text", assistantMessageID, transcript)
 	}
 
@@ -259,7 +259,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 			Sources:         json.RawMessage("[]"),
 			MessageType:     "voice",
 			AudioDurationMs: durationMs,
-			AudioURL:        fmt.Sprintf("/api/app/chat/messages/%d/audio", userMessageID),
+			AudioURL:        chat.VoiceAudioURL(ctx, userMessageID),
 		},
 		Answer:    answer,
 		MessageID: assistantMessageID,

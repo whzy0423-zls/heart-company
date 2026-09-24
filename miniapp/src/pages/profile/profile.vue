@@ -7,6 +7,7 @@ import { hiddenCount, previewItems } from '../../utils/listPreview'
 import { clearBookingSession } from '../../utils/bookingSession'
 import { userErrorMessage } from '../../utils/userMessage'
 import { createWechatPayTestOrderApi, getUserInfoApi, listTestRecordsApi, listBookingsApi } from '../../api'
+import { previewImage } from '../../utils/imagePreview'
 
 const logged = ref(false)
 const user = ref(null)
@@ -187,6 +188,11 @@ function onProfileLogoError() {
   profileLogoFailed.value = true
 }
 
+function previewUserAvatar() {
+  if (!user.value?.avatar || userAvatarFailed.value) return
+  previewImage(user.value.avatar)
+}
+
 function openProfileEdit() {
   uni.navigateTo({ url: '/pages/profile-edit/profile-edit' })
 }
@@ -286,27 +292,38 @@ async function testWechatPayment() {
 
     <template v-else>
       <view class="profile-hero nx-page-hero user">
-        <view
-          class="profile-hero__identity-action"
-          role="button"
-          aria-role="button"
-          aria-label="编辑个人资料"
-          tabindex="0"
-          hover-class="profile-hero__identity-action--pressed"
-          @click="openProfileEdit"
-          @keydown.enter="openProfileEdit"
-          @keydown.space.prevent="openProfileEdit"
-        >
-          <image v-if="user && user.avatar && !userAvatarFailed" class="user__avatar" :src="user.avatar" mode="aspectFill" lazy-load @error="onUserAvatarError" />
+        <view class="profile-hero__identity">
+          <button
+            v-if="user && user.avatar && !userAvatarFailed"
+            class="user-avatar-action"
+            type="button"
+            aria-label="预览个人头像"
+            hover-class="user-avatar-action--pressed"
+            @click="previewUserAvatar"
+          >
+            <image class="user__avatar" :src="user.avatar" mode="aspectFill" lazy-load @error="onUserAvatarError" />
+          </button>
           <image v-else-if="!profileLogoFailed" src="/static/wheel.png" mode="aspectFit" aria-label="九型 Logo" class="user__avatar user__avatar--ph profile-logo" @error="onProfileLogoError" />
           <view v-else class="user__avatar user__avatar--ph">九</view>
-          <view class="user__info">
+          <view
+            class="profile-hero__identity-action"
+            role="button"
+            aria-role="button"
+            aria-label="编辑个人资料"
+            tabindex="0"
+            hover-class="profile-hero__identity-action--pressed"
+            @click="openProfileEdit"
+            @keydown.enter="openProfileEdit"
+            @keydown.space.prevent="openProfileEdit"
+          >
+            <view class="user__info">
             <text class="profile-hero__eyebrow">个人档案</text>
             <text class="user__name">{{ (user && user.nickname) || '九型用户' }}</text>
             <text class="user__type" v-if="user && user.mainType">{{ typeName(user.mainType) }}</text>
             <text class="user__type" v-else>已通过微信登录</text>
+            </view>
+            <text class="profile-hero__identity-arrow" aria-hidden="true">›</text>
           </view>
-          <text class="profile-hero__identity-arrow" aria-hidden="true">›</text>
         </view>
         <text class="profile-hero__title">记录每一次自我看见</text>
         <text class="profile-hero__lead">你的成长轨迹，正在每一次探索中变得更清晰。</text>
@@ -471,7 +488,7 @@ async function testWechatPayment() {
 .profile-login { width: 100%; min-height: 88rpx; margin-top: 16rpx; border-radius: 24rpx; background: var(--nx-surface); color: var(--nx-brand-900); font-size: 28rpx; font-weight: 900; }
 .profile-login::after { border: none; }
 .login__hint { color: rgba(255, 255, 255, .72); font-size: 24rpx; line-height: 1.55; }
-.profile-hero__identity-action { min-height: 88rpx; display: flex; align-items: center; gap: 22rpx; border-radius: 24rpx; cursor: pointer; }
+.profile-hero__identity-action { min-height: 88rpx; flex: 1; min-width: 0; display: flex; align-items: center; gap: 22rpx; border-radius: 24rpx; cursor: pointer; }
 .profile-hero__identity-action--pressed { opacity: .76; transform: scale(.992); }
 .profile-hero__identity-action:focus-visible { outline: 4rpx solid var(--nx-accent-gold); outline-offset: 6rpx; }
 .profile-hero__identity-arrow { flex: none; color: var(--nx-accent-gold); font-size: 40rpx; line-height: 1; }
@@ -481,6 +498,11 @@ async function testWechatPayment() {
 .profile-stat__label { display: block; margin-top: 8rpx; color: rgba(255, 255, 255, .72); font-size: 24rpx; line-height: 1.35; }
 .user__avatar { width: 104rpx; height: 104rpx; flex: 0 0 104rpx; border-radius: 34rpx; border: 3rpx solid rgba(223, 188, 127, .72); box-sizing: border-box; }
 .user__avatar--ph { background: rgba(255, 255, 255, .10); color: var(--nx-accent-gold); font-size: 44rpx; font-weight: 900; display: flex; align-items: center; justify-content: center; }
+.profile-hero__identity { display: flex; align-items: center; gap: 18rpx; min-width: 0; }
+.user-avatar-action { flex: 0 0 auto; width: 92rpx; height: 92rpx; min-height: 92rpx; padding: 0; border: 0; border-radius: 26rpx; background: transparent; overflow: hidden; }
+.user-avatar-action::after { border: 0; }
+.user-avatar-action--pressed { opacity: .78; transform: scale(.96); }
+.user-avatar-action .user__avatar { width: 92rpx; height: 92rpx; display: block; }
 .profile-logo {
   box-sizing: border-box;
   padding: 12rpx;

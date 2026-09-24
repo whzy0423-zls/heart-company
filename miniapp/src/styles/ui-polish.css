@@ -1,0 +1,108 @@
+/* Small layout refinements shared by the existing pages. The brand palette and
+ * page structure stay intact; this layer only tightens rhythm and hierarchy. */
+:root {
+  --nx-layout-gutter: 28rpx;
+  --nx-section-gap: 30rpx;
+  --nx-card-shadow: 0 16rpx 38rpx rgba(32, 42, 55, .08);
+}
+
+.nx-page,
+.wrap {
+  padding-left: var(--nx-layout-gutter);
+  padding-right: var(--nx-layout-gutter);
+}
+
+.page-stack {
+  gap: var(--nx-section-gap);
+}
+
+.nx-panel,
+.ios-card,
+.card {
+  border-radius: 26rpx;
+  box-shadow: var(--nx-card-shadow);
+}
+
+.section-heading {
+  gap: 8rpx;
+  margin-bottom: 18rpx;
+}
+
+.section-heading--row {
+  align-items: flex-end;
+}
+
+.section-link {
+  padding: 0 6rpx;
+}
+
+.service-grid {
+  gap: 16rpx;
+}
+
+.service-entry {
+  min-height: 172rpx;
+  padding: 22rpx;
+  border-radius: 22rpx;
+  box-shadow: 0 12rpx 28rpx rgba(32, 42, 55, .07);
+}
+
+.featured-course,
+.latest-material,
+.booking-prompt {
+  min-height: 112rpx;
+  padding: 20rpx;
+  border-radius: 22rpx;
+}
+
+.learn-content {
+  padding-top: 24rpx;
+  padding-bottom: 56rpx;
+}
+
+.learn-header {
+  min-height: 204rpx;
+  padding: 28rpx;
+  border-radius: 26rpx;
+}
+
+.learn-teacher,
+.learning-panel,
+.type-index {
+  border-radius: 24rpx;
+}
+
+.profile {
+  gap: 22rpx;
+}
+
+.profile-actions {
+  gap: 14rpx;
+}
+
+.history-section,
+.booking-summary,
+.wechat-pay-test {
+  border-radius: 24rpx;
+}
+
+.booking {
+  gap: 28rpx;
+}
+
+.booking-form,
+.booking-success {
+  border-radius: 28rpx;
+}
+
+@media (max-width: 380px) {
+  .nx-page,
+  .wrap { padding-left: 22rpx; padding-right: 22rpx; }
+
+  .service-grid { gap: 12rpx; }
+  .service-entry { min-height: 164rpx; padding: 18rpx; }
+  .service-desc { font-size: 22rpx; }
+  .featured-course,
+  .latest-material,
+  .booking-prompt { padding: 16rpx; gap: 12rpx; }
+}

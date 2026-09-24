@@ -14,7 +14,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/auditlog"
 	"nine-xing/nx-backend/apps/server/internal/auth"
-	appdb "nine-xing/nx-backend/apps/server/internal/db"
+	"nine-xing/nx-backend/apps/server/internal/testdb"
 )
 
 func TestAppOrderLifecycleUsesSnapshotAndRefundsIdempotently(t *testing.T) {
@@ -197,17 +197,14 @@ func TestAppBillingCancelOrderClosesOwnPendingOrderIdempotently(t *testing.T) {
 
 func openAppOrderLifecycleTestDatabase(t *testing.T) *sql.DB {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("set TEST_DATABASE_URL to run app order lifecycle integration tests")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	database, err := appdb.Open(ctx, dsn, "app-order-lifecycle", "test-password-123")
+	database, _ := testdb.OpenEnvIsolatedSchema(t, "app_order_lifecycle")
+	schema, err := os.ReadFile("../db/schema.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = database.Close() })
+	if _, err := database.Exec(string(schema)); err != nil {
+		t.Fatal(err)
+	}
 	return database
 }
 

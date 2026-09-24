@@ -305,16 +305,21 @@ func (s *Server) appUserInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) enrichAppUserRoles(ctx context.Context, user *appuser.User) {
+	_ = s.enrichAppUserRolesStrict(ctx, user)
+}
+
+func (s *Server) enrichAppUserRolesStrict(ctx context.Context, user *appuser.User) error {
 	if s == nil || s.teachers == nil || user == nil || user.ID <= 0 {
-		return
+		return fmt.Errorf("app user roles unavailable")
 	}
 	roles, err := s.teachers.Roles(ctx, user.ID)
 	if err != nil {
-		return
+		return fmt.Errorf("load app user roles: %w", err)
 	}
 	user.Roles = roles.Roles()
 	user.TeacherKey = roles.TeacherKey
 	user.AgentID = roles.AgentID
+	return nil
 }
 
 // --- helpers ---

@@ -20,6 +20,19 @@ import (
 
 const appAvatarMaxBytes = 5 << 20
 
+type appProfileResponse struct {
+	appuser.User
+	Roles []string `json:"roles"`
+}
+
+func newAppProfileResponse(user appuser.User) appProfileResponse {
+	roles := user.Roles
+	if roles == nil {
+		roles = []string{}
+	}
+	return appProfileResponse{User: user, Roles: roles}
+}
+
 func (s *Server) appProfileUpdate(w http.ResponseWriter, r *http.Request) {
 	user, ok := appUserFromContext(r)
 	if !ok {
@@ -37,6 +50,11 @@ func (s *Server) appProfileUpdate(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	roleSnapshot := appuser.User{ID: user.ID}
+	if err := s.enrichAppUserRolesStrict(r.Context(), &roleSnapshot); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "profile roles unavailable")
+		return
+	}
 	updated, err := s.appUsers.UpdateSelfProfile(r.Context(), user.ID, input)
 	if err != nil {
 		status := http.StatusInternalServerError
@@ -50,7 +68,10 @@ func (s *Server) appProfileUpdate(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, status, message)
 		return
 	}
-	httpx.OK(w, updated)
+	updated.Roles = roleSnapshot.Roles
+	updated.TeacherKey = roleSnapshot.TeacherKey
+	updated.AgentID = roleSnapshot.AgentID
+	httpx.OK(w, newAppProfileResponse(updated))
 }
 
 // appProfileAvatarUpload stores an image through the App-authenticated path.
