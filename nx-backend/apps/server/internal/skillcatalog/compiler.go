@@ -251,6 +251,11 @@ func (s *Store) applyCatalogVersionState(ctx context.Context, catalog BuiltinCat
 	}
 	defer tx.Rollback()
 	if command.Action == "rollback" {
+		// A rollback intentionally reactivates an existing immutable snapshot.
+		// The trigger still rejects every unmarked retired-release mutation.
+		if _, err := tx.ExecContext(ctx, `SET LOCAL nine_xing.allow_theory_rollback='on'`); err != nil {
+			return ImportResult{}, err
+		}
 		rows, err := tx.QueryContext(ctx, `
 			SELECT skill.id,version.id
 			FROM app_skill_libraries library
@@ -381,7 +386,7 @@ func compileSkillTheory(ctx context.Context, tx *sql.Tx, category BuiltinCategor
 	theoryKey := "skill-" + definition.Key
 	libraryStatus, releaseStatus, cardStatus := "disabled", "ready", "draft"
 	if publish {
-		libraryStatus, releaseStatus, cardStatus = "enabled", "active", "published"
+		libraryStatus, cardStatus = "enabled", "published"
 	}
 	var libraryID int64
 	err := tx.QueryRowContext(ctx, `
@@ -454,6 +459,14 @@ func compileSkillTheory(ctx context.Context, tx *sql.Tx, category BuiltinCategor
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE theory_library_releases SET card_count=1,chunk_count=$2,update_time=now() WHERE id=$1`, releaseID, len(chunks)); err != nil {
 		return 0, err
+	}
+	if publish {
+		// Build the complete snapshot while it is still editable. The schema
+		// protects active and retired releases from mapping mutations, so the
+		// activation transition must be the final release change.
+		if _, err := tx.ExecContext(ctx, `UPDATE theory_library_releases SET status='active',update_time=now() WHERE id=$1`, releaseID); err != nil {
+			return 0, err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE theory_libraries SET current_version=$2,update_time=now() WHERE id=$1`, libraryID, releaseVersion); err != nil {
 		return 0, err
