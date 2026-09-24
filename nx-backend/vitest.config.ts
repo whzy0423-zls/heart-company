@@ -23,6 +23,10 @@ export default defineConfig({
       '**/node_modules/**',
       '**/{stylelint,eslint}.config.*',
       '**/{oxfmt,oxlint}.config.*',
+      // The infinite canvas has its own Vite aliases and test environment.
+      // Run it with apps/infinite-canvas/vite.config.ts instead of the Vue
+      // admin workspace config used by this root suite.
+      'apps/infinite-canvas/**',
     ],
   },
 });
