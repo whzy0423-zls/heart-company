@@ -2634,9 +2634,11 @@ BEGIN
            OLD.build_error, OLD.activated_by, OLD.activated_at) THEN
       RAISE EXCEPTION 'released theory snapshot is immutable';
     END IF;
-    IF OLD.status = 'retired' AND NEW.status <> 'retired'
-       AND current_setting('nine_xing.allow_theory_rollback', true) IS DISTINCT FROM 'on' THEN
-      RAISE EXCEPTION 'released theory snapshot is immutable';
+    IF OLD.status = 'retired' THEN
+      IF NEW.status <> 'active'
+         OR current_setting('nine_xing.allow_theory_rollback', true) IS DISTINCT FROM 'on' THEN
+        RAISE EXCEPTION 'released theory snapshot is immutable';
+      END IF;
     END IF;
     IF OLD.status = 'active' AND NEW.status NOT IN ('active','retired') THEN
       RAISE EXCEPTION 'released theory snapshot is immutable';
