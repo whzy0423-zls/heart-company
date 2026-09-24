@@ -34,7 +34,7 @@ type releaseScanner interface {
 }
 
 const releaseColumns = `
-	id, platform, app_name, package_name, icon_path, version_name, version_code, release_notes, file_name, file_path,
+	id, platform, app_name, package_name, icon_path, version_name, version_code, min_supported_version_code, force_update, rollout_percentage, release_notes, file_name, file_path,
 	file_size, sha256, status, created_at, published_at`
 
 func NewStore(database *sql.DB) *Store {
@@ -120,6 +120,20 @@ func (s *Store) FindByID(ctx context.Context, id int64) (Release, error) {
 		SELECT `+releaseColumns+`
 		FROM app_releases
 		WHERE id=$1`, id))
+	if err != nil {
+		return Release{}, translateStoreError(err)
+	}
+	return release, nil
+}
+
+func (s *Store) UpdatePolicy(ctx context.Context, id int64, policy AppReleasePolicy) (Release, error) {
+	release, err := scanRelease(s.db.QueryRowContext(ctx, `
+		UPDATE app_releases
+		SET min_supported_version_code=$2, force_update=$3, rollout_percentage=$4
+		WHERE id=$1
+		RETURNING `+releaseColumns,
+		id, policy.MinSupportedVersionCode, policy.ForceUpdate, policy.RolloutPercentage,
+	))
 	if err != nil {
 		return Release{}, translateStoreError(err)
 	}
@@ -280,6 +294,9 @@ func scanRelease(scanner releaseScanner) (Release, error) {
 		&release.IconPath,
 		&release.VersionName,
 		&release.VersionCode,
+		&release.MinSupportedVersionCode,
+		&release.ForceUpdate,
+		&release.RolloutPercentage,
 		&release.ReleaseNotes,
 		&release.FileName,
 		&release.FilePath,

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +25,7 @@ type appReleaseService interface {
 	CreateDraftFromStaged(context.Context, apprelease.StagedFile, string) (apprelease.Release, error)
 	Publish(context.Context, int64) (apprelease.Release, error)
 	Archive(context.Context, int64) (apprelease.Release, error)
+	UpdatePolicy(context.Context, int64, apprelease.AppReleasePolicy) (apprelease.Release, error)
 	Latest(context.Context, string) (apprelease.Release, error)
 	Open(context.Context, int64) (apprelease.Release, *os.File, error)
 	OpenIcon(context.Context, int64) (apprelease.Release, *os.File, error)
@@ -181,10 +183,6 @@ func (s *Server) appReleaseUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) appReleaseMutation(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		httpx.Fail(w, 405, "MethodNotAllowed")
-		return
-	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/app-releases/")
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) != 2 {
@@ -199,9 +197,27 @@ func (s *Server) appReleaseMutation(w http.ResponseWriter, r *http.Request) {
 	var release apprelease.Release
 	switch parts[1] {
 	case "publish":
+		if r.Method != http.MethodPost {
+			httpx.Fail(w, http.StatusMethodNotAllowed, "MethodNotAllowed")
+			return
+		}
 		release, err = s.appReleases.Publish(r.Context(), id)
 	case "archive":
+		if r.Method != http.MethodPost {
+			httpx.Fail(w, http.StatusMethodNotAllowed, "MethodNotAllowed")
+			return
+		}
 		release, err = s.appReleases.Archive(r.Context(), id)
+	case "policy":
+		if r.Method != http.MethodPatch {
+			httpx.Fail(w, http.StatusMethodNotAllowed, "MethodNotAllowed")
+			return
+		}
+		policy, ok := decodeAppReleasePolicy(w, r)
+		if !ok {
+			return
+		}
+		release, err = s.appReleases.UpdatePolicy(r.Context(), id, policy)
 	default:
 		http.NotFound(w, r)
 		return
@@ -211,6 +227,36 @@ func (s *Server) appReleaseMutation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.OK(w, release)
+}
+
+type appReleasePolicyRequest struct {
+	MinSupportedVersionCode *int64 `json:"minSupportedVersionCode"`
+	ForceUpdate             *bool  `json:"forceUpdate"`
+	RolloutPercentage       *int   `json:"rolloutPercentage"`
+}
+
+func decodeAppReleasePolicy(w http.ResponseWriter, r *http.Request) (apprelease.AppReleasePolicy, bool) {
+	var input appReleasePolicyRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		httpx.Fail(w, http.StatusBadRequest, "Invalid policy request")
+		return apprelease.AppReleasePolicy{}, false
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		httpx.Fail(w, http.StatusBadRequest, "Invalid policy request")
+		return apprelease.AppReleasePolicy{}, false
+	}
+	if input.MinSupportedVersionCode == nil || input.ForceUpdate == nil || input.RolloutPercentage == nil {
+		httpx.Fail(w, http.StatusBadRequest, "Invalid policy request")
+		return apprelease.AppReleasePolicy{}, false
+	}
+	return apprelease.AppReleasePolicy{
+		MinSupportedVersionCode: *input.MinSupportedVersionCode,
+		ForceUpdate:             *input.ForceUpdate,
+		RolloutPercentage:       *input.RolloutPercentage,
+	}, true
 }
 
 func (s *Server) publicAppReleaseLatest(w http.ResponseWriter, r *http.Request) {
@@ -232,7 +278,7 @@ func (s *Server) publicAppReleaseLatest(w http.ResponseWriter, r *http.Request) 
 		httpx.Fail(w, 503, "安装包暂时不可用")
 		return
 	}
-	httpx.OK(w, map[string]any{"available": true, "platform": release.Platform, "versionName": release.VersionName, "versionCode": release.VersionCode, "publishedAt": release.PublishedAt, "fileSize": release.FileSize, "sha256": release.SHA256, "releaseNotes": release.ReleaseNotes, "downloadUrl": fmt.Sprintf("/api/public/app-releases/%d/download", release.ID)})
+	httpx.OK(w, map[string]any{"available": true, "platform": release.Platform, "versionName": release.VersionName, "versionCode": release.VersionCode, "minSupportedVersionCode": release.MinSupportedVersionCode, "forceUpdate": release.ForceUpdate, "rolloutPercentage": release.RolloutPercentage, "publishedAt": release.PublishedAt, "fileSize": release.FileSize, "sha256": release.SHA256, "releaseNotes": release.ReleaseNotes, "downloadUrl": fmt.Sprintf("/api/public/app-releases/%d/download", release.ID)})
 }
 
 func (s *Server) publicAppReleaseLatestDownload(w http.ResponseWriter, r *http.Request) {
@@ -313,6 +359,8 @@ func mapAppReleaseError(w http.ResponseWriter, err error) {
 		status, message = 409, "APK identity does not match configuration"
 	case errors.Is(err, apprelease.ErrNotFound):
 		status, message = 404, "Release not found"
+	case errors.Is(err, apprelease.ErrInvalidPolicy):
+		status, message = 400, "Invalid update policy"
 	case errors.Is(err, apprelease.ErrInvalidAPK), errors.Is(err, apprelease.ErrUnsignedAPK), errors.Is(err, apprelease.ErrInvalidExtension), errors.Is(err, apprelease.ErrInvalidVersion):
 		status, message = 400, "Invalid APK"
 	}

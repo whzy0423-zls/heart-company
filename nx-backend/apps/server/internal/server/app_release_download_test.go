@@ -133,6 +133,10 @@ func (*downloadAppReleaseService) Archive(context.Context, int64) (apprelease.Re
 	return apprelease.Release{}, nil
 }
 
+func (*downloadAppReleaseService) UpdatePolicy(context.Context, int64, apprelease.AppReleasePolicy) (apprelease.Release, error) {
+	return apprelease.Release{}, nil
+}
+
 func (*downloadAppReleaseService) Latest(context.Context, string) (apprelease.Release, error) {
 	return apprelease.Release{}, nil
 }

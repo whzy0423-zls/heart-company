@@ -1,20 +1,25 @@
 <script setup lang="ts">
-import type { AppRelease } from '#/api';
+import type { AppRelease, AppReleasePolicyUpdateInput } from '#/api';
 
 import { computed, onMounted, ref } from 'vue';
 
 import { Page } from '@vben/common-ui';
 import { useAccessStore } from '@vben/stores';
 
+import { SettingOutlined } from '@ant-design/icons-vue';
 import {
   Alert,
   Button,
   Card,
+  Form,
   Input,
+  InputNumber,
   message,
   Modal,
   Progress,
+  Slider,
   Space,
+  Switch,
   Table,
   Tag,
   Tooltip,
@@ -25,6 +30,7 @@ import {
   archiveAppReleaseApi,
   getAppReleaseListApi,
   publishAppReleaseApi,
+  updateAppReleasePolicyApi,
   uploadAppReleaseApi,
 } from '#/api';
 import { useUploadAssetPreviewResolver } from '#/utils/upload-asset-preview';
@@ -57,14 +63,23 @@ const pageSize = 20;
 const selectedFile = ref<File | null>(null);
 const releaseNotes = ref('');
 const uploadProgress = ref(0);
+const policyOpen = ref(false);
+const policySaving = ref(false);
+const policyRelease = ref<AppRelease | null>(null);
+const policyForm = ref<AppReleasePolicyUpdateInput>({
+  forceUpdate: false,
+  minSupportedVersionCode: 0,
+  rolloutPercentage: 100,
+});
 const columns = [
   { title: '应用', key: 'app', width: 240 },
   { title: '版本', key: 'version', width: 130 },
   { title: '安装包', key: 'file', width: 190 },
   { title: '状态', key: 'status', width: 100 },
+  { title: '更新策略', key: 'policy', width: 210 },
   { title: '更新时间', dataIndex: 'createdAt', width: 180 },
   { title: '更新说明', dataIndex: 'releaseNotes' },
-  { title: '操作', key: 'action', width: 150 },
+  { title: '操作', key: 'action', width: 250 },
 ];
 async function load() {
   loading.value = true;
@@ -98,6 +113,68 @@ function appDisplayName(record: AppRelease) {
 }
 function appIconPreview(record: AppRelease) {
   return iconPreviewResolver.resolve(record.iconUrl);
+}
+function openPolicy(record: AppRelease) {
+  policyRelease.value = record;
+  policyForm.value = {
+    forceUpdate: record.forceUpdate,
+    minSupportedVersionCode: record.minSupportedVersionCode,
+    rolloutPercentage: record.rolloutPercentage,
+  };
+  policyOpen.value = true;
+}
+function closePolicy() {
+  if (policySaving.value) return;
+  policyOpen.value = false;
+}
+function onPolicyAfterClose() {
+  policyRelease.value = null;
+  policyForm.value = {
+    forceUpdate: false,
+    minSupportedVersionCode: 0,
+    rolloutPercentage: 100,
+  };
+}
+function validatePolicy() {
+  const record = policyRelease.value;
+  if (!record) return false;
+  const minimum = policyForm.value.minSupportedVersionCode;
+  if (
+    !Number.isInteger(minimum) ||
+    minimum < 0 ||
+    minimum > record.versionCode
+  ) {
+    message.error(`最低支持版本号必须是 0 到 ${record.versionCode} 之间的整数`);
+    return false;
+  }
+  const rollout = policyForm.value.rolloutPercentage;
+  if (!Number.isInteger(rollout) || rollout < 1 || rollout > 100) {
+    message.error('灰度发布比例必须是 1 到 100 之间的整数');
+    return false;
+  }
+  return true;
+}
+async function savePolicy() {
+  const record = policyRelease.value;
+  if (policySaving.value || !record || !validatePolicy()) return;
+  policySaving.value = true;
+  try {
+    const updated = await updateAppReleasePolicyApi(record.id, {
+      forceUpdate: policyForm.value.forceUpdate,
+      minSupportedVersionCode: policyForm.value.minSupportedVersionCode,
+      rolloutPercentage: policyForm.value.rolloutPercentage,
+    });
+    if (current.value?.id === updated.id) current.value = updated;
+    items.value = items.value.map((item) =>
+      item.id === updated.id ? updated : item,
+    );
+    policyOpen.value = false;
+    message.success('更新策略已保存');
+  } catch {
+    message.error('更新策略保存失败，请重试');
+  } finally {
+    policySaving.value = false;
+  }
 }
 async function upload() {
   if (!selectedFile.value) {
@@ -190,6 +267,13 @@ onMounted(load);
               </span>
               <Tag v-if="!current.fileAvailable" color="error">文件缺失</Tag>
             </div>
+            <div class="release-policy-summary">
+              <span>最低支持版本 #{{ current.minSupportedVersionCode }}</span>
+              <Tag :color="current.forceUpdate ? 'error' : 'default'">
+                {{ current.forceUpdate ? '强制更新' : '可选更新' }}
+              </Tag>
+              <span>灰度 {{ current.rolloutPercentage }}%</span>
+            </div>
           </div>
         </div>
       </template>
@@ -238,7 +322,7 @@ onMounted(load);
         :data-source="items"
         :loading="loading"
         row-key="id"
-        :scroll="{ x: 1320 }"
+        :scroll="{ x: 1510 }"
         :pagination="{ current: page, pageSize, total }"
         @change="
           (p: any) => {
@@ -276,9 +360,7 @@ onMounted(load);
           <template v-else-if="column.key === 'file'">
             <div>{{ record.fileName }}</div>
             <small>{{ formatReleaseFileSize(record.fileSize) }}</small>
-            <Tag v-if="!record.fileAvailable" color="error">
-              文件缺失
-            </Tag>
+            <Tag v-if="!record.fileAvailable" color="error"> 文件缺失 </Tag>
           </template>
           <template v-else-if="column.key === 'status'">
             <Tag
@@ -293,8 +375,23 @@ onMounted(load);
               {{ releaseStatusLabel(record.status) }}
             </Tag>
           </template>
+          <template v-else-if="column.key === 'policy'">
+            <div class="release-policy-cell">
+              <span>最低支持版本 #{{ record.minSupportedVersionCode }}</span>
+              <div class="release-policy-cell__status">
+                <Tag :color="record.forceUpdate ? 'error' : 'default'">
+                  {{ record.forceUpdate ? '强制更新' : '可选更新' }}
+                </Tag>
+                <span>灰度 {{ record.rolloutPercentage }}%</span>
+              </div>
+            </div>
+          </template>
           <template v-else-if="column.key === 'action'">
-            <Space v-if="canWrite">
+            <Space v-if="canWrite" class="release-actions" wrap>
+              <Button size="small" @click="openPolicy(asRelease(record))">
+                <template #icon><SettingOutlined /></template>
+                更新策略
+              </Button>
               <Button
                 v-if="canPublishRelease(asRelease(record))"
                 type="primary"
@@ -316,6 +413,70 @@ onMounted(load);
         </template>
       </Table>
     </Card>
+    <Modal
+      :open="policyOpen"
+      :confirm-loading="policySaving"
+      :closable="!policySaving"
+      :mask-closable="!policySaving"
+      :title="
+        policyRelease
+          ? `更新 ${policyRelease.versionName} (#${policyRelease.versionCode}) 的更新策略`
+          : '更新策略'
+      "
+      width="min(520px, calc(100vw - 32px))"
+      @cancel="closePolicy"
+      @after-close="onPolicyAfterClose"
+      @ok="savePolicy"
+      :cancel-button-props="{ disabled: policySaving }"
+    >
+      <Form layout="vertical">
+        <Form.Item label="最低支持版本号">
+          <InputNumber
+            id="release-policy-minimum"
+            v-model:value="policyForm.minSupportedVersionCode"
+            aria-label="最低支持版本号"
+            :disabled="policySaving"
+            :min="0"
+            :max="policyRelease?.versionCode ?? 0"
+            :precision="0"
+            style="width: 100%"
+          />
+        </Form.Item>
+        <Form.Item label="强制更新">
+          <Switch
+            id="release-policy-force"
+            v-model:checked="policyForm.forceUpdate"
+            aria-label="强制更新"
+            :disabled="policySaving"
+          />
+        </Form.Item>
+        <Form.Item label="灰度发布比例">
+          <div class="policy-rollout-control">
+            <Slider
+              v-model:value="policyForm.rolloutPercentage"
+              aria-label-for-handle="灰度发布比例滑块"
+              :disabled="policySaving"
+              :min="1"
+              :max="100"
+            />
+            <InputNumber
+              id="release-policy-rollout"
+              v-model:value="policyForm.rolloutPercentage"
+              aria-label="灰度发布比例"
+              :disabled="policySaving"
+              :min="1"
+              :max="100"
+              :precision="0"
+            />
+          </div>
+        </Form.Item>
+      </Form>
+      <Alert
+        type="info"
+        show-icon
+        message="强制更新优先于灰度比例；Android 安装仍需用户确认。"
+      />
+    </Modal>
   </Page>
 </template>
 
@@ -345,10 +506,29 @@ onMounted(load);
 }
 
 .current-release__heading,
-.current-release__details {
+.current-release__details,
+.release-policy-summary,
+.release-policy-cell__status {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
+}
+
+.release-policy-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.release-actions {
+  white-space: nowrap;
+}
+
+.policy-rollout-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 88px;
+  gap: 16px;
   align-items: center;
 }
 
@@ -374,6 +554,10 @@ onMounted(load);
 @media (max-width: 640px) {
   .current-release {
     align-items: flex-start;
+  }
+
+  .policy-rollout-control {
+    grid-template-columns: 1fr;
   }
 }
 </style>
