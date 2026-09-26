@@ -1624,7 +1624,7 @@ img[data-zoom] { cursor: zoom-in; }
 @media (max-width: 760px) {
   .customer-service-fab {
     right: 14px;
-    bottom: calc(156px + env(safe-area-inset-bottom));
+    bottom: calc(80px + env(safe-area-inset-bottom));
     min-height: 42px;
     padding: 0 14px;
     font-size: 13px;
