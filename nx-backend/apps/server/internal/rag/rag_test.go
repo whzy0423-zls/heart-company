@@ -349,6 +349,30 @@ func TestAskSuggestionsUseRecentRelevantHistoryForShortContinuation(t *testing.T
 	}
 }
 
+func TestAskSuggestionsUseRelevantHistoryForDetailedContextualContinuation(t *testing.T) {
+	service := NewService(nil, WithGenerator(&fakeGenerator{answer: "可以先暂停，再把感受说清楚。"}))
+
+	answer, err := service.Ask(context.Background(), AskInput{
+		Question: "那刚才第二个句子，如果对方还是继续辩解，我下一句怎么说？",
+		History: []Message{
+			{Role: "user", Content: "今天上海天气怎么样？"},
+			{Role: "assistant", Content: "请查看实时天气服务。"},
+			{Role: "user", Content: "为什么伴侣在冲突中越解释，我反而越觉得不被理解？"},
+			{Role: "assistant", Content: "可以先请对方回应你的感受。"},
+		},
+		ConversationCard: ConversationCard{CardType: "primary", Name: "本人", MainType: 4},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(answer.Suggestions) != 3 {
+		t.Fatalf("suggestions = %+v, want 3", answer.Suggestions)
+	}
+	if !containsSuggestionText(answer.Suggestions, "伴侣冲突中被理解") {
+		t.Fatalf("suggestions lost the relevant relationship focus: %+v", answer.Suggestions)
+	}
+}
+
 func TestAskUnrelatedQuestionDoesNotProduceEnneagramSuggestions(t *testing.T) {
 	service := NewService(nil, WithGenerator(&fakeGenerator{answer: "先热锅，再炒鸡蛋。"}))
 

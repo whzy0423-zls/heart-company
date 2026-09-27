@@ -830,8 +830,14 @@ func recentHistorySuggestionFocus(history []Message, mainType int) (string, bool
 
 func isSuggestionContinuation(text string) bool {
 	text = strings.TrimSpace(strings.Trim(text, "，。！？；：,.!?;: \t\n\r"))
-	if text == "" || utf8.RuneCountInString(text) > 18 {
+	runeCount := utf8.RuneCountInString(text)
+	if text == "" || runeCount > 48 {
 		return false
+	}
+	if runeCount > 18 {
+		return containsAny(text, "刚才", "上面", "前面", "第一个", "第二个", "第三个") &&
+			containsAny(text, "伴侣", "关系", "对方", "感受", "辩解", "解释", "冲突", "边界") &&
+			containsAny(text, "下一句", "怎么说", "怎么办", "怎么做", "为什么", "继续", "再")
 	}
 	for _, prefix := range []string{"继续", "能再", "可以再", "再说", "再讲", "再展开", "再具体", "具体说"} {
 		if strings.HasPrefix(text, prefix) {
