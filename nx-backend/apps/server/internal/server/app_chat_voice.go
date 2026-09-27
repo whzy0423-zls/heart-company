@@ -100,9 +100,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), s.chatTimeout)
-	defer cancel()
-	transcript, err := s.recognizeSpeech(ctx, audioData, header.Filename)
+	transcript, err := s.recognizeSpeech(r.Context(), audioData, header.Filename)
 	if err != nil {
 		if errors.Is(err, errASRNotConfigured) {
 			httpx.Fail(w, http.StatusServiceUnavailable, err.Error())
@@ -112,6 +110,9 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	transcript = strings.TrimSpace(transcript)
+	_, chatTimeout := s.chatRuntime()
+	ctx, cancel := context.WithTimeout(r.Context(), chatTimeout)
+	defer cancel()
 	if !hasVoiceTranscriptContent(transcript) {
 		contentType := strings.TrimSpace(header.Header.Get("Content-Type"))
 		if contentType == "" {

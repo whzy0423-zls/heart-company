@@ -56,6 +56,44 @@ func TestVoiceChatReturnsUnavailableWhenASRIsNotConfigured(t *testing.T) {
 	}
 }
 
+func TestVoiceChatStartsGenerationTimeoutAfterASRCompletes(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(60 * time.Millisecond)
+		_ = json.NewEncoder(w).Encode(map[string]string{"text": "我在关系里为什么总怕被抛弃？"})
+	}))
+	defer upstream.Close()
+	previousClientFactory := newASRHTTPClient
+	newASRHTTPClient = func(timeout time.Duration) *http.Client {
+		client := upstream.Client()
+		client.Timeout = timeout
+		return client
+	}
+	t.Cleanup(func() { newASRHTTPClient = previousClientFactory })
+
+	store := &fakeVoiceChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	generator := contextCheckingVoiceGenerator{}
+	s := newVoiceChatTestServer(store, generator)
+	s.chatTimeout = 30 * time.Millisecond
+	s.env.ASR = config.ASRConfig{APIBase: upstream.URL, APIKey: "test-key", Model: "whisper-1", TimeoutSeconds: 1}
+	s.voiceAssetCreate = func(context.Context, uploadasset.CreateInput) (uploadasset.Asset, error) {
+		return uploadasset.Asset{ID: 88}, nil
+	}
+	body, contentType := voiceChatMultipartBody(t, "voice.aac", "audio/aac", "audio", "2200")
+	request := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/voice", body)
+	request.Header.Set("Content-Type", contentType)
+	request = request.WithContext(contextWithAppUser(request.Context(), auth.UserInfo{ID: 7}))
+	response := httptest.NewRecorder()
+
+	s.appChatRouter(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("voice status=%d body=%s", response.Code, response.Body.String())
+	}
+	if store.transcript != "我在关系里为什么总怕被抛弃？" || store.assistantAnswer != "先确认当下发生了什么。" {
+		t.Fatalf("saved pair = %q / %q", store.transcript, store.assistantAnswer)
+	}
+}
+
 func TestVoiceChatPersistsAudioAndHidesTranscriptFromResponse(t *testing.T) {
 	const hiddenTranscript = "孩子最近不愿意沟通"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -719,6 +757,15 @@ type voiceChatGenerator struct {
 	question string
 	calls    int
 	input    rag.GenerateInput
+}
+
+type contextCheckingVoiceGenerator struct{}
+
+func (contextCheckingVoiceGenerator) Generate(ctx context.Context, _ rag.GenerateInput) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return "先确认当下发生了什么。", nil
 }
 
 func (g *voiceChatGenerator) Generate(_ context.Context, input rag.GenerateInput) (string, error) {

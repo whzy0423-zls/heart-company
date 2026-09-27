@@ -161,15 +161,9 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 		return
 	}
 
-	timeout := s.chatTimeout
-	if timeout < time.Second {
-		timeout = 90 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
-	defer cancel()
 	_ = writeAppChatSSE(w, flusher, "state", map[string]string{"state": "transcribing"})
 	asrStarted := time.Now()
-	transcript, err := s.transcribeXinzhili(ctx, cfg, audio, header.Filename)
+	transcript, err := s.transcribeXinzhili(r.Context(), cfg, audio, header.Filename)
 	if err != nil {
 		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"code": "asr_failed", "message": "语音识别失败，请再试一次"})
 		return
@@ -184,6 +178,12 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 		return
 	}
 	normalizeVoiceOutputToChinese := shouldNormalizeXinzhiliVoiceOutputToChinese(transcript)
+	_, timeout := s.chatRuntime()
+	if timeout < time.Second {
+		timeout = 90 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
 
 	session, err := s.xinzhiliVoiceSession(ctx, userInfo.ID)
 	if err != nil {

@@ -65,10 +65,7 @@ func (s *Server) appSkillSessionVoice(w http.ResponseWriter, r *http.Request, ap
 		httpx.Fail(w, http.StatusBadRequest, "音频文件无效或过大")
 		return
 	}
-	_, timeout := s.chatRuntime()
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
-	defer cancel()
-	transcript, err := s.recognizeSpeech(ctx, audioData, header.Filename)
+	transcript, err := s.recognizeSpeech(r.Context(), audioData, header.Filename)
 	if err != nil {
 		if errors.Is(err, errASRNotConfigured) {
 			httpx.Fail(w, http.StatusServiceUnavailable, err.Error())
@@ -78,6 +75,9 @@ func (s *Server) appSkillSessionVoice(w http.ResponseWriter, r *http.Request, ap
 		return
 	}
 	transcript = strings.TrimSpace(transcript)
+	_, timeout := s.chatRuntime()
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
 	contentType := strings.TrimSpace(header.Header.Get("Content-Type"))
 	if contentType == "" {
 		contentType = "application/octet-stream"

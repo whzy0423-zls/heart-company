@@ -341,6 +341,34 @@ func TestAppXinzhiliVoiceTurnStreamsTranscriptTextAudioAndPersists(t *testing.T)
 	}
 }
 
+func TestAppXinzhiliVoiceTurnStartsGenerationTimeoutAfterASRCompletes(t *testing.T) {
+	s := newSuccessfulXinzhiliVoiceServer(t)
+	s.chatTimeout = time.Second
+	s.xinzhiliTranscribe = func(context.Context, []byte, string) (string, error) {
+		time.Sleep(1100 * time.Millisecond)
+		return "我最近总是着急", nil
+	}
+	s.ragGen = xinzhiliStreamingGeneratorFunc(func(ctx context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if err := emit("先停一下。再感受身体。"); err != nil {
+			return "", err
+		}
+		return "先停一下。再感受身体。", nil
+	})
+	req := newXinzhiliMultipartRequest(t, []byte("wav"), 1300)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 7}))
+	res := httptest.NewRecorder()
+
+	s.appXinzhiliVoiceTurnStream(res, req)
+
+	body := res.Body.String()
+	if !strings.Contains(body, "event: done\n") || strings.Contains(body, `"code":"generation_failed"`) {
+		t.Fatalf("generation did not receive a fresh timeout after ASR: %s", body)
+	}
+}
+
 func TestAppXinzhiliVoiceTurnAddsNaturalVoiceResponseDirective(t *testing.T) {
 	var captured rag.GenerateInput
 	s := newSuccessfulXinzhiliVoiceServer(t)
