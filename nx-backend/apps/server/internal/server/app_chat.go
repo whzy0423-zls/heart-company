@@ -733,6 +733,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		SourceSnippetRunes: replyPlan.SourceSnippetRunes,
 	})
 	if err != nil {
+		log.Printf("app_chat_sync generation_error user_id=%d session_id=%d error=%q", userInfo.ID, sessionID, err)
 		logAppChatTerminalTiming("sync", "error", userInfo.ID, sessionID, requestStartedAt, appChatFailurePhase(ctx, "provider"), 0)
 		httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
 		return

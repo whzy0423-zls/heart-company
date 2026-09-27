@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -209,6 +210,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 			Tier:                tier,
 		})
 		if err != nil {
+			log.Printf("app_chat_voice generation_error user_id=%d session_id=%d error=%q", userInfo.ID, sessionID, err)
 			httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
 			return
 		}
