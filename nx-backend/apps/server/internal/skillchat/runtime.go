@@ -19,15 +19,16 @@ import (
 )
 
 const (
-	skillHistoryLimit        = 20
-	skillSearchLimit         = 6
-	skillSearchMinScore      = 0.20
-	skillContextRunes        = 4000
-	skillContextChunkRunes   = 1600
-	skillMaxOutputTokens     = 700
-	skillCompletionTimeout   = 70 * time.Second
-	publicSourceSnippetRunes = 120
-	skillPersistenceTimeout  = 5 * time.Second
+	skillHistoryLimit         = 20
+	skillSearchLimit          = 6
+	skillSearchMinScore       = 0.20
+	skillPinnedSearchMinScore = 0.0
+	skillContextRunes         = 4000
+	skillContextChunkRunes    = 1600
+	skillMaxOutputTokens      = 700
+	skillCompletionTimeout    = 70 * time.Second
+	publicSourceSnippetRunes  = 120
+	skillPersistenceTimeout   = 5 * time.Second
 )
 
 type RuntimeStore interface {
@@ -206,7 +207,7 @@ func (r *Runtime) Generate(ctx context.Context, appUserID, sessionID int64, ques
 
 func (r *Runtime) retrieveKnowledge(ctx context.Context, appUserID int64, session Session, question string) (appknowledge.RemoteResult, error) {
 	local := func() (appknowledge.RemoteResult, error) {
-		documents, err := r.searcher.SearchReleaseChunks(ctx, session.TheoryReleaseID, question, skillSearchLimit, skillSearchMinScore)
+		documents, err := r.searcher.SearchReleaseChunks(ctx, session.TheoryReleaseID, question, skillSearchLimit, skillPinnedSearchMinScore)
 		return appknowledge.RemoteResult{Documents: documents, RetrievalMethod: "local"}, err
 	}
 	request := appknowledge.RemoteRequest{

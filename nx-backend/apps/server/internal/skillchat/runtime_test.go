@@ -155,6 +155,28 @@ func TestRuntimeFallbackUsesPinnedLocalReleaseWhenRemoteReturnsNoDocuments(t *te
 	}
 }
 
+func TestRuntimePinnedSkillKeepsAReleaseSourceWhenQuestionHasNoLexicalOverlap(t *testing.T) {
+	store := &runtimeStoreStub{session: runnableRuntimeSession()}
+	search := &minScoreGatedRuntimeSearchStub{
+		document: rag.Document{ID: "theory:711", Title: "学习之道", Content: "划小圈练习"},
+	}
+	runtime := NewRuntime(store, search, &runtimeGeneratorStub{answer: "完整回答。"})
+
+	result, err := runtime.Ask(context.Background(), 7, 41, "把刚才的计划压缩成三个步骤。")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if search.releaseID != store.session.TheoryReleaseID {
+		t.Fatalf("release id=%d, want pinned release %d", search.releaseID, store.session.TheoryReleaseID)
+	}
+	if search.minScore != 0 {
+		t.Fatalf("min score=%v, want 0 for an already pinned skill release", search.minScore)
+	}
+	if len(result.Sources) != 1 || result.Sources[0].ID != "theory:711" {
+		t.Fatalf("pinned skill sources=%+v", result.Sources)
+	}
+}
+
 func TestSkillRuntimeInstructionsApplyPublishedSafetyProfile(t *testing.T) {
 	relationship := skillRuntimeInstructions("亲密关系规则", "sensitive-relationships-v1")
 	for _, expected := range []string{"亲密关系规则", "胁迫控制", "性同意", "即时危险", "不要把胁迫或暴力当作普通沟通冲突"} {
@@ -276,6 +298,12 @@ type runtimeSearchStub struct {
 	called    bool
 }
 
+type minScoreGatedRuntimeSearchStub struct {
+	document  rag.Document
+	releaseID int64
+	minScore  float64
+}
+
 type runtimeRemoteStub struct {
 	request appknowledge.RemoteRequest
 	result  appknowledge.RemoteResult
@@ -292,6 +320,14 @@ func (s *runtimeRemoteStub) Retrieve(_ context.Context, request appknowledge.Rem
 func (s *runtimeSearchStub) SearchReleaseChunks(_ context.Context, releaseID int64, _ string, _ int, _ float64) ([]rag.Document, error) {
 	s.called, s.releaseID = true, releaseID
 	return append([]rag.Document(nil), s.documents...), nil
+}
+
+func (s *minScoreGatedRuntimeSearchStub) SearchReleaseChunks(_ context.Context, releaseID int64, _ string, _ int, minScore float64) ([]rag.Document, error) {
+	s.releaseID, s.minScore = releaseID, minScore
+	if minScore > 0 {
+		return nil, nil
+	}
+	return []rag.Document{s.document}, nil
 }
 
 type runtimeGeneratorStub struct {
