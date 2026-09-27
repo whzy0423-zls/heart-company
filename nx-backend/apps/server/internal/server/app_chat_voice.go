@@ -199,6 +199,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 			ConversationSummary: promptContext.Summary,
 			Question:            transcript,
 			RetrievalQuery:      retrievalQuery,
+			SuggestionMainType:  chat.EnneagramType(ctx),
 			UserProfile:         profile,
 			ConversationCard:    conversationCard,
 			UserPreferences:     preferences,

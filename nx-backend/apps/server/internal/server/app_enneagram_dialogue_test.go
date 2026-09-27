@@ -104,6 +104,40 @@ func TestEnneagramDialogueDoesNotSchedulePersistentPreferenceFallback(t *testing
 	}
 }
 
+func TestEnneagramDialogueSuggestionsUseSelectedRoleWithoutImportingUserCard(t *testing.T) {
+	plain := &capturingNonStreamingAppChatGenerator{answer: "先把担忧拆成风险、信号和预案。"}
+	s := newAppChatStreamServer(newFakeAppChatStreamStore(), plain)
+	s.chatLimiter = newFixedWindowRateLimiter(100, time.Minute)
+	s.appChatProfilesForCardOverride = func(context.Context, int64, int64) (rag.UserProfile, rag.ConversationCard) {
+		t.Fatal("role dialogue must not read the user's card")
+		return rag.UserProfile{}, rag.ConversationCard{}
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/app/enneagram/6/chat/sessions/42/ask", strings.NewReader(`{"question":"当我担心合作项目出问题时，怎么把焦虑变成准备？"}`))
+	request = request.WithContext(contextWithAppUser(request.Context(), auth.UserInfo{ID: 7}))
+	response := httptest.NewRecorder()
+
+	s.appEnneagramDialogueRouter(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		Data askResponse `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Data.Suggestions) != 3 {
+		t.Fatalf("suggestions=%+v, want 3", envelope.Data.Suggestions)
+	}
+	for _, suggestion := range envelope.Data.Suggestions {
+		if !strings.Contains(suggestion, "6号") {
+			t.Fatalf("suggestion lost selected role: %q", suggestion)
+		}
+	}
+	assertEnneagramInput(t, plain.input, 6)
+}
+
 func TestEnneagramDialogueVoiceUsesRoleAndScopedAudioURL(t *testing.T) {
 	for _, transcript := range []string{"我今天想把任务安排得更合理。", "。。。"} {
 		t.Run(transcript, func(t *testing.T) {

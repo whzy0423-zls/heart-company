@@ -87,6 +87,7 @@ type AskInput struct {
 	ConversationSummary string           `json:"conversationSummary,omitempty"`
 	Question            string           `json:"question"`
 	RetrievalQuery      string           `json:"-"`
+	SuggestionMainType  int              `json:"-"`
 	UserProfile         UserProfile      `json:"userProfile"`
 	ConversationCard    ConversationCard `json:"conversationCard,omitempty"`
 	UserPreferences     []string         `json:"userPreferences,omitempty"`
@@ -775,6 +776,9 @@ func mainChatPresetFocus(question string) string {
 }
 
 func suggestionMainType(input AskInput) int {
+	if input.SuggestionMainType >= 1 && input.SuggestionMainType <= 9 {
+		return input.SuggestionMainType
+	}
 	if mainType := input.ConversationCard.MainType; mainType >= 1 && mainType <= 9 {
 		return mainType
 	}
