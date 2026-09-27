@@ -293,6 +293,9 @@ func (s *Server) ensureAppChatMessageWritable(ctx context.Context, appUserID, me
 }
 
 func (s *Server) retrieveAppChatKnowledge(ctx context.Context, userID, sessionID, cardID int64, query string) ([]rag.Document, *chat.KnowledgeTrace, error) {
+	if shouldSkipAppChatKnowledge(query) {
+		return nil, nil, nil
+	}
 	if chat.EnneagramType(ctx) > 0 {
 		// A selected role must not bind the user's measured-type knowledge or memories.
 		return nil, nil, nil
@@ -301,7 +304,36 @@ func (s *Server) retrieveAppChatKnowledge(ctx context.Context, userID, sessionID
 }
 
 func (s *Server) retrieveAppChatKnowledgeForTypes(ctx context.Context, userID, sessionID, cardID int64, query string, requestedTypes []int) ([]rag.Document, *chat.KnowledgeTrace, error) {
+	if shouldSkipAppChatKnowledge(query) {
+		return nil, nil, nil
+	}
 	return s.retrieveKnowledgeForScene(ctx, s.appKnowledge, "app_chat", userID, sessionID, cardID, query, requestedTypes...)
+}
+
+func shouldSkipAppChatKnowledge(query string) bool {
+	normalized := strings.TrimSpace(strings.Trim(query, "，。！？；：,.!?;: \t\n\r"))
+	normalized = strings.Join(strings.Fields(normalized), "")
+	for _, casual := range []string{
+		"你好", "您好", "嗨", "哈喽", "hello", "hi", "在吗", "你在吗", "你在干嘛", "你在做什么",
+		"早上好", "上午好", "下午好", "晚上好", "晚安", "谢谢", "谢谢你", "好的", "好",
+	} {
+		if strings.EqualFold(normalized, casual) {
+			return true
+		}
+	}
+	if strings.Contains(normalized, "刚才") && containsAnyString(normalized, "改成", "换成", "缩成", "总结", "重写", "一句话", "简短") {
+		return true
+	}
+	return strings.HasPrefix(normalized, "把第一个方法") && containsAnyString(normalized, "改成", "换成", "缩成", "一句话", "简短")
+}
+
+func containsAnyString(value string, candidates ...string) bool {
+	for _, candidate := range candidates {
+		if strings.Contains(value, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) retrieveXinzhiliKnowledge(ctx context.Context, userID, sessionID, cardID int64, query string) ([]rag.Document, *chat.KnowledgeTrace, error) {

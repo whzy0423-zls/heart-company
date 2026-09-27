@@ -21,6 +21,35 @@ import (
 
 const layeredKnowledgeQuestion = "工作压力很大时应该怎么办？"
 
+func TestAppChatSkipsKnowledgeForCasualAndContextualUtilityTurns(t *testing.T) {
+	questions := []string{
+		"你在干嘛？",
+		"把你刚才说的第一步改成一句话。",
+	}
+	for _, question := range questions {
+		t.Run(question, func(t *testing.T) {
+			store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+			store.cardID = 77
+			resolver := &layeredKnowledgeResolver{mainType: 4, revision: 1}
+			generator := &layeredKnowledgeGenerator{}
+			server := newLayeredKnowledgeServer(t, store, resolver, newLayeredKnowledgeSearcher(), generator)
+
+			response := httptest.NewRecorder()
+			server.appChatRouter(response, layeredKnowledgeRequest(t, "/api/app/chat/sessions/42/ask", question))
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			if resolver.calls != 0 {
+				t.Fatalf("knowledge resolver calls=%d, want 0", resolver.calls)
+			}
+			if sources := generator.lastSources(); len(sources) != 0 {
+				t.Fatalf("knowledge sources=%+v, want none", sources)
+			}
+		})
+	}
+}
+
 func TestAppChatAskUsesLayeredKnowledgeAndPersistsInternalTrace(t *testing.T) {
 	store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
 	store.cardID = 77

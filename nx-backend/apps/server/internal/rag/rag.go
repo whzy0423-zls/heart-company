@@ -860,7 +860,21 @@ func normalizeSuggestionFocus(text string, mainType int) string {
 	if text == "" {
 		return ""
 	}
+	if topic := conciseSuggestionTopic(text, mainType); topic != "" {
+		return topic
+	}
 	return trimSuggestionFocusRunes(text, 28)
+}
+
+func conciseSuggestionTopic(text string, mainType int) string {
+	firstClause := text
+	if index := strings.IndexAny(firstClause, "?？"); index >= 0 {
+		firstClause = strings.TrimSpace(firstClause[:index])
+	}
+	if enneagramTypeFromText(firstClause) == mainType && strings.Contains(firstClause, "拖延") {
+		return "拖延"
+	}
+	return ""
 }
 
 func isEnneagramRelevantFocus(text string) bool {

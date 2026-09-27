@@ -1090,6 +1090,26 @@ func TestSuggestionFocusIsAtMostTwentyEightRunes(t *testing.T) {
 	}
 }
 
+func TestSuggestionsExtractCompleteTopicBeforeAnswerInstructions(t *testing.T) {
+	suggestions := buildSuggestions(AskInput{
+		Question:         "拖延是不是因为我是4号？请直接回答，并给一个今天能做的动作。",
+		ConversationCard: ConversationCard{MainType: 4},
+	})
+	if len(suggestions) != 3 {
+		t.Fatalf("suggestions=%+v, want 3", suggestions)
+	}
+	for _, suggestion := range suggestions {
+		if !strings.Contains(suggestion, "拖延") {
+			t.Fatalf("suggestion lost topic: %q", suggestion)
+		}
+		for _, fragment := range []string{"请直接回答", "并给一个今天能做的动"} {
+			if strings.Contains(suggestion, fragment) {
+				t.Fatalf("suggestion copied an answer instruction or truncated clause: %q", suggestion)
+			}
+		}
+	}
+}
+
 func containsSuggestionText(suggestions []string, text string) bool {
 	for _, suggestion := range suggestions {
 		if strings.Contains(suggestion, text) {

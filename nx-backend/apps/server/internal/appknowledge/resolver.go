@@ -20,6 +20,7 @@ type Binding struct {
 	EnneagramType *int   `json:"enneagramType,omitempty"`
 	LibraryID     int64  `json:"libraryId"`
 	LibraryKey    string `json:"libraryKey"`
+	LibraryName   string `json:"libraryName"`
 	ReleaseID     int64  `json:"releaseId"`
 }
 
@@ -47,6 +48,7 @@ type bindingRow struct {
 	EnneagramType *int
 	LibraryID     int64
 	LibraryKey    string
+	LibraryName   string
 	LibraryStatus string
 	ReleaseID     int64
 	ReleaseStatus string
@@ -121,7 +123,7 @@ type bindingQueryer interface {
 func queryBindings(ctx context.Context, queryer bindingQueryer, mainType int, requestedTypes []int) (Resolution, error) {
 	normalizedTypes := normalizeRequestedTypes(requestedTypes)
 	query := `
-		SELECT binding.layer_kind,binding.enneagram_type,library.id,library.key,library.status,
+		SELECT binding.layer_kind,binding.enneagram_type,library.id,library.key,library.name,library.status,
 			release.id,release.status
 		FROM app_chat_knowledge_bindings binding
 		JOIN theory_libraries library ON library.id=binding.theory_library_id
@@ -155,7 +157,7 @@ func queryBindings(ctx context.Context, queryer bindingQueryer, mainType int, re
 		var personalityType sql.NullInt64
 		var releaseID sql.NullInt64
 		var releaseStatus sql.NullString
-		if err := rows.Scan(&row.Layer, &personalityType, &row.LibraryID, &row.LibraryKey, &row.LibraryStatus, &releaseID, &releaseStatus); err != nil {
+		if err := rows.Scan(&row.Layer, &personalityType, &row.LibraryID, &row.LibraryKey, &row.LibraryName, &row.LibraryStatus, &releaseID, &releaseStatus); err != nil {
 			rows.Close()
 			return Resolution{}, fmt.Errorf("resolve app knowledge: scan binding: %w", err)
 		}
@@ -203,7 +205,7 @@ func resolveBindingRows(mainType int, requestedTypes []int, rows []bindingRow) R
 		}
 		binding := &Binding{
 			Layer: row.Layer, EnneagramType: row.EnneagramType, LibraryID: row.LibraryID,
-			LibraryKey: row.LibraryKey, ReleaseID: row.ReleaseID,
+			LibraryKey: row.LibraryKey, LibraryName: row.LibraryName, ReleaseID: row.ReleaseID,
 		}
 		switch row.Layer {
 		case LayerTheory:

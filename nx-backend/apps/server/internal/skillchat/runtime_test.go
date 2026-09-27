@@ -42,7 +42,7 @@ func TestRuntimeUsesOnlyFixedSkillVersionAndCurrentSessionContext(t *testing.T) 
 	if search.releaseID != 71 {
 		t.Fatalf("release id=%d, want fixed release 71", search.releaseID)
 	}
-	if got := gen.input.RuntimeInstructions; got != store.session.Instructions {
+	if got := gen.input.RuntimeInstructions; !strings.Contains(got, store.session.Instructions) || !strings.Contains(got, "400 个汉字以内") {
 		t.Fatalf("runtime instructions=%q", got)
 	}
 	if gen.input.ConversationSummary != "仅本会话摘要" || len(gen.input.History) != 2 {
@@ -56,6 +56,9 @@ func TestRuntimeUsesOnlyFixedSkillVersionAndCurrentSessionContext(t *testing.T) 
 	}
 	if len(gen.input.Sources) != 1 || gen.input.Sources[0].Snippet != search.documents[0].Content {
 		t.Fatalf("generator did not receive full release chunk: %+v", gen.input.Sources)
+	}
+	if gen.input.MaxOutputTokens != skillMaxOutputTokens || gen.input.CompletionTimeout != skillCompletionTimeout {
+		t.Fatalf("skill generation controls tokens=%d timeout=%s", gen.input.MaxOutputTokens, gen.input.CompletionTimeout)
 	}
 	if store.savedSessionID != 41 || store.savedQuestion != "我今天怎么练？" || store.savedAnswer != gen.answer {
 		t.Fatalf("saved=%+v", store)
@@ -134,6 +137,24 @@ func TestRuntimeRemoteKnowledgeFallbackPolicy(t *testing.T) {
 	}
 }
 
+func TestRuntimeFallbackUsesPinnedLocalReleaseWhenRemoteReturnsNoDocuments(t *testing.T) {
+	store := &runtimeStoreStub{session: runnableRuntimeSession()}
+	search := &runtimeSearchStub{documents: []rag.Document{{ID: "theory:711", Title: "学习之道", Content: "划小圈练习"}}}
+	remote := &runtimeRemoteStub{result: appknowledge.RemoteResult{RetrievalMethod: "hybrid", TraceID: "empty-remote"}}
+	runtime := NewRuntime(store, search, &runtimeGeneratorStub{answer: "完整回答。"}, WithRemoteKnowledge("fallback", remote, 100))
+
+	result, err := runtime.Ask(context.Background(), 7, 41, "怎么练习？")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !search.called || search.releaseID != store.session.TheoryReleaseID {
+		t.Fatalf("empty remote result did not use pinned local release: called=%v release=%d", search.called, search.releaseID)
+	}
+	if len(result.Sources) != 1 || result.Sources[0].Title != "学习之道" {
+		t.Fatalf("local fallback sources=%+v", result.Sources)
+	}
+}
+
 func TestSkillRuntimeInstructionsApplyPublishedSafetyProfile(t *testing.T) {
 	relationship := skillRuntimeInstructions("亲密关系规则", "sensitive-relationships-v1")
 	for _, expected := range []string{"亲密关系规则", "胁迫控制", "性同意", "即时危险", "不要把胁迫或暴力当作普通沟通冲突"} {
@@ -145,6 +166,15 @@ func TestSkillRuntimeInstructionsApplyPublishedSafetyProfile(t *testing.T) {
 	for _, expected := range []string{"健康技能规则", "不作诊断", "处方", "不得以技能回答延误就医"} {
 		if !strings.Contains(health, expected) {
 			t.Fatalf("health safety instructions missing %q: %s", expected, health)
+		}
+	}
+}
+
+func TestSkillRuntimeInstructionsRequireConciseCompleteAnswers(t *testing.T) {
+	instructions := skillRuntimeInstructions("仅使用当前技能", "")
+	for _, expected := range []string{"400 个汉字以内", "完整结束每个句子和步骤", "不得以半句话结束"} {
+		if !strings.Contains(instructions, expected) {
+			t.Fatalf("skill answer instructions missing %q: %s", expected, instructions)
 		}
 	}
 }

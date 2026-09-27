@@ -232,12 +232,12 @@ func (c *resolverTestConn) QueryContext(_ context.Context, query string, args []
 		c.state.bindingArgs = append(c.state.bindingArgs, value)
 	}
 	return &resolverTestRows{
-		columns: []string{"layer_kind", "enneagram_type", "id", "key", "status", "release_id", "release_status"},
+		columns: []string{"layer_kind", "enneagram_type", "id", "key", "name", "status", "release_id", "release_status"},
 		values: [][]driver.Value{
-			{"enneagram_type", int64(4), int64(14), "enneagram-type-04", "enabled", int64(104), "active"},
-			{"theory", nil, int64(10), "enneagram-core", "enabled", int64(100), "active"},
-			{"enneagram_type", int64(1), int64(11), "enneagram-type-01", "enabled", int64(101), "active"},
-			{"enneagram_type", int64(2), int64(12), "enneagram-type-02", "enabled", int64(102), "active"},
+			{"enneagram_type", int64(4), int64(14), "enneagram-type-04", "4号", "enabled", int64(104), "active"},
+			{"theory", nil, int64(10), "enneagram-core", "芯之力理论库", "enabled", int64(100), "active"},
+			{"enneagram_type", int64(1), int64(11), "enneagram-type-01", "1号", "enabled", int64(101), "active"},
+			{"enneagram_type", int64(2), int64(12), "enneagram-type-02", "2号", "enabled", int64(102), "active"},
 		},
 		terminalErr: c.state.bindingRowsErr,
 	}, nil

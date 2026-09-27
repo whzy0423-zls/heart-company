@@ -15,7 +15,10 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
-var ErrInvalidInput = errors.New("app knowledge input is invalid")
+var (
+	ErrInvalidInput      = errors.New("app knowledge input is invalid")
+	ErrRemoteEmptyResult = errors.New("remote knowledge returned no documents")
+)
 
 type Input struct {
 	RequestID      string
@@ -216,8 +219,11 @@ func (c *Coordinator) Retrieve(ctx context.Context, input Input) (Result, error)
 			return c.retrieveLocal(ctx, input, resolved), nil
 		}
 		result, remoteErr := c.retrieveRemote(ctx, resolved, remoteRequest)
-		if remoteErr == nil {
+		if remoteErr == nil && len(result.Documents) > 0 {
 			return result, nil
+		}
+		if remoteErr == nil {
+			remoteErr = ErrRemoteEmptyResult
 		}
 		if !RemoteErrorAllowsFallback(remoteErr) {
 			return Result{}, remoteErr
@@ -274,14 +280,20 @@ func (c *Coordinator) retrieveLocal(ctx context.Context, input Input, resolved C
 		addLayerDiagnostic(trace.LayerHits, diagnostic)
 	}
 
-	publicDocs := c.searchPublic(ctx, input.Query, limits.Public, &trace)
-	theoryDocs := c.searchTheoryBindings(ctx, input.Query, resolved.Resolution, limits.Theory, &trace)
+	theoryBindings, strictBookScope := theoryBindingsForQuery(resolved.Resolution, input.Query)
+	var publicDocs []rag.Document
+	if !strictBookScope {
+		publicDocs = c.searchPublic(ctx, input.Query, limits.Public, &trace)
+	}
+	theoryDocs := c.searchTheoryBindings(ctx, input.Query, theoryBindings, limits.Theory, &trace)
 
 	documentsByLayer := map[string][]rag.Document{
 		LayerPublic: publicDocs, LayerTheory: theoryDocs,
 	}
 	typeLayers := []string{LayerEnneagramType}
-	if explicitTypes {
+	if strictBookScope {
+		typeLayers = nil
+	} else if explicitTypes {
 		typeLayers = make([]string, 0, len(requestedTypes))
 		for layer, documents := range c.searchRequestedTypes(ctx, input.Query, requestedTypes, resolved.RequestedTypeBindings, &trace) {
 			documentsByLayer[layer] = documents
@@ -323,9 +335,13 @@ func remoteRequestFromResolution(input Input, resolved ConversationResolution) R
 	if scene == "" {
 		scene = "app_chat"
 	}
-	request := RemoteRequest{RequestID: requestID, Query: input.Query, Scene: scene, Public: true, MainType: resolved.MainType}
-	for _, binding := range configuredTheoryBindings(resolved.Resolution) {
+	theoryBindings, strictBookScope := theoryBindingsForQuery(resolved.Resolution, input.Query)
+	request := RemoteRequest{RequestID: requestID, Query: input.Query, Scene: scene, Public: !strictBookScope, MainType: resolved.MainType}
+	for _, binding := range theoryBindings {
 		request.TheoryReleaseIDs = append(request.TheoryReleaseIDs, binding.ReleaseID)
+	}
+	if strictBookScope {
+		return request
 	}
 	if len(input.RequestedTypes) > 0 {
 		for _, binding := range resolved.RequestedTypeBindings {
@@ -420,8 +436,7 @@ func (c *Coordinator) searchBinding(ctx context.Context, query string, binding *
 	return documents
 }
 
-func (c *Coordinator) searchTheoryBindings(ctx context.Context, query string, resolution Resolution, limit int, trace *Trace) []rag.Document {
-	bindings := configuredTheoryBindings(resolution)
+func (c *Coordinator) searchTheoryBindings(ctx context.Context, query string, bindings []*Binding, limit int, trace *Trace) []rag.Document {
 	if len(bindings) == 0 || limit == 0 {
 		return nil
 	}
@@ -463,6 +478,61 @@ func (c *Coordinator) searchTheoryBindings(ctx context.Context, query string, re
 		documents = append(documents, matches...)
 	}
 	return documents
+}
+
+func theoryBindingsForQuery(resolution Resolution, query string) ([]*Binding, bool) {
+	bindings := configuredTheoryBindings(resolution)
+	titles := explicitBookTitles(query)
+	if len(titles) == 0 {
+		return bindings, false
+	}
+	matched := make([]*Binding, 0, len(bindings))
+	for _, binding := range bindings {
+		libraryName := normalizeBookTitle(binding.LibraryName)
+		if libraryName == "" {
+			continue
+		}
+		for _, title := range titles {
+			if strings.Contains(libraryName, title) || strings.Contains(title, libraryName) {
+				matched = append(matched, binding)
+				break
+			}
+		}
+	}
+	if len(matched) == 0 {
+		return bindings, false
+	}
+	return matched, true
+}
+
+func explicitBookTitles(query string) []string {
+	var titles []string
+	for {
+		start := strings.Index(query, "《")
+		if start < 0 {
+			break
+		}
+		query = query[start+len("《"):]
+		end := strings.Index(query, "》")
+		if end < 0 {
+			break
+		}
+		if title := normalizeBookTitle(query[:end]); title != "" {
+			titles = append(titles, title)
+		}
+		query = query[end+len("》"):]
+	}
+	return titles
+}
+
+func normalizeBookTitle(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return strings.NewReplacer(
+		" ", "", "\t", "", "\n", "", "\r", "",
+		"（", "", "）", "", "(", "", ")", "",
+		"·", "", "-", "", "_", "",
+		"第5版", "", "第五版", "", "5th", "",
+	).Replace(value)
 }
 
 func configuredTheoryBindings(resolution Resolution) []*Binding {

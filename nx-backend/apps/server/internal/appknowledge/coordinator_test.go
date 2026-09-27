@@ -193,6 +193,80 @@ func TestCoordinatorFallbackUsesLocalOnlyForRetryableRemoteErrors(t *testing.T) 
 	}
 }
 
+func TestCoordinatorFallbackUsesLocalWhenRemoteReturnsNoDocuments(t *testing.T) {
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{CardID: 9, CardRevision: 1}}
+	public := &publicSearchStub{docs: []rag.Document{{ID: "local", Title: "本地", Content: "结果"}}}
+	remote := &remoteRetrieverStub{result: RemoteResult{RetrievalMethod: "hybrid", TraceID: "empty"}}
+	var observed []error
+	coordinator := NewCoordinator(
+		resolver,
+		public,
+		&releaseSearchStub{},
+		WithRemote("fallback", remote, nil),
+		WithFallbackObserver(func(err error) { observed = append(observed, err) }),
+	)
+
+	result, err := coordinator.Retrieve(context.Background(), Input{UserID: 7, SessionID: 8, CardID: 9, Query: "问题"})
+	if err != nil || !reflect.DeepEqual(documentIDs(result.Documents), []string{"local"}) {
+		t.Fatalf("expected local empty-result fallback, result=%+v err=%v", result, err)
+	}
+	if len(observed) != 1 || !errors.Is(observed[0], ErrRemoteEmptyResult) {
+		t.Fatalf("fallback observations=%v", observed)
+	}
+}
+
+func TestCoordinatorScopesExplicitBookRequestToMatchingTheoryRelease(t *testing.T) {
+	typeFour := 4
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{
+		CardID: 9, CardRevision: 1, MainType: 4,
+		Resolution: Resolution{
+			TheoryBindings: []*Binding{
+				{Layer: LayerTheory, LibraryID: 10, LibraryKey: "enneagram-core", LibraryName: "芯之力理论库", ReleaseID: 100},
+				{Layer: LayerTheory, LibraryID: 21, LibraryKey: "skill-qinmi-guanxi", LibraryName: "亲密关系", ReleaseID: 201},
+				{Layer: LayerTheory, LibraryID: 22, LibraryKey: "skill-social-psychology-myers", LibraryName: "社会心理学", ReleaseID: 202},
+			},
+			EnneagramType: &Binding{Layer: LayerEnneagramType, EnneagramType: &typeFour, ReleaseID: 104},
+		},
+	}}
+	remote := &remoteRetrieverStub{}
+	coordinator := NewCoordinator(resolver, &publicSearchStub{}, &releaseSearchStub{}, WithRemote("langchain", remote, nil))
+
+	_, err := coordinator.Retrieve(context.Background(), Input{
+		UserID: 7, SessionID: 8, CardID: 9,
+		Query: "请只结合《亲密关系》这本书，告诉我发生冲突时第一步做什么。",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remote.input.Public {
+		t.Fatal("strict named-book request included public knowledge")
+	}
+	if !reflect.DeepEqual(remote.input.TheoryReleaseIDs, []int64{201}) {
+		t.Fatalf("named-book theory releases=%v, want [201]", remote.input.TheoryReleaseIDs)
+	}
+	if len(remote.input.EnneagramReleaseIDs) != 0 {
+		t.Fatalf("named-book request included type releases=%v", remote.input.EnneagramReleaseIDs)
+	}
+}
+
+func TestTheoryBindingsForQueryMatchesEditionSuffixWithoutRestrictingUnknownBooks(t *testing.T) {
+	bindings := []*Binding{
+		{LibraryName: "亲密关系", ReleaseID: 201},
+		{LibraryName: "社会心理学", ReleaseID: 202},
+	}
+	resolution := Resolution{TheoryBindings: bindings}
+
+	matched, strict := theoryBindingsForQuery(resolution, "请只结合《亲密关系（第5版）》回答。")
+	if !strict || len(matched) != 1 || matched[0].ReleaseID != 201 {
+		t.Fatalf("edition title matched=%+v strict=%v", matched, strict)
+	}
+
+	unmatched, strict := theoryBindingsForQuery(resolution, "请结合《一本尚未配置的书》回答。")
+	if strict || !reflect.DeepEqual(unmatched, bindings) {
+		t.Fatalf("unknown title matched=%+v strict=%v", unmatched, strict)
+	}
+}
+
 func TestRemoteErrorAllowsFallbackClassifiesTimeoutTransportAndClientErrors(t *testing.T) {
 	tests := []struct {
 		name string
