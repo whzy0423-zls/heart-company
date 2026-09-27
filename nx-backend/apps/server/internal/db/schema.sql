@@ -3670,7 +3670,7 @@ ALTER TABLE app_plans ADD COLUMN IF NOT EXISTS limits JSONB NOT NULL DEFAULT '{}
 INSERT INTO app_plans
   (code,plan_level,billing_cycle,name,subtitle,price_cents,original_price_cents,badge,features,feature_flags,limits,enabled,sort_order,duration_days,daily_chat_limit,story_monthly_limit,card_limit,deep_chat_enabled,companion_enabled,member_poster_enabled)
 VALUES
-  ('free','free','none','免费版','每日基础陪伴','0','0','', '["每日 5 轮基础对话","首次 1 篇人生故事","最多 1 张人物卡","经典海报"]'::jsonb,'{"deepChat":false,"companion":false,"memberPoster":false}'::jsonb,'{"cardLimit":1,"dailyChatLimit":5,"storyMonthlyLimit":1}'::jsonb,true,0,0,5,1,1,false,false,false),
+  ('free','free','none','免费版','完整基础体验','0','0','', '["基础与深度对话","专业陪伴模式","首次 1 篇人生故事","经典海报","成长画像与趋势分析","关系洞察与合盘"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true,"growthPortrait":true,"trendAnalysis":true,"relationshipInsight":true,"prioritySupport":true,"xinzhili":true}'::jsonb,'{"cardLimit":1,"dailyChatLimit":-1,"storyMonthlyLimit":1}'::jsonb,true,0,0,-1,1,1,true,true,true),
   ('vip_month','vip','month','月卡会员','灵活体验完整成长陪伴',2900,0,'灵活','["深度对话与专业陪伴","每月 3 篇人生故事","最多 3 张人物卡","2 款会员海报"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":3,"dailyChatLimit":-1,"storyMonthlyLimit":3}'::jsonb,true,10,30,-1,3,3,true,true,true),
   ('vip_quarter','vip','quarter','季卡会员','约 ¥26.3/月，适合持续成长',7900,8700,'推荐','["深度对话与专业陪伴","每月 5 篇人生故事","最多 3 张人物卡","2 款会员海报"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":3,"dailyChatLimit":-1,"storyMonthlyLimit":5}'::jsonb,true,20,90,-1,5,3,true,true,true),
   ('vip_year','vip','year','年卡会员','约 ¥16.6/月，适合长期自我探索',19900,34800,'最划算','["深度对话与专业陪伴","每月 12 篇人生故事","最多 3 张人物卡","2 款会员海报"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":3,"dailyChatLimit":-1,"storyMonthlyLimit":12}'::jsonb,true,30,365,-1,12,3,true,true,true)
@@ -3753,6 +3753,20 @@ SET limits = jsonb_build_object(
       'storyMonthlyLimit', story_monthly_limit
     )
 WHERE limits = '{}'::jsonb;
+
+-- 普通注册用户默认开放对话模式和经典海报；会员仍保留更高故事/人物卡额度。
+-- 同步更新已存在的免费套餐，避免只改种子而线上旧行继续拦截新账号。
+UPDATE app_plans
+SET subtitle = '完整基础体验',
+    features = '["基础与深度对话","专业陪伴模式","首次 1 篇人生故事","经典海报","成长画像与趋势分析","关系洞察与合盘"]'::jsonb,
+    feature_flags = feature_flags || '{"deepChat":true,"companion":true,"memberPoster":true,"growthPortrait":true,"trendAnalysis":true,"relationshipInsight":true,"prioritySupport":true,"xinzhili":true}'::jsonb,
+    limits = limits || '{"dailyChatLimit":-1}'::jsonb,
+    daily_chat_limit = -1,
+    deep_chat_enabled = true,
+    companion_enabled = true,
+    member_poster_enabled = true,
+    update_time = now()
+WHERE code = 'free';
 
 -- Existing installations may still contain the old cycle-specific card
 -- capacities (5/8/20). Card capacity belongs to the normalized level, so

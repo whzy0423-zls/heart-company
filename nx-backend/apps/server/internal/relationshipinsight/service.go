@@ -64,9 +64,22 @@ type messageSample struct {
 	CreatedAt  time.Time
 }
 
-type Service struct{ db *sql.DB }
+type Service struct {
+	db             *sql.DB
+	freeAccessMode bool
+}
 
 func NewService(db *sql.DB) *Service { return &Service{db: db} }
+
+// SetFreeAccessMode enables the product policy in which a logged-in account
+// may use relationship insight without purchasing a membership. It is set by
+// the app server; the package default stays restrictive for isolated callers
+// and legacy fixtures.
+func (s *Service) SetFreeAccessMode(enabled bool) {
+	if s != nil {
+		s.freeAccessMode = enabled
+	}
+}
 
 func (s *Service) Generate(ctx context.Context, initiatorID, conversationID int64) (Report, error) {
 	if s == nil || s.db == nil {
@@ -82,10 +95,12 @@ func (s *Service) Generate(ctx context.Context, initiatorID, conversationID int6
 	} else if err != nil {
 		return Report{}, err
 	}
-	if ok, err := s.isVIP(ctx, initiatorID); err != nil {
-		return Report{}, err
-	} else if !ok {
-		return Report{}, ErrVIPRequired
+	if !s.freeAccessMode {
+		if ok, err := s.isVIP(ctx, initiatorID); err != nil {
+			return Report{}, err
+		} else if !ok {
+			return Report{}, ErrVIPRequired
+		}
 	}
 	peerID := low
 	if peerID == initiatorID {
@@ -148,7 +163,7 @@ func (s *Service) List(ctx context.Context, initiatorID, conversationID int64) (
 	if err != nil {
 		return nil, err
 	}
-	if access == "free" {
+	if access == "free" && !s.freeAccessMode {
 		for index := range items {
 			redactReportBody(&items[index])
 		}
@@ -200,7 +215,7 @@ func (s *Service) ListByPeer(ctx context.Context, initiatorID, peerID int64) ([]
 	if err != nil {
 		return nil, err
 	}
-	if access == "free" {
+	if access == "free" && !s.freeAccessMode {
 		for index := range items {
 			redactReportBody(&items[index])
 		}
@@ -233,7 +248,7 @@ func (s *Service) Get(ctx context.Context, initiatorID, id int64) (Report, error
 	if err != nil {
 		return Report{}, err
 	}
-	if access == "free" {
+	if access == "free" && !s.freeAccessMode {
 		redactReportBody(&item)
 		return item, nil
 	}

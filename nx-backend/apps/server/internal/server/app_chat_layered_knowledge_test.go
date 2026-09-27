@@ -262,7 +262,7 @@ func TestAppChatTextEndpointsResolveAndPassRequestedTier(t *testing.T) {
 	}
 }
 
-func TestAppChatTextEndpointsRejectMemberTierForFreeUser(t *testing.T) {
+func TestAppChatTextEndpointsAllowEnabledTierForFreeUser(t *testing.T) {
 	for _, path := range []string{
 		"/api/app/chat/sessions/42/ask",
 		"/api/app/chat/sessions/42/ask/stream",
@@ -278,11 +278,11 @@ func TestAppChatTextEndpointsRejectMemberTierForFreeUser(t *testing.T) {
 			response := httptest.NewRecorder()
 			server.appChatRouter(response, layeredKnowledgeTierRequest(t, path, layeredKnowledgeQuestion, "deep"))
 
-			if response.Code != http.StatusForbidden {
-				t.Fatalf("status = %d body=%s, want 403", response.Code, response.Body.String())
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d body=%s, want 200", response.Code, response.Body.String())
 			}
-			if got := generator.lastTier(); got != "" {
-				t.Fatalf("generator unexpectedly received tier %q", got)
+			if got := generator.lastTier(); got != "deep" {
+				t.Fatalf("generator tier = %q, want deep", got)
 			}
 		})
 	}
@@ -378,7 +378,7 @@ func TestAppChatHandlersApplyEnneagramReplyPlan(t *testing.T) {
 			input, remaining := generator.capturedInput()
 			if tt.wantDeepPlan {
 				plan := buildAppChatEnneagramReplyPlan(tt.question)
-				if input.MaxOutputTokens != 1880 || input.CompletionTimeout < 70*time.Second {
+				if input.MaxOutputTokens != 1140 || input.CompletionTimeout < 50*time.Second {
 					t.Fatalf("generation controls tokens=%d timeout=%s", input.MaxOutputTokens, input.CompletionTimeout)
 				}
 				if input.SourceLimit != plan.SourceLimit || input.SourceSnippetRunes != plan.SourceSnippetRunes {
@@ -387,8 +387,8 @@ func TestAppChatHandlersApplyEnneagramReplyPlan(t *testing.T) {
 				if input.RuntimeInstructions != plan.RuntimeInstructions {
 					t.Fatal("generator RuntimeInstructions differ from the single response plan")
 				}
-				if remaining < 69*time.Second {
-					t.Fatalf("handler deadline remaining = %s, want at least 69s", remaining)
+				if remaining < 49*time.Second {
+					t.Fatalf("handler deadline remaining = %s, want at least 49s", remaining)
 				}
 				return
 			}

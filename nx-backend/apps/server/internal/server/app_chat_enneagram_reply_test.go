@@ -99,11 +99,11 @@ func TestBuildAppChatEnneagramReplyPlanContract(t *testing.T) {
 			}
 			assertAppChatEnneagramDimensions(t, typeContract, wantDimensions)
 		}
-		if plan.MaxOutputTokens != 3480 {
-			t.Errorf("MaxOutputTokens = %d, want 3480", plan.MaxOutputTokens)
+		if plan.MaxOutputTokens != 2040 {
+			t.Errorf("MaxOutputTokens = %d, want 2040", plan.MaxOutputTokens)
 		}
-		if plan.CompletionTimeout < 70*time.Second {
-			t.Errorf("CompletionTimeout = %v, want at least 70s", plan.CompletionTimeout)
+		if plan.CompletionTimeout < 50*time.Second {
+			t.Errorf("CompletionTimeout = %v, want at least 50s", plan.CompletionTimeout)
 		}
 	})
 
@@ -122,8 +122,8 @@ func TestBuildAppChatEnneagramReplyPlanContract(t *testing.T) {
 			}
 			assertAppChatEnneagramDimensions(t, contract, wantDimensions)
 		}
-		if plan.MaxOutputTokens != 1240 {
-			t.Errorf("MaxOutputTokens = %d, want 1240", plan.MaxOutputTokens)
+		if plan.MaxOutputTokens != 780 {
+			t.Errorf("MaxOutputTokens = %d, want 780", plan.MaxOutputTokens)
 		}
 		for _, unrelated := range []string{"1号完美型", "3号成就型", "5号思考型", "6号忠诚型", "7号活跃型", "8号领袖型", "9号和平型"} {
 			if strings.Contains(plan.RuntimeInstructions, unrelated) {
@@ -134,8 +134,8 @@ func TestBuildAppChatEnneagramReplyPlanContract(t *testing.T) {
 
 	t.Run("single type uses formula budget", func(t *testing.T) {
 		plan := buildAppChatEnneagramReplyPlan("1号是什么样的")
-		if plan.MaxOutputTokens != 920 {
-			t.Errorf("MaxOutputTokens = %d, want 920", plan.MaxOutputTokens)
+		if plan.MaxOutputTokens != 600 {
+			t.Errorf("MaxOutputTokens = %d, want 600", plan.MaxOutputTokens)
 		}
 		if len(plan.TypeContracts) != 1 || plan.TypeContracts[0].CanonicalName != "1号完美型" {
 			t.Fatalf("TypeContracts = %#v, want only 1号完美型", plan.TypeContracts)

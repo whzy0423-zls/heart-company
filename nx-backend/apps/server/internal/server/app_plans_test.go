@@ -21,7 +21,7 @@ func TestDefaultAppPlansCommercialPolicy(t *testing.T) {
 	wants := map[string]struct {
 		price, chat, stories, cards int
 	}{
-		"free":         {0, 5, 1, 1},
+		"free":         {0, -1, 1, 1},
 		"vip_month":    {2900, -1, 3, 3},
 		"vip_quarter":  {7900, -1, 3, 3},
 		"vip_year":     {19900, -1, 3, 3},

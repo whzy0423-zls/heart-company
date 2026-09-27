@@ -153,9 +153,12 @@ func newAppChatEnneagramReplyPlan(requestedTypes []int) appChatEnneagramReplyPla
 		})
 	}
 
-	maxOutputTokens := 600 + 320*len(requestedTypes)
-	if maxOutputTokens > 3600 {
-		maxOutputTokens = 3600
+	// Keep answers useful on mobile without allowing a multi-type request to
+	// consume the whole provider timeout. Six short dimensions per type are
+	// enough for a focused reply; follow-up chips handle deeper exploration.
+	maxOutputTokens := 420 + 180*len(requestedTypes)
+	if maxOutputTokens > 2200 {
+		maxOutputTokens = 2200
 	}
 	sourceLimit := 5 + len(requestedTypes)
 	if sourceLimit > 14 {
@@ -166,7 +169,7 @@ func newAppChatEnneagramReplyPlan(requestedTypes []int) appChatEnneagramReplyPla
 		RequestedTypes:     append([]int(nil), requestedTypes...),
 		TypeContracts:      contracts,
 		MaxOutputTokens:    maxOutputTokens,
-		CompletionTimeout:  70 * time.Second,
+		CompletionTimeout:  50 * time.Second,
 		SourceLimit:        sourceLimit,
 		SourceSnippetRunes: 360,
 	}
@@ -177,7 +180,7 @@ func newAppChatEnneagramReplyPlan(requestedTypes []int) appChatEnneagramReplyPla
 func buildAppChatEnneagramRuntimeInstructions(contracts []appChatEnneagramTypeContract) string {
 	var builder strings.Builder
 	builder.WriteString("你正在回答 App 主会话中的九型人格知识问题。严格只覆盖以下请求型号，按数字升序展开；不要增加未点名的型号。\n")
-	builder.WriteString("每个型号使用给定的完整名称作为标题，并逐项回答六个维度。每个维度只写一条约20至60个中文字符的具体句子，必须落到可观察的情境、动机或行为，不能只写抽象标签。\n")
+	builder.WriteString("每个型号使用给定的完整名称作为标题，并逐项回答六个维度。每个维度只写一条约12至30个中文字符的具体句子，必须落到可观察的情境、动机或行为，不能只写抽象标签。总回答控制在简洁可读的篇幅内，先给结论，不重复题意。\n")
 	for _, contract := range contracts {
 		fmt.Fprintf(&builder, "\n## %s\n", contract.CanonicalName)
 		for _, dimension := range contract.Dimensions {

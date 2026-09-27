@@ -24,6 +24,8 @@ export default function AppDownloadSection({
   const [requestRevision, setRequestRevision] = useState(0)
   const [qrCodeDataURL, setQRCodeDataURL] = useState('')
   const [qrCodeError, setQRCodeError] = useState(false)
+  const [downloadNotice, setDownloadNotice] = useState('')
+  const [downloadStarted, setDownloadStarted] = useState(false)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -90,6 +92,22 @@ export default function AppDownloadSection({
   }, [viewModel.qrPayload, viewModel.showQRCode])
 
   const retry = () => setRequestRevision((revision) => revision + 1)
+  const handleDownloadAreaClick = (event) => {
+    const target = event.target instanceof Element
+      ? event.target.closest('.app-download__action')
+      : null
+    if (!target || target.tagName !== 'A') return
+    if (downloadStarted) {
+      event.preventDefault()
+      return
+    }
+    setDownloadStarted(true)
+    setDownloadNotice('已开始下载，请查看浏览器的下载列表')
+    window.setTimeout(() => {
+      setDownloadNotice('')
+      setDownloadStarted(false)
+    }, 4200)
+  }
   const copyInviteCode = async () => {
     if (!inviteCode) return
     try {
@@ -197,7 +215,7 @@ export default function AppDownloadSection({
           </div>
 
           <aside className="app-download__aside" aria-label="App 下载与安装">
-            <div className="app-download__action-area">
+            <div className="app-download__action-area" onClick={handleDownloadAreaClick}>
               {viewModel.showDownloadAction ? (
                 viewModel.actionDisabled ? (
                   <button className="app-download__action" type="button" disabled>
@@ -209,7 +227,7 @@ export default function AppDownloadSection({
                     href={viewModel.actionHref}
                     download="nine-xing-android.apk"
                   >
-                    {viewModel.actionLabel}
+                    {downloadStarted ? '下载已开始' : viewModel.actionLabel}
                   </a>
                 )
               ) : (
@@ -240,6 +258,11 @@ export default function AppDownloadSection({
                 <strong>iOS</strong>
                 <span>当前 iOS 版本暂不支持，敬请期待</span>
               </p>
+              {downloadNotice && (
+                <p id="app-download-notice" className="app-download__download-notice" role="status" aria-live="polite">
+                  {downloadNotice}
+                </p>
+              )}
             </div>
 
             <div

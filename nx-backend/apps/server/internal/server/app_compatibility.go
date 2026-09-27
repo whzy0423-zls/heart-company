@@ -106,11 +106,6 @@ func (s *Server) appCompatibilityAsk(w http.ResponseWriter, r *http.Request, rep
 		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	if err := s.ensureMembershipLevel(r.Context(), userInfo.ID, "vip"); err != nil {
-		if writeMembershipAccessError(w, err) {
-			return
-		}
-	}
 	idText := strings.Trim(strings.TrimPrefix(reportPath, "/api/app/compatibility/"), "/")
 	id, err := strconv.ParseInt(idText, 10, 64)
 	if err != nil || id <= 0 {
@@ -229,11 +224,6 @@ func (s *Server) appCompatibilityCreate(w http.ResponseWriter, r *http.Request) 
 		httpx.Fail(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	if err := s.ensureMembershipLevel(r.Context(), userInfo.ID, "vip"); err != nil {
-		if writeMembershipAccessError(w, err) {
-			return
-		}
-	}
 
 	var input appCompatibilityRequest
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -283,8 +273,8 @@ func (s *Server) appCompatibilityCreate(w http.ResponseWriter, r *http.Request) 
 	report := buildAppCompatibilityReport(userInfo.ID, cardA, cardB)
 	applyAppCompatibilityAccess(&report, membershipResourceMetadataForPlan(
 		s.currentAppMembershipPlan(r.Context(), userInfo.ID).PlanLevel,
-		"vip",
-		"合盘报告已生成，会员状态可影响后续追问",
+		"free",
+		"合盘报告已生成",
 	))
 	highlightsJSON, _ := json.Marshal(report.Highlights)
 	conflictsJSON, _ := json.Marshal(report.ConflictPoints)
@@ -408,8 +398,8 @@ func (s *Server) compatibilityReportAccess(ctx context.Context, appUserID, cardA
 	plan := s.currentAppMembershipPlan(ctx, appUserID)
 	access := membershipResourceMetadataForPlan(
 		plan.PlanLevel,
-		"vip",
-		"历史合盘已保留，请升级后继续使用",
+		"free",
+		"历史合盘已保留",
 	)
 	if (cardAID <= 0 && cardBID <= 0) || s == nil || s.db == nil || s.appUsers == nil {
 		return access, nil

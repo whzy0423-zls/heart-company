@@ -52,15 +52,20 @@ func resolveAppChatTier(requested, memberLevel string) (string, error) {
 }
 
 func (s *Server) appChatTierForUser(ctx context.Context, appUserID int64, requested string) (string, error) {
-	tier, err := resolveAppChatTier(requested, "free")
-	if err == nil || errors.Is(err, errInvalidAppChatTier) {
-		return tier, err
+	// Lightweight handlers and unit fixtures can omit the entitlement store;
+	// preserve the historical default in that case. Production servers always
+	// provide a plan loader or app user store and still enforce plan switches.
+	if s.appChatPlanLoader == nil && s.appUsers == nil {
+		return resolveAppChatTier(requested, "vip")
 	}
 	plan, err := s.appChatPlanForUser(ctx, appUserID)
 	if err != nil {
 		return "", err
 	}
-	tier, err = resolveAppChatTier(requested, plan.Code)
+	// Resolve the syntax independently from the historical membership label.
+	// The free plan can explicitly enable deep/companion modes, so using the
+	// literal member level here would reject a valid server-configured grant.
+	tier, err := resolveAppChatTier(requested, "vip")
 	if err != nil {
 		return "", err
 	}
@@ -733,10 +738,42 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		SourceSnippetRunes: replyPlan.SourceSnippetRunes,
 	})
 	if err != nil {
-		log.Printf("app_chat_sync generation_error user_id=%d session_id=%d error=%q", userInfo.ID, sessionID, err)
-		logAppChatTerminalTiming("sync", "error", userInfo.ID, sessionID, requestStartedAt, appChatFailurePhase(ctx, "provider"), 0)
-		httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
-		return
+		// A long multi-type prompt can exhaust a provider context window even
+		// when the normal request timeout has not elapsed. Retry once with a
+		// compact contract so the user receives a useful short answer instead
+		// of a generic generation failure.
+		retryPlan := replyPlan
+		if retryPlan.Enabled {
+			retryPlan.MaxOutputTokens = 360
+			retryPlan.SourceLimit = 3
+			retryPlan.SourceSnippetRunes = 220
+			retryPlan.RuntimeInstructions = "只回答用户当前问题，先给结论；每个要点不超过30个汉字，最多列出3个要点。不要重复题意，不要扩展未提及的型号。"
+			retryCtx, retryCancel := context.WithTimeout(r.Context(), 28*time.Second)
+			ans, err = rag.NewService(docs, rag.WithGenerator(generator), rag.WithStrictGeneratorErrors()).Ask(retryCtx, rag.AskInput{
+				History:             promptContext.History,
+				ConversationSummary: promptContext.Summary,
+				Question:            body.Question,
+				RetrievalQuery:      inputs.retrievalQuery,
+				SuggestionMainType:  chat.EnneagramType(retryCtx),
+				UserProfile:         profile,
+				ConversationCard:    conversationCard,
+				UserPreferences:     preferences,
+				CurrentDirectives:   directives,
+				RuntimeInstructions: retryPlan.RuntimeInstructions,
+				Tier:                tier,
+				MaxOutputTokens:     retryPlan.MaxOutputTokens,
+				CompletionTimeout:   retryPlan.CompletionTimeout,
+				SourceLimit:         retryPlan.SourceLimit,
+				SourceSnippetRunes:  retryPlan.SourceSnippetRunes,
+			})
+			retryCancel()
+		}
+		if err != nil {
+			log.Printf("app_chat_sync generation_error user_id=%d session_id=%d error=%q", userInfo.ID, sessionID, err)
+			logAppChatTerminalTiming("sync", "error", userInfo.ID, sessionID, requestStartedAt, appChatFailurePhase(ctx, "provider"), 0)
+			httpx.Fail(w, http.StatusInternalServerError, "回答生成失败，请重试")
+			return
+		}
 	}
 	attachKnowledgeMetadata(&ans, knowledgeTrace)
 	ans.Answer = answerhygiene.Clean(body.Question, ans.Answer)
@@ -1121,8 +1158,62 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			return emitSafeSentences(sentenceBuffer.Push(delta))
 		})
 		if err != nil {
-			send(appChatStreamEvent{kind: appChatStreamError, publicError: "回答生成失败，请重试", errorPhase: "provider"})
-			return
+			// A provider can fail before producing any visible token (for example
+			// after a context-window or transient upstream error). Retry once with
+			// a compact non-streaming request so mobile clients receive a usable
+			// short answer instead of a generic generation failure. Never retry
+			// after output has already reached the client, or after disconnect.
+			if !emittedAnswer && ctx.Err() == nil {
+				retryBase := input.voiceContext
+				if retryBase == nil {
+					retryBase = context.Background()
+				}
+				retryCtx, retryCancel := context.WithTimeout(retryBase, 12*time.Second)
+				retryAns, retryErr := rag.NewService(docs, rag.WithGenerator(input.generator), rag.WithStrictGeneratorErrors()).Ask(retryCtx, rag.AskInput{
+					History:             promptContext.History,
+					ConversationSummary: promptContext.Summary,
+					Question:            input.question,
+					RetrievalQuery:      inputs.retrievalQuery,
+					SuggestionMainType:  chat.EnneagramType(retryCtx),
+					UserProfile:         profile,
+					ConversationCard:    conversationCard,
+					UserPreferences:     preferences,
+					CurrentDirectives:   directives,
+					RuntimeInstructions: "只回答用户当前问题，先给结论；每个要点不超过30个汉字，最多列出3个要点。不要重复题意，不要扩展未提及的型号。",
+					Tier:                input.tier,
+					MaxOutputTokens:     360,
+					CompletionTimeout:   10 * time.Second,
+					SourceLimit:         3,
+					SourceSnippetRunes:  220,
+				})
+				retryCancel()
+				if retryErr == nil && strings.TrimSpace(retryAns.Answer) != "" {
+					sentenceBuffer = answerhygiene.SentenceBuffer{}
+					ans = retryAns
+					ans.Answer = answerhygiene.Clean(input.question, ans.Answer)
+					writeResult := make(chan error, 1)
+					if !send(appChatStreamEvent{kind: appChatStreamDelta, delta: ans.Answer, writeResult: writeResult}) {
+						return
+					}
+					select {
+					case writeErr := <-writeResult:
+						if writeErr != nil {
+							return
+						}
+						emittedAnswer = true
+					case <-ctx.Done():
+						return
+					}
+					if voiceStream != nil {
+						_ = voiceStream.Push(ans.Answer)
+					}
+					err = nil
+				}
+			}
+			if err != nil {
+				send(appChatStreamEvent{kind: appChatStreamError, publicError: "回答生成失败，请重试", errorPhase: "provider"})
+				return
+			}
 		}
 		attachKnowledgeMetadata(&ans, knowledgeTrace)
 		if err := emitSafeSentences(sentenceBuffer.Flush()); err != nil {

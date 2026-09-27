@@ -1336,6 +1336,23 @@ func TestAppChatAskStreamDoesNotSavePartialAnswerWhenGenerationFails(t *testing.
 	}
 }
 
+func TestAppChatAskStreamRetriesCompactAnswerWhenProviderFailsBeforeOutput(t *testing.T) {
+	store := newFakeAppChatStreamStore()
+	generator := &streamRetryAppChatGenerator{answer: "这是一次简短的重试回答。"}
+
+	body := performAppChatStreamRequest(t, store, generator, context.Background(), nil)
+
+	if !strings.Contains(body, `"content":"这是一次简短的重试回答。"`) {
+		t.Fatalf("SSE output missing compact retry answer: %q", body)
+	}
+	if !strings.Contains(body, "event: done\n") || strings.Contains(body, "event: error\n") {
+		t.Fatalf("SSE retry did not complete successfully: %q", body)
+	}
+	if got := store.saveCallCount(); got != 1 {
+		t.Fatalf("SavePair called %d times, want 1", got)
+	}
+}
+
 func TestAppChatAskStreamSavesBeforeDoneWithMessageID(t *testing.T) {
 	store := newFakeAppChatStreamStore()
 	store.messageID = 91
@@ -1482,6 +1499,18 @@ func (f *appChatStreamTestFlusher) Flush() {
 
 type controlledAppChatStreamingGenerator struct {
 	generateStream func(context.Context, rag.GenerateInput, rag.StreamEmitter) (string, error)
+}
+
+type streamRetryAppChatGenerator struct {
+	answer string
+}
+
+func (g *streamRetryAppChatGenerator) Generate(context.Context, rag.GenerateInput) (string, error) {
+	return g.answer, nil
+}
+
+func (g *streamRetryAppChatGenerator) GenerateStream(context.Context, rag.GenerateInput, rag.StreamEmitter) (string, error) {
+	return "", errors.New("upstream failed before output")
 }
 
 type timingAppChatGenerator struct {

@@ -136,7 +136,7 @@ func TestAppBillingEntitlementsUnknownMemberFailsClosedToFree(t *testing.T) {
 	if body.Data.PlanCode != "free" || body.Data.PlanLevel != "free" || body.Data.IsMember {
 		t.Fatalf("unknown member should resolve to free, got %+v", body.Data)
 	}
-	if body.Data.ChatLimit != 5 || body.Data.CardLimit != 1 {
+	if body.Data.ChatLimit != -1 || body.Data.CardLimit != 1 {
 		t.Fatalf("unknown member received paid quotas: %+v", body.Data)
 	}
 	if storyLimit, ok := body.Data.Quotas["storyMonthlyLimit"].(float64); !ok || storyLimit != 1 {

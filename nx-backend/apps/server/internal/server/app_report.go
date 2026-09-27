@@ -77,8 +77,8 @@ func (s *Server) appReportList(w http.ResponseWriter, r *http.Request) {
 	}
 	access := membershipResourceMetadataForPlan(
 		s.currentAppMembershipPlan(r.Context(), userInfo.ID).PlanLevel,
-		"vip",
-		"历史报告已保留，请升级后继续使用",
+		"free",
+		"历史报告已保留",
 	)
 
 	var reports []weeklyReport
@@ -247,8 +247,8 @@ func (s *Server) appReportDetail(w http.ResponseWriter, r *http.Request, reportI
 	}
 	access := membershipResourceMetadataForPlan(
 		s.currentAppMembershipPlan(r.Context(), userInfo.ID).PlanLevel,
-		"vip",
-		"历史报告已保留，请升级后继续使用",
+		"free",
+		"历史报告已保留",
 	)
 	full := !membershipContentLocked(access)
 

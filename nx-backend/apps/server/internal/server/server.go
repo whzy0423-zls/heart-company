@@ -467,6 +467,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.realtimeTickets = realtime.NewTicketStore(database, 60*time.Second)
 	s.directRealtimeHub = realtime.NewDirectHub()
 	s.relationshipInsights = relationshipinsight.NewService(database)
+	s.relationshipInsights.SetFreeAccessMode(true)
 	s.quiz = quiz.NewStore(database)
 	if database != nil {
 		profileStore := profilecalibration.NewStore(database)
