@@ -421,6 +421,75 @@ func TestCoordinatorRemoteTracePreservesScopedLayersAndSelectedType(t *testing.T
 	}
 }
 
+func TestCoordinatorRemoteSupplementsMissingSelectedTypeFromScopedRelease(t *testing.T) {
+	typeSix := 6
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{
+		CardID: 9, CardRevision: 4, MainType: 4,
+		Resolution: Resolution{RequestedTypeBindings: []*Binding{{
+			Layer: LayerEnneagramType, EnneagramType: &typeSix,
+			LibraryID: 26, LibraryKey: "enneagram-type-06", ReleaseID: 86,
+		}}},
+	}}
+	remote := &remoteRetrieverStub{result: RemoteResult{
+		RetrievalMethod: "hybrid", TraceID: "trace-public-only",
+		Documents: []rag.Document{{ID: "public-1", Content: "公共知识", Tags: []string{"library:public"}}},
+	}}
+	releases := &releaseSearchStub{docsByRelease: map[int64][]rag.Document{
+		86: {{ID: "theory:1778", Title: "六号忠诚型", Content: "先确认风险与支持路径", Tags: []string{"type-06"}}},
+	}}
+	coordinator := NewCoordinator(resolver, &publicSearchStub{}, releases, WithRemote("langchain", remote, nil))
+
+	result, err := coordinator.Retrieve(context.Background(), Input{
+		UserID: 7, SessionID: 8, CardID: 9, Query: "合作项目开始前我总担心出问题", RequestedTypes: []int{6},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := documentIDs(result.Documents); !reflect.DeepEqual(got, []string{"theory:1778", "public-1"}) {
+		t.Fatalf("documents = %v, want scoped fallback before public results", got)
+	}
+	hit := result.Trace.LayerHits[typeTraceKey(6)]
+	if !reflect.DeepEqual(hit.ChunkIDs, []string{"theory:1778"}) || !containsDiagnostic(hit.Diagnostics, "local_scope_fallback") {
+		t.Fatalf("selected type trace = %+v", hit)
+	}
+	if got := releases.minScores[86]; !reflect.DeepEqual(got, []float64{0}) {
+		t.Fatalf("selected type fallback scores = %v, want [0]", got)
+	}
+}
+
+func TestCoordinatorRemoteSupplementsMissingCurrentCardTypeFromScopedRelease(t *testing.T) {
+	typeFour := 4
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{
+		CardID: 9, CardRevision: 4, MainType: 4,
+		Resolution: Resolution{EnneagramType: &Binding{
+			Layer: LayerEnneagramType, EnneagramType: &typeFour,
+			LibraryID: 24, LibraryKey: "enneagram-type-04", ReleaseID: 84,
+		}},
+	}}
+	remote := &remoteRetrieverStub{result: RemoteResult{
+		RetrievalMethod: "hybrid", TraceID: "trace-theory-only",
+		Documents: []rag.Document{{ID: "theory-core", Content: "通用理论", Tags: []string{"library:theory", "release:8"}}},
+	}}
+	releases := &releaseSearchStub{docsByRelease: map[int64][]rag.Document{
+		84: {{ID: "theory:1444", Title: "四号自我型", Content: "关系中的情绪敏感", Tags: []string{"type-04"}}},
+	}}
+	coordinator := NewCoordinator(resolver, &publicSearchStub{}, releases, WithRemote("langchain", remote, nil))
+
+	result, err := coordinator.Retrieve(context.Background(), Input{
+		UserID: 7, SessionID: 8, CardID: 9, Query: "为什么我总害怕被抛弃",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := documentIDs(result.Documents); !reflect.DeepEqual(got, []string{"theory:1444", "theory-core"}) {
+		t.Fatalf("documents = %v, want current-card fallback before remote results", got)
+	}
+	hit := result.Trace.LayerHits[LayerEnneagramType]
+	if !reflect.DeepEqual(hit.ChunkIDs, []string{"theory:1444"}) || !containsDiagnostic(hit.Diagnostics, "local_scope_fallback") {
+		t.Fatalf("current type trace = %+v", hit)
+	}
+}
+
 func TestCoordinatorRolloutSupportsPromotionStages(t *testing.T) {
 	for _, percent := range []int{5, 20, 50, 100} {
 		t.Run(fmt.Sprintf("%d_percent", percent), func(t *testing.T) {

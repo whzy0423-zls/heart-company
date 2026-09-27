@@ -413,10 +413,88 @@ func (c *Coordinator) retrieveRemote(ctx context.Context, resolved ConversationR
 		hit.ChunkIDs = append(hit.ChunkIDs, document.ID)
 		trace.LayerHits[layer] = hit
 	}
+	scopedFallbacks := c.supplementMissingRemoteTypeScopes(ctx, request, resolved, requestedTypes, &trace, remote.Documents)
+	if len(scopedFallbacks) > 0 {
+		remote.Documents = append(scopedFallbacks, remote.Documents...)
+	}
 	trace.EnneagramType = tracedEnneagramType(resolved.MainType, requestedTypes)
 	trace.TraceID = remote.TraceID
 	trace.RetrievalMethod = remote.RetrievalMethod
 	return Result{Documents: remote.Documents, Citations: remote.Citations, Trace: trace}, nil
+}
+
+func (c *Coordinator) supplementMissingRemoteTypeScopes(ctx context.Context, request RemoteRequest, resolved ConversationResolution, requestedTypes []int, trace *Trace, remoteDocuments []rag.Document) []rag.Document {
+	if c == nil || c.releases == nil || trace == nil || len(request.EnneagramReleaseIDs) == 0 {
+		return nil
+	}
+	requestedTypes = normalizeRequestedTypes(requestedTypes)
+	if len(requestedTypes) > 0 {
+		missingTypes := make([]int, 0, len(requestedTypes))
+		for _, typeNumber := range requestedTypes {
+			if len(trace.LayerHits[typeTraceKey(typeNumber)].ChunkIDs) == 0 {
+				missingTypes = append(missingTypes, typeNumber)
+			}
+		}
+		if len(missingTypes) == 0 {
+			return nil
+		}
+		documentsByLayer := c.searchRequestedTypes(ctx, request.Query, missingTypes, resolved.RequestedTypeBindings, trace)
+		fallbacks := make([]rag.Document, 0, len(missingTypes))
+		for _, typeNumber := range missingTypes {
+			layer := typeTraceKey(typeNumber)
+			for _, document := range documentsByLayer[layer] {
+				hit := trace.LayerHits[layer]
+				hit.ChunkIDs = append(hit.ChunkIDs, document.ID)
+				trace.LayerHits[layer] = hit
+				addLayerDiagnostic(trace.LayerHits, Diagnostic{Layer: layer, Code: "local_scope_fallback"})
+				if !documentIDExists(remoteDocuments, document.ID) && !documentIDExists(fallbacks, document.ID) {
+					fallbacks = append(fallbacks, document)
+				}
+			}
+		}
+		return fallbacks
+	}
+
+	if resolved.MainType < 1 || resolved.MainType > 9 || len(trace.LayerHits[LayerEnneagramType].ChunkIDs) > 0 {
+		return nil
+	}
+	temporaryLayer := typeTraceKey(resolved.MainType)
+	temporaryTrace := Trace{LayerHits: map[string]LayerHit{temporaryLayer: {ChunkIDs: []string{}}}}
+	documentsByLayer := c.searchRequestedTypes(
+		ctx,
+		request.Query,
+		[]int{resolved.MainType},
+		[]*Binding{resolved.EnneagramType},
+		&temporaryTrace,
+	)
+	documents := documentsByLayer[temporaryLayer]
+	if len(documents) == 0 {
+		return nil
+	}
+	hit := trace.LayerHits[LayerEnneagramType]
+	temporaryHit := temporaryTrace.LayerHits[temporaryLayer]
+	if temporaryHit.LibraryID > 0 {
+		hit.LibraryID = temporaryHit.LibraryID
+		hit.LibraryKey = temporaryHit.LibraryKey
+		hit.ReleaseID = temporaryHit.ReleaseID
+	}
+	hit.Diagnostics = append(hit.Diagnostics, temporaryHit.Diagnostics...)
+	hit.ChunkIDs = append(hit.ChunkIDs, documents[0].ID)
+	trace.LayerHits[LayerEnneagramType] = hit
+	addLayerDiagnostic(trace.LayerHits, Diagnostic{Layer: LayerEnneagramType, Code: "local_scope_fallback"})
+	if documentIDExists(remoteDocuments, documents[0].ID) {
+		return nil
+	}
+	return documents[:1]
+}
+
+func documentIDExists(documents []rag.Document, documentID string) bool {
+	for _, document := range documents {
+		if document.ID == documentID {
+			return true
+		}
+	}
+	return false
 }
 
 func tracedEnneagramType(mainType int, requestedTypes []int) *int {
