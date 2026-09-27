@@ -722,11 +722,11 @@ func TestCoordinatorEmptyRequestedTypesPreservesLegacyLimitsAndCurrentCard(t *te
 	if len(resolver.requested) != 0 {
 		t.Fatalf("resolver requested = %v, want empty normalized list", resolver.requested)
 	}
-	if !reflect.DeepEqual(public.topKs, []int{12}) || !reflect.DeepEqual(releases.topKs[100], []int{9}) || !reflect.DeepEqual(releases.topKs[106], []int{9}) {
+	if !reflect.DeepEqual(public.topKs, []int{12}) || !reflect.DeepEqual(releases.topKs[100], []int{9}) || !reflect.DeepEqual(releases.topKs[106], []int{9, 3}) {
 		t.Fatalf("legacy candidate limits public=%v theory=%v type=%v", public.topKs, releases.topKs[100], releases.topKs[106])
 	}
-	if !reflect.DeepEqual(releases.minScores[100], []float64{0.2}) || !reflect.DeepEqual(releases.minScores[106], []float64{0.2}) {
-		t.Fatalf("legacy minScores theory=%v type=%v, want [0.2]/[0.2]", releases.minScores[100], releases.minScores[106])
+	if !reflect.DeepEqual(releases.minScores[100], []float64{0.2}) || !reflect.DeepEqual(releases.minScores[106], []float64{0.2, 0}) {
+		t.Fatalf("legacy minScores theory=%v type=%v, want [0.2]/[0.2 0]", releases.minScores[100], releases.minScores[106])
 	}
 }
 
@@ -884,6 +884,63 @@ func TestCoordinatorRequestedTypeQueriesPreserveQuestionUseOnlyCurrentAnchorAndA
 				t.Fatalf("type %d query contains unrelated type %d anchor: %q", typeNumber, otherType, call.query)
 			}
 		}
+	}
+}
+
+type lexicalCurrentTypeSearcher struct {
+	calls []requestedTypeSearchCall
+}
+
+func (s *lexicalCurrentTypeSearcher) SearchReleaseChunks(_ context.Context, releaseID int64, query string, _ int, minScore float64) ([]rag.Document, error) {
+	if releaseID != 104 {
+		return nil, fmt.Errorf("unexpected release %d", releaseID)
+	}
+	s.calls = append(s.calls, requestedTypeSearchCall{query: query, minScore: minScore})
+	if minScore > 0 {
+		return nil, nil
+	}
+	return []rag.Document{{
+		ID: "type-4", Title: "观察记录", Content: strings.Repeat("情", 400), Tags: []string{"type-04"},
+	}}, nil
+}
+
+func TestCoordinatorCurrentTypeRetriesWeakLexicalMissWithScopedAnchor(t *testing.T) {
+	typeFour := 4
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{
+		CardID: 9, CardRevision: 1, MainType: typeFour,
+		Resolution: Resolution{EnneagramType: &Binding{
+			Layer: LayerEnneagramType, EnneagramType: &typeFour,
+			LibraryID: 24, LibraryKey: "enneagram-type-04", ReleaseID: 104,
+		}},
+	}}
+	searcher := &lexicalCurrentTypeSearcher{}
+	question := "为什么我总害怕被抛弃"
+
+	result, err := NewCoordinator(resolver, &publicSearchStub{}, searcher).Retrieve(context.Background(), Input{
+		UserID: 7, SessionID: 8, CardID: 9, Query: question,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := documentIDs(result.Documents); !reflect.DeepEqual(got, []string{"type-4"}) {
+		t.Fatalf("documents = %v, want current-type scoped fallback", got)
+	}
+	if len(searcher.calls) != 2 {
+		t.Fatalf("search calls = %+v, want precise search then scoped fallback", searcher.calls)
+	}
+	if searcher.calls[0].query != question || searcher.calls[0].minScore != 0.2 {
+		t.Fatalf("precise search = %+v", searcher.calls[0])
+	}
+	fallback := searcher.calls[1]
+	if fallback.minScore != 0 || !strings.Contains(fallback.query, question) || !strings.Contains(fallback.query, "4号自我型") {
+		t.Fatalf("scoped fallback = %+v", fallback)
+	}
+	if got := len([]rune(result.Documents[0].Content)); got != 360 {
+		t.Fatalf("fallback snippet runes = %d, want 360", got)
+	}
+	hit := result.Trace.LayerHits[LayerEnneagramType]
+	if !reflect.DeepEqual(hit.ChunkIDs, []string{"type-4"}) || !containsDiagnostic(hit.Diagnostics, "local_scope_fallback") {
+		t.Fatalf("current type trace = %+v", hit)
 	}
 }
 

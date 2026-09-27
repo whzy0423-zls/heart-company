@@ -749,7 +749,20 @@ func (c *Coordinator) searchType(ctx context.Context, query string, resolved Con
 		addLayerDiagnostic(trace.LayerHits, Diagnostic{Layer: LayerEnneagramType, Code: "cross_type_binding"})
 		return nil
 	}
-	documents := c.searchBinding(ctx, query, binding, limit, LayerEnneagramType, trace)
+	hit := trace.LayerHits[LayerEnneagramType]
+	hit.LibraryID = binding.LibraryID
+	hit.LibraryKey = binding.LibraryKey
+	hit.ReleaseID = binding.ReleaseID
+	trace.LayerHits[LayerEnneagramType] = hit
+	if c.releases == nil {
+		addLayerDiagnostic(trace.LayerHits, Diagnostic{Layer: LayerEnneagramType, Code: "search_unavailable"})
+		return nil
+	}
+	documents, err := c.releases.SearchReleaseChunks(ctx, binding.ReleaseID, query, searchCandidateLimit(limit), 0.2)
+	if err != nil {
+		addLayerDiagnostic(trace.LayerHits, Diagnostic{Layer: LayerEnneagramType, Code: "search_failed"})
+		return nil
+	}
 	filtered := documents[:0]
 	for _, document := range documents {
 		if documentMatchesType(document, resolved.MainType) {
@@ -758,7 +771,31 @@ func (c *Coordinator) searchType(ctx context.Context, query string, resolved Con
 		}
 		addLayerDiagnostic(trace.LayerHits, Diagnostic{Layer: LayerEnneagramType, Code: "cross_type_document"})
 	}
-	return filtered
+	if len(filtered) > 0 {
+		return filtered
+	}
+
+	fallback, err := c.releases.SearchReleaseChunks(
+		ctx,
+		binding.ReleaseID,
+		requestedTypeSearchQuery(query, resolved.MainType),
+		searchCandidateLimit(1),
+		0,
+	)
+	if err != nil {
+		addLayerDiagnostic(trace.LayerHits, Diagnostic{Layer: LayerEnneagramType, Code: "search_failed"})
+		return nil
+	}
+	for _, document := range fallback {
+		if !documentMatchesType(document, resolved.MainType) {
+			addLayerDiagnostic(trace.LayerHits, Diagnostic{Layer: LayerEnneagramType, Code: "cross_type_document"})
+			continue
+		}
+		document.Content = truncateRunes(document.Content, 360)
+		addLayerDiagnostic(trace.LayerHits, Diagnostic{Layer: LayerEnneagramType, Code: "local_scope_fallback"})
+		return []rag.Document{document}
+	}
+	return nil
 }
 
 type requestedTypeSearchResult struct {
