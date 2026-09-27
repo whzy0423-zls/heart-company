@@ -99,7 +99,7 @@ func TestRuntimeRemoteKnowledgeUsesOnlyPinnedSkillRelease(t *testing.T) {
 	if remote.calls != 1 || remote.request.Scene != "skill_chat" || remote.request.Public {
 		t.Fatalf("remote request=%+v calls=%d", remote.request, remote.calls)
 	}
-	if got := remote.request.TheoryReleaseIDs; len(got) != 1 || got[0] != store.session.TheoryReleaseID || len(remote.request.EnneagramReleaseIDs) != 0 {
+	if got := remote.request.SkillReleaseIDs; len(got) != 1 || got[0] != store.session.TheoryReleaseID || len(remote.request.TheoryReleaseIDs) != 0 || len(remote.request.EnneagramReleaseIDs) != 0 {
 		t.Fatalf("remote scope=%+v", remote.request)
 	}
 	if remote.request.RequestID == "" || len(result.Trace.ChunkIDs) != 1 || result.Trace.ChunkIDs[0] != 711 {
@@ -155,8 +155,14 @@ func TestRuntimeFallbackUsesPinnedLocalReleaseWhenRemoteReturnsNoDocuments(t *te
 	}
 }
 
-func TestRuntimePinnedSkillKeepsAReleaseSourceWhenQuestionHasNoLexicalOverlap(t *testing.T) {
-	store := &runtimeStoreStub{session: runnableRuntimeSession()}
+func TestRuntimePinnedSkillUsesConversationContextInsteadOfZeroScoreFallback(t *testing.T) {
+	store := &runtimeStoreStub{
+		session: runnableRuntimeSession(),
+		messages: []chat.Message{
+			{Role: "user", Content: "我学新技能总是练两天就放弃。"},
+			{Role: "assistant", Content: "先把练习拆小。"},
+		},
+	}
 	search := &minScoreGatedRuntimeSearchStub{
 		document: rag.Document{ID: "theory:711", Title: "学习之道", Content: "划小圈练习"},
 	}
@@ -169,8 +175,11 @@ func TestRuntimePinnedSkillKeepsAReleaseSourceWhenQuestionHasNoLexicalOverlap(t 
 	if search.releaseID != store.session.TheoryReleaseID {
 		t.Fatalf("release id=%d, want pinned release %d", search.releaseID, store.session.TheoryReleaseID)
 	}
-	if search.minScore != 0 {
-		t.Fatalf("min score=%v, want 0 for an already pinned skill release", search.minScore)
+	if search.minScore != skillSearchMinScore {
+		t.Fatalf("min score=%v, want %v", search.minScore, skillSearchMinScore)
+	}
+	if !strings.Contains(search.query, "我学新技能总是练两天就放弃") || !strings.Contains(search.query, "把刚才的计划压缩成三个步骤") {
+		t.Fatalf("contextual skill query=%q", search.query)
 	}
 	if len(result.Sources) != 1 || result.Sources[0].ID != "theory:711" {
 		t.Fatalf("pinned skill sources=%+v", result.Sources)
@@ -302,6 +311,7 @@ type minScoreGatedRuntimeSearchStub struct {
 	document  rag.Document
 	releaseID int64
 	minScore  float64
+	query     string
 }
 
 type runtimeRemoteStub struct {
@@ -322,9 +332,9 @@ func (s *runtimeSearchStub) SearchReleaseChunks(_ context.Context, releaseID int
 	return append([]rag.Document(nil), s.documents...), nil
 }
 
-func (s *minScoreGatedRuntimeSearchStub) SearchReleaseChunks(_ context.Context, releaseID int64, _ string, _ int, minScore float64) ([]rag.Document, error) {
-	s.releaseID, s.minScore = releaseID, minScore
-	if minScore > 0 {
+func (s *minScoreGatedRuntimeSearchStub) SearchReleaseChunks(_ context.Context, releaseID int64, query string, _ int, minScore float64) ([]rag.Document, error) {
+	s.releaseID, s.query, s.minScore = releaseID, query, minScore
+	if minScore > 0 && !strings.Contains(query, "我学新技能总是练两天就放弃") {
 		return nil, nil
 	}
 	return []rag.Document{s.document}, nil

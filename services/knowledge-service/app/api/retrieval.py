@@ -20,7 +20,7 @@ def document_in_scope(document: RetrievedDocument, scope: KnowledgeScope) -> boo
     if document.library == "enneagram":
         return document.release_id in scope.enneagram_release_ids
     if document.library == "skill":
-        return document.release_id is not None and document.release_id == scope.skill_release_id
+        return scope.allows_skill_release(document.release_id)
     return False
 
 

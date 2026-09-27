@@ -963,6 +963,31 @@ func TestRealtimeGenerationUsesCurrentCardLayeredKnowledgeAndPersistsTrace(t *te
 	}
 }
 
+func TestRealtimeKnowledgeUsesRecentUserQuestionForContextDependentFollowUp(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.session.Close()
+	fixture.store.history = []rag.Message{
+		{Role: "user", Content: "我和伴侣争执时会立刻沉默。"},
+		{Role: "assistant", Content: "先留意身体收紧的信号。"},
+	}
+	layered := &fakeLayeredKnowledgeRetriever{documents: []rag.Document{{ID: "relationship", Content: "冲突修复"}}}
+	fixture.deps.LayeredKnowledge = layered
+	fixture.session = NewSession(fixture.deps)
+
+	if err := fixture.session.StartTurn(context.Background(), fixture.input("turn-contextual-retrieval")); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "那我具体该怎么办？", Stable: true})
+	fixture.sink.waitAudio(t)
+
+	if !strings.Contains(layered.query, "我和伴侣争执时会立刻沉默") || !strings.Contains(layered.query, "那我具体该怎么办") {
+		t.Fatalf("realtime contextual query=%q", layered.query)
+	}
+	if strings.Contains(layered.query, "身体收紧") {
+		t.Fatalf("assistant answer leaked into realtime retrieval query=%q", layered.query)
+	}
+}
+
 func TestRealtimeLayeredKnowledgeFailureStopsGenerationWithSpecificError(t *testing.T) {
 	fixture := newSessionFixture(t)
 	fixture.session.Close()
@@ -1032,21 +1057,21 @@ func TestGenerationLoadsContextInParallelExceptOrderedRetrieval(t *testing.T) {
 	}
 	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "帮我分析一下", Stable: true})
 
-	started := make(map[string]bool, 4)
+	started := make(map[string]bool, 3)
 	deadline := time.NewTimer(300 * time.Millisecond)
 	defer deadline.Stop()
-	for len(started) < 4 {
+	for len(started) < 3 {
 		select {
 		case name := <-barrier.started:
 			started[name] = true
 		case <-deadline.C:
 			close(barrier.release)
-			t.Fatalf("context loads started=%v, want history/preferences/memories/knowledge before ordered theory", started)
+			t.Fatalf("context loads started=%v, want history/preferences/memories before retrieval", started)
 		}
 	}
-	if started["theory"] {
+	if !started["history"] || !started["preferences"] || !started["memories"] || started["knowledge"] || started["theory"] {
 		close(barrier.release)
-		t.Fatalf("theory retrieval started before knowledge barrier released: %v", started)
+		t.Fatalf("context dependency order=%v, want retrieval to wait for history", started)
 	}
 	close(barrier.release)
 	fixture.generator.waitCalled(t)
@@ -1624,6 +1649,8 @@ type fakeConversationStore struct {
 	sources          json.RawMessage
 	completedContent string
 	knowledgeTrace   *KnowledgeTrace
+	history          []rag.Message
+	summary          string
 }
 
 func (s *fakeConversationStore) Resolve(_ context.Context, userID, cardID int64, scene string, conversationID int64) (Conversation, error) {
@@ -1633,7 +1660,9 @@ func (s *fakeConversationStore) Resolve(_ context.Context, userID, cardID int64,
 	return s.resolved, nil
 }
 func (s *fakeConversationStore) History(context.Context, Conversation, int) ([]rag.Message, string, error) {
-	return nil, "", nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]rag.Message(nil), s.history...), s.summary, nil
 }
 func (s *fakeConversationStore) SaveUser(_ context.Context, _ Conversation, text string, _ Mode) (int64, error) {
 	s.mu.Lock()

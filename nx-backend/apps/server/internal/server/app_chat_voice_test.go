@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -424,6 +425,55 @@ func TestVoiceChatUsesLayeredKnowledgeForCurrentConversationCard(t *testing.T) {
 	}
 	assertLayeredTrace(t, store.knowledgeTrace.LayerHits, "type-2")
 	assertSourceIDs(t, generator.lastSources(), "public", "theory", "type-2")
+}
+
+func TestEnneagramDialogueVoiceRetrievesSelectedRoleKnowledge(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]string{"text": "那我具体该怎么办？"})
+	}))
+	defer upstream.Close()
+	previousClientFactory := newASRHTTPClient
+	newASRHTTPClient = func(timeout time.Duration) *http.Client {
+		client := upstream.Client()
+		client.Timeout = timeout
+		return client
+	}
+	t.Cleanup(func() { newASRHTTPClient = previousClientFactory })
+
+	store := &fakeVoiceChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	store.cardID = 88
+	store.messages = []chat.Message{
+		{Role: "user", Content: "我作为8号在压力下总想控制局面。"},
+		{Role: "assistant", Content: "先识别控制冲动。"},
+	}
+	resolver := &layeredKnowledgeResolver{mainType: 2, revision: 5}
+	searcher := newLayeredKnowledgeSearcher()
+	s := newVoiceChatTestServer(store, &layeredKnowledgeGenerator{})
+	s.db = newAppAnalyticsUnitDB(t, "overview_error")
+	s.appKnowledge = appknowledge.NewCoordinator(resolver, searcher, searcher)
+	s.env.ASR = config.ASRConfig{APIBase: upstream.URL, APIKey: "test-key", Model: "whisper-1", TimeoutSeconds: 3}
+	s.voiceAssetCreate = func(_ context.Context, _ uploadasset.CreateInput) (uploadasset.Asset, error) {
+		return uploadasset.Asset{ID: 99}, nil
+	}
+	body, contentType := voiceChatMultipartBody(t, "voice.aac", "audio/aac", "audio", "2200")
+	request := httptest.NewRequest(http.MethodPost, "/api/app/chat/sessions/42/voice", body)
+	request.Header.Set("Content-Type", contentType)
+	ctx := contextWithAppUser(request.Context(), auth.UserInfo{ID: 7})
+	request = request.WithContext(chat.WithEnneagramType(ctx, 8))
+
+	response := httptest.NewRecorder()
+	s.appChatRouter(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("voice status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !reflect.DeepEqual(resolver.requestedTypes, []int{8}) {
+		t.Fatalf("selected voice role knowledge types=%v, want [8]", resolver.requestedTypes)
+	}
+	query := searcher.lastQuery()
+	if !strings.Contains(query, "我作为8号在压力下总想控制局面") || !strings.Contains(query, "那我具体该怎么办") || strings.Contains(query, "控制冲动") {
+		t.Fatalf("selected voice contextual query=%q", query)
+	}
 }
 
 func TestVoiceChatPersistsPunctuationOnlySilentAudioWithoutAI(t *testing.T) {

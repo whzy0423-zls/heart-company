@@ -38,6 +38,11 @@ func (a appKnowledgeRemoteAdapter) Retrieve(ctx context.Context, input appknowle
 		mainType := input.MainType
 		profile.MainType = &mainType
 	}
+	var legacySkillReleaseID *int64
+	if len(input.SkillReleaseIDs) == 1 {
+		releaseID := input.SkillReleaseIDs[0]
+		legacySkillReleaseID = &releaseID
+	}
 	response, err := a.client.Retrieve(ctx, knowledgeclient.RetrievalRequest{
 		RequestID: input.RequestID,
 		Query:     input.Query,
@@ -45,6 +50,7 @@ func (a appKnowledgeRemoteAdapter) Retrieve(ctx context.Context, input appknowle
 		Scope: knowledgeclient.Scope{
 			Public: input.Public, TheoryReleaseIDs: input.TheoryReleaseIDs,
 			EnneagramReleaseIDs: input.EnneagramReleaseIDs,
+			SkillReleaseIDs:     input.SkillReleaseIDs, SkillReleaseID: legacySkillReleaseID,
 		},
 		Profile: profile,
 		Retrieval: knowledgeclient.RetrievalOptions{
@@ -89,6 +95,8 @@ func remoteDocumentInScope(document knowledgeclient.Document, input appknowledge
 		return document.ReleaseID != nil && containsReleaseID(input.TheoryReleaseIDs, *document.ReleaseID)
 	case "enneagram":
 		return document.ReleaseID != nil && containsReleaseID(input.EnneagramReleaseIDs, *document.ReleaseID)
+	case "skill":
+		return document.ReleaseID != nil && containsReleaseID(input.SkillReleaseIDs, *document.ReleaseID)
 	default:
 		return false
 	}

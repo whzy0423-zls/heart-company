@@ -1592,11 +1592,15 @@ func (s *fakeAppChatStreamStore) GetConversationState(ctx context.Context, _ int
 }
 
 func (s *fakeAppChatStreamStore) ListMessagesAfter(context.Context, int64, int64) ([]chat.Message, error) {
-	return nil, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]chat.Message(nil), s.messages...), nil
 }
 
 func (s *fakeAppChatStreamStore) ListRecentMessages(context.Context, int64, int) ([]chat.Message, error) {
-	return nil, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]chat.Message(nil), s.messages...), nil
 }
 
 func (s *fakeAppChatStreamStore) UpdateConversationSummary(context.Context, int64, int64, string, int64) (bool, error) {

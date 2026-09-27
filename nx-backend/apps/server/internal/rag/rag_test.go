@@ -1153,6 +1153,28 @@ func TestAskStreamDoesNotAttachBroadEnneagramSourcesToUnrelatedQuestion(t *testi
 	}
 }
 
+func TestAskUsesContextualRetrievalQueryWithoutChangingUserQuestion(t *testing.T) {
+	generator := &fakeGenerator{answer: "可以先暂停争论，再表达自己的感受。"}
+	service := NewService([]Document{{
+		ID: "relationship-conflict", Title: "伴侣冲突修复",
+		Content: "伴侣争执时先暂停升级，再描述事实、感受和需要。",
+	}}, WithGenerator(generator))
+
+	answer, err := service.Ask(context.Background(), AskInput{
+		Question:       "那我具体该怎么办？",
+		RetrievalQuery: "前文用户问题：我和伴侣争执时会立刻沉默。\n当前问题：那我具体该怎么办？",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generator.input.Question != "那我具体该怎么办？" {
+		t.Fatalf("generator question=%q", generator.input.Question)
+	}
+	if len(generator.input.Sources) != 1 || len(answer.Sources) != 1 || answer.Sources[0].ID != "relationship-conflict" {
+		t.Fatalf("contextual sources generator=%+v answer=%+v", generator.input.Sources, answer.Sources)
+	}
+}
+
 func TestAskRetrievesRelevantKnowledge(t *testing.T) {
 	service := NewService([]Document{
 		{ID: "type-1", Title: "1号 完美型", Content: "完美型重视原则、秩序和高标准，成长建议是允许不完美。", Tags: []string{"完美型", "原则"}},

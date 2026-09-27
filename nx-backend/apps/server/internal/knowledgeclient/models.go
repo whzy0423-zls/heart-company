@@ -6,6 +6,7 @@ type Scope struct {
 	Public              bool    `json:"public"`
 	TheoryReleaseIDs    []int64 `json:"theoryReleaseIds,omitempty"`
 	EnneagramReleaseIDs []int64 `json:"enneagramReleaseIds,omitempty"`
+	SkillReleaseIDs     []int64 `json:"skillReleaseIds,omitempty"`
 	SkillReleaseID      *int64  `json:"skillReleaseId"`
 }
 

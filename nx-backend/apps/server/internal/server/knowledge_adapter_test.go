@@ -57,6 +57,28 @@ func TestAppKnowledgeRemoteAdapterMapsScopeAndDocuments(t *testing.T) {
 	}
 }
 
+func TestAppKnowledgeRemoteAdapterMapsAndAcceptsMultipleSkillReleases(t *testing.T) {
+	releaseID := int64(202)
+	client := &knowledgeRetrieveClientStub{response: knowledgeclient.RetrievalResponse{
+		RequestID: "req-skill",
+		Documents: []knowledgeclient.Document{{ID: "skill-doc", Content: "技能内容", Library: "skill", ReleaseID: &releaseID, Source: "theory:skill-book"}},
+	}}
+	adapter := appKnowledgeRemoteAdapter{client: client}
+
+	result, err := adapter.Retrieve(context.Background(), appknowledge.RemoteRequest{
+		RequestID: "req-skill", Query: "问题", Scene: "app_chat", SkillReleaseIDs: []int64{201, 202},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(client.request.Scope.SkillReleaseIDs, []int64{201, 202}) {
+		t.Fatalf("skill scope=%+v", client.request.Scope)
+	}
+	if len(result.Documents) != 1 || result.Documents[0].ID != "skill-doc" {
+		t.Fatalf("skill documents=%+v", result.Documents)
+	}
+}
+
 func TestAppKnowledgeRemoteAdapterFiltersRetiredWingDocuments(t *testing.T) {
 	releaseID := int64(101)
 	client := &knowledgeRetrieveClientStub{response: knowledgeclient.RetrievalResponse{

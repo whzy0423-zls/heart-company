@@ -296,9 +296,8 @@ func (s *Server) retrieveAppChatKnowledge(ctx context.Context, userID, sessionID
 	if shouldSkipAppChatKnowledge(query) {
 		return nil, nil, nil
 	}
-	if chat.EnneagramType(ctx) > 0 {
-		// A selected role must not bind the user's measured-type knowledge or memories.
-		return nil, nil, nil
+	if selectedType := chat.EnneagramType(ctx); selectedType > 0 {
+		return s.retrieveKnowledgeForScene(ctx, s.appKnowledge, "app_chat", userID, sessionID, cardID, query, selectedType)
 	}
 	return s.retrieveKnowledgeForScene(ctx, s.appKnowledge, "app_chat", userID, sessionID, cardID, query)
 }
@@ -306,6 +305,9 @@ func (s *Server) retrieveAppChatKnowledge(ctx context.Context, userID, sessionID
 func (s *Server) retrieveAppChatKnowledgeForTypes(ctx context.Context, userID, sessionID, cardID int64, query string, requestedTypes []int) ([]rag.Document, *chat.KnowledgeTrace, error) {
 	if shouldSkipAppChatKnowledge(query) {
 		return nil, nil, nil
+	}
+	if selectedType := chat.EnneagramType(ctx); selectedType > 0 {
+		requestedTypes = []int{selectedType}
 	}
 	return s.retrieveKnowledgeForScene(ctx, s.appKnowledge, "app_chat", userID, sessionID, cardID, query, requestedTypes...)
 }
@@ -709,6 +711,7 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		History:             promptContext.History,
 		ConversationSummary: promptContext.Summary,
 		Question:            body.Question,
+		RetrievalQuery:      inputs.retrievalQuery,
 		UserProfile:         profile,
 		ConversationCard:    conversationCard,
 		UserPreferences:     preferences,
@@ -1052,6 +1055,7 @@ func (s *Server) runAppChatStreamPipeline(ctx context.Context, events chan<- app
 			History:             promptContext.History,
 			ConversationSummary: promptContext.Summary,
 			Question:            input.question,
+			RetrievalQuery:      inputs.retrievalQuery,
 			UserProfile:         profile,
 			ConversationCard:    conversationCard,
 			UserPreferences:     preferences,
@@ -1808,26 +1812,28 @@ func refreshAppChatSummaryAsync(sessionID int64, state chat.ConversationState, m
 }
 
 type appChatPromptInputs struct {
-	knowledgeErr error
-	docs         []rag.Document
-	trace        *chat.KnowledgeTrace
-	profile      rag.UserProfile
-	card         rag.ConversationCard
-	memories     []string
-	prompt       appChatPromptContext
+	knowledgeErr   error
+	retrievalQuery string
+	docs           []rag.Document
+	trace          *chat.KnowledgeTrace
+	profile        rag.UserProfile
+	card           rag.ConversationCard
+	memories       []string
+	prompt         appChatPromptContext
 }
 
 func (s *Server) loadAppChatPromptInputs(ctx context.Context, userID, sessionID, cardID int64, question string, requestedTypes []int, generator rag.Generator) appChatPromptInputs {
 	var out appChatPromptInputs
+	out.prompt = s.appChatContextForPrompt(ctx, sessionID, generator)
+	out.retrievalQuery = rag.BuildRetrievalQuery(question, out.prompt.History, out.prompt.Summary)
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		out.docs, out.trace, out.knowledgeErr = s.retrieveAppChatKnowledgeForTypes(ctx, userID, sessionID, cardID, question, requestedTypes)
+		out.docs, out.trace, out.knowledgeErr = s.retrieveAppChatKnowledgeForTypes(ctx, userID, sessionID, cardID, out.retrievalQuery, requestedTypes)
 	}()
 	go func() { defer wg.Done(); out.profile, out.card = s.appChatProfilesForCard(ctx, userID, cardID) }()
 	go func() { defer wg.Done(); out.memories, _ = s.appChatMemoriesForPrompt(ctx, userID, cardID, 6) }()
-	go func() { defer wg.Done(); out.prompt = s.appChatContextForPrompt(ctx, sessionID, generator) }()
 	wg.Wait()
 	out.profile.Memories = out.memories
 	return out

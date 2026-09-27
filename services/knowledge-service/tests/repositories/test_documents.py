@@ -2,11 +2,81 @@ import os
 
 import pytest
 
+from app.repositories import documents as documents_module
 from app.domain.queries import KnowledgeScope
 from app.repositories.documents import DocumentRecord, PostgresDocumentRepository
 
 
 DATABASE_URL = os.getenv("TEST_DATABASE_URL")
+
+
+class RecordingCursor:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def execute(self, query, _params=None) -> None:
+        self.queries.append(str(query))
+
+    def executemany(self, query, _params) -> None:
+        self.queries.append(str(query))
+
+    def fetchall(self):
+        return []
+
+
+class RecordingConnection:
+    def __init__(self, cursor: RecordingCursor) -> None:
+        self._cursor = cursor
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args) -> None:
+        return None
+
+    def cursor(self):
+        return self._cursor
+
+
+def test_identity_checks_do_not_treat_null_embeddings_as_indexed(monkeypatch) -> None:
+    cursor = RecordingCursor()
+    monkeypatch.setattr(
+        documents_module.psycopg,
+        "connect",
+        lambda *_args, **_kwargs: RecordingConnection(cursor),
+    )
+    repository = PostgresDocumentRepository("postgres://fixture")
+
+    repository.existing_identities(["doc-1"])
+    repository.existing_content_identities(["hash-1"])
+
+    assert len(cursor.queries) == 2
+    assert all("embedding IS NOT NULL" in query for query in cursor.queries)
+
+
+def test_upsert_repairs_matching_rows_with_null_embeddings(monkeypatch) -> None:
+    cursor = RecordingCursor()
+    monkeypatch.setattr(
+        documents_module.psycopg,
+        "connect",
+        lambda *_args, **_kwargs: RecordingConnection(cursor),
+    )
+    repository = PostgresDocumentRepository("postgres://fixture")
+    record = DocumentRecord(
+        "doc-1", "public", None, None, 0, "标题", "内容", "source", {}, {},
+        "hash-1", "BAAI/bge-m3", "v1", [0.1, 0.2],
+    )
+
+    assert repository.upsert([record]) == 1
+    select_queries = [query for query in cursor.queries if query.lstrip().upper().startswith("SELECT")]
+    assert len(select_queries) == 2
+    assert all("embedding IS NOT NULL" in query for query in select_queries)
 
 
 @pytest.mark.skipif(not DATABASE_URL, reason="TEST_DATABASE_URL is not configured")

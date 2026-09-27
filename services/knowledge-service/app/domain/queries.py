@@ -13,7 +13,13 @@ class KnowledgeScope(APIModel):
     enneagram_release_ids: list[int] = Field(
         default_factory=list, alias="enneagramReleaseIds"
     )
+    skill_release_ids: list[int] = Field(default_factory=list, alias="skillReleaseIds")
     skill_release_id: int | None = Field(default=None, alias="skillReleaseId")
+
+    def allows_skill_release(self, release_id: int | None) -> bool:
+        if release_id is None:
+            return False
+        return release_id in self.skill_release_ids or release_id == self.skill_release_id
 
 
 class Profile(APIModel):

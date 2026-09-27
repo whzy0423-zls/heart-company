@@ -36,6 +36,7 @@ type RemoteRequest struct {
 	Scene               string
 	Public              bool
 	TheoryReleaseIDs    []int64
+	SkillReleaseIDs     []int64
 	EnneagramReleaseIDs []int64
 	MainType            int
 }
@@ -338,7 +339,11 @@ func remoteRequestFromResolution(input Input, resolved ConversationResolution) R
 	theoryBindings, strictBookScope := theoryBindingsForQuery(resolved.Resolution, input.Query)
 	request := RemoteRequest{RequestID: requestID, Query: input.Query, Scene: scene, Public: !strictBookScope, MainType: resolved.MainType}
 	for _, binding := range theoryBindings {
-		request.TheoryReleaseIDs = append(request.TheoryReleaseIDs, binding.ReleaseID)
+		if isSkillLibraryBinding(binding) {
+			request.SkillReleaseIDs = append(request.SkillReleaseIDs, binding.ReleaseID)
+		} else {
+			request.TheoryReleaseIDs = append(request.TheoryReleaseIDs, binding.ReleaseID)
+		}
 	}
 	if strictBookScope {
 		return request
@@ -353,6 +358,14 @@ func remoteRequestFromResolution(input Input, resolved ConversationResolution) R
 		request.EnneagramReleaseIDs = []int64{resolved.EnneagramType.ReleaseID}
 	}
 	return request
+}
+
+func isSkillLibraryBinding(binding *Binding) bool {
+	if binding == nil {
+		return false
+	}
+	key := strings.ToLower(strings.TrimSpace(binding.LibraryKey))
+	return strings.HasPrefix(key, "skill-") || strings.HasPrefix(key, "story-skill-")
 }
 
 func (c *Coordinator) retrieveRemote(ctx context.Context, resolved ConversationResolution, request RemoteRequest) (Result, error) {

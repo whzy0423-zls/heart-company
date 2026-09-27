@@ -190,21 +190,26 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 		_ = writeAppChatSSE(w, flusher, "error", map[string]string{"code": "session_failed", "message": "会话准备失败，请重试"})
 		return
 	}
+	promptContext := appChatPromptContext{}
+	if s.appChat != nil {
+		promptContext = s.appChatContextForPrompt(ctx, session.ID, s.generator())
+	}
+	retrievalQuery := rag.BuildRetrievalQuery(transcript, promptContext.History, promptContext.Summary)
 	_ = writeAppChatSSE(w, flusher, "state", map[string]string{"state": "retrieving_knowledge"})
 	var docs []rag.Document
 	var knowledgeTrace *chat.KnowledgeTrace
 	if s.appKnowledge != nil {
-		docs, knowledgeTrace, err = s.retrieveXinzhiliKnowledge(ctx, userInfo.ID, session.ID, session.CardID, transcript)
+		docs, knowledgeTrace, err = s.retrieveXinzhiliKnowledge(ctx, userInfo.ID, session.ID, session.CardID, retrievalQuery)
 		if err != nil {
 			_ = writeAppChatSSE(w, flusher, "error", map[string]string{"code": "knowledge_failed", "message": "知识检索失败，请重试"})
 			return
 		}
 	} else {
-		docs, _ = s.retrieveXinzhiliDocs(ctx, transcript, 8)
+		docs, _ = s.retrieveXinzhiliDocs(ctx, retrievalQuery, 8)
 	}
 	_ = writeAppChatSSE(w, flusher, "state", map[string]string{"state": "retrieving_theory"})
 	if s.appKnowledge == nil {
-		theoryDocs, _ := s.retrieveXinzhiliTheoryDocs(ctx, transcript, 6, 0.2)
+		theoryDocs, _ := s.retrieveXinzhiliTheoryDocs(ctx, retrievalQuery, 6, 0.2)
 		docs = mergeXinzhiliRAGDocuments(docs, theoryDocs)
 	}
 
@@ -223,10 +228,6 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 			profile.Memories = memories
 		}
 	}
-	promptContext := appChatPromptContext{}
-	if s.appChat != nil {
-		promptContext = s.appChatContextForPrompt(ctx, session.ID, s.generator())
-	}
 	_ = writeAppChatSSE(w, flusher, "state", map[string]string{"state": "thinking"})
 
 	generationCtx, cancelGeneration := context.WithCancel(ctx)
@@ -239,7 +240,7 @@ func (s *Server) appXinzhiliVoiceTurnStreamWithRuntimeHooks(w http.ResponseWrite
 	go func() {
 		answer, generationErr := rag.NewService(docs, rag.WithGenerator(s.generator())).AskStream(generationCtx, rag.AskInput{
 			History: promptContext.History, ConversationSummary: promptContext.Summary,
-			Question: transcript, UserProfile: profile, ConversationCard: conversationCard,
+			Question: transcript, RetrievalQuery: retrievalQuery, UserProfile: profile, ConversationCard: conversationCard,
 			UserPreferences: preferences, CurrentDirectives: directives, Tier: "companion",
 		}, func(delta string) error {
 			select {

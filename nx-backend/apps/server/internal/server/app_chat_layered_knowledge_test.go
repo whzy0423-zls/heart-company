@@ -461,6 +461,50 @@ func TestAppChatModelIdentitySkipsLayeredKnowledge(t *testing.T) {
 	}
 }
 
+func TestEnneagramDialogueRetrievesSelectedRoleKnowledgeInsteadOfCardType(t *testing.T) {
+	store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	store.cardID = 77
+	resolver := &layeredKnowledgeResolver{mainType: 2, revision: 1}
+	server := newLayeredKnowledgeServer(t, store, resolver, newLayeredKnowledgeSearcher(), &layeredKnowledgeGenerator{})
+	request := layeredKnowledgeRequest(t, "/api/app/chat/sessions/42/ask", "我在压力下通常会怎么表现？")
+	request = request.WithContext(chat.WithEnneagramType(request.Context(), 8))
+
+	response := httptest.NewRecorder()
+	server.appChatRouter(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !reflect.DeepEqual(resolver.requestedTypes, []int{8}) {
+		t.Fatalf("selected role knowledge types=%v, want [8]", resolver.requestedTypes)
+	}
+}
+
+func TestAppChatRetrievalUsesRecentUserQuestionForContextDependentFollowUp(t *testing.T) {
+	store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	store.cardID = 77
+	store.messages = []chat.Message{
+		{Role: "user", Content: "我读心理书时总是读完就忘。"},
+		{Role: "assistant", Content: "可以先试试三句复述法。"},
+	}
+	searcher := newLayeredKnowledgeSearcher()
+	server := newLayeredKnowledgeServer(t, store, &layeredKnowledgeResolver{mainType: 2, revision: 1}, searcher, &layeredKnowledgeGenerator{})
+
+	response := httptest.NewRecorder()
+	server.appChatRouter(response, layeredKnowledgeRequest(t, "/api/app/chat/sessions/42/ask", "把刚才的方法给我一个具体例子。"))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	query := searcher.lastQuery()
+	if !strings.Contains(query, "我读心理书时总是读完就忘") || !strings.Contains(query, "把刚才的方法") {
+		t.Fatalf("contextual retrieval query=%q", query)
+	}
+	if strings.Contains(query, "三句复述法") {
+		t.Fatalf("assistant answer leaked into retrieval query=%q", query)
+	}
+}
+
 func TestAppChatLayeredKnowledgeRequestedTypeLimitsAndLegacyBoundary(t *testing.T) {
 	explicitResolver := &layeredKnowledgeResolver{mainType: 6, revision: 1}
 	explicitSearcher := newLayeredKnowledgeSearcher()
@@ -560,6 +604,7 @@ type layeredKnowledgeSearcher struct {
 	publicTopKs  []int
 	releaseTopKs map[int64][]int
 	releaseIDs   []int64
+	queries      []string
 }
 
 func newLayeredKnowledgeSearcher() *layeredKnowledgeSearcher {
@@ -569,6 +614,7 @@ func newLayeredKnowledgeSearcher() *layeredKnowledgeSearcher {
 func (s *layeredKnowledgeSearcher) SearchPublic(_ context.Context, query string, topK int) ([]rag.Document, error) {
 	s.mu.Lock()
 	s.publicTopKs = append(s.publicTopKs, topK)
+	s.queries = append(s.queries, query)
 	s.mu.Unlock()
 	return []rag.Document{{ID: "public", Title: "公共支持", Content: query + " 先确认现实压力来源。"}}, nil
 }
@@ -577,6 +623,7 @@ func (s *layeredKnowledgeSearcher) SearchReleaseChunks(_ context.Context, releas
 	s.mu.Lock()
 	s.releaseIDs = append(s.releaseIDs, releaseID)
 	s.releaseTopKs[releaseID] = append(s.releaseTopKs[releaseID], topK)
+	s.queries = append(s.queries, query)
 	s.mu.Unlock()
 	if releaseID == 100 {
 		return []rag.Document{{ID: "theory", Title: "正式理论", Content: query + " 先区分动机、行为和防御模式。"}}, nil
@@ -586,6 +633,15 @@ func (s *layeredKnowledgeSearcher) SearchReleaseChunks(_ context.Context, releas
 		ID: fmt.Sprintf("type-%d", typeValue), Title: fmt.Sprintf("%d号型号库", typeValue),
 		Content: fmt.Sprintf("%s %d号使用当前型号特有的观察和成长建议。", query, typeValue), Tags: []string{fmt.Sprintf("type-%02d", typeValue)},
 	}}, nil
+}
+
+func (s *layeredKnowledgeSearcher) lastQuery() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.queries) == 0 {
+		return ""
+	}
+	return s.queries[len(s.queries)-1]
 }
 
 func (s *layeredKnowledgeSearcher) capturedCalls() ([]int, []int64, map[int64][]int) {

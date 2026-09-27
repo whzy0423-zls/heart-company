@@ -51,7 +51,9 @@ class PostgresDocumentRepository:
         ids = [record.id for record in records]
         with psycopg.connect(self.database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
-                "SELECT id,content_hash,embedding_model,index_version FROM knowledge_documents WHERE id = ANY(%s::text[])",
+                """SELECT id,content_hash,embedding_model,index_version
+                   FROM knowledge_documents
+                   WHERE id = ANY(%s::text[]) AND embedding IS NOT NULL""",
                 (ids,),
             )
             existing = {row[0]: row[1:] for row in cursor.fetchall()}
@@ -62,7 +64,8 @@ class PostgresDocumentRepository:
             ]
             cursor.execute(
                 """SELECT content_hash,embedding_model,index_version,library_kind,COALESCE(release_id,0)
-                   FROM knowledge_documents WHERE content_hash = ANY(%s::text[])""",
+                   FROM knowledge_documents
+                   WHERE content_hash = ANY(%s::text[]) AND embedding IS NOT NULL""",
                 ([record.content_hash for record in candidates],),
             )
             known_identities = set(cursor.fetchall())
@@ -118,7 +121,9 @@ class PostgresDocumentRepository:
             return {}
         with psycopg.connect(self.database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
-                "SELECT id,content_hash,embedding_model,index_version FROM knowledge_documents WHERE id = ANY(%s::text[])",
+                """SELECT id,content_hash,embedding_model,index_version
+                   FROM knowledge_documents
+                   WHERE id = ANY(%s::text[]) AND embedding IS NOT NULL""",
                 (ids,),
             )
             return {row[0]: (row[1], row[2], row[3]) for row in cursor.fetchall()}
@@ -129,7 +134,8 @@ class PostgresDocumentRepository:
         with psycopg.connect(self.database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
                 """SELECT content_hash,embedding_model,index_version,library_kind,COALESCE(release_id,0)
-                   FROM knowledge_documents WHERE content_hash = ANY(%s::text[])""",
+                   FROM knowledge_documents
+                   WHERE content_hash = ANY(%s::text[]) AND embedding IS NOT NULL""",
                 (content_hashes,),
             )
             return set(cursor.fetchall())
@@ -207,7 +213,8 @@ _SCOPE_SQL = """safety_level <= %(max_safety_level)s AND (
     (library_kind='theory' AND release_id = ANY(%(theory_release_ids)s::bigint[])) OR
     (library_kind='enneagram' AND release_id = ANY(%(enneagram_release_ids)s::bigint[]) AND
       (cardinality(%(enneagram_types)s::int[]) = 0 OR enneagram_type = ANY(%(enneagram_types)s::int[]))) OR
-    (library_kind='skill' AND release_id=%(skill_release_id)s)
+    (library_kind='skill' AND
+      (release_id = ANY(%(skill_release_ids)s::bigint[]) OR release_id=%(skill_release_id)s))
 )"""
 
 
@@ -216,6 +223,7 @@ def _scope_params(scope: KnowledgeScope, enneagram_types: set[int], max_safety_l
         "public": scope.public,
         "theory_release_ids": scope.theory_release_ids,
         "enneagram_release_ids": scope.enneagram_release_ids,
+        "skill_release_ids": scope.skill_release_ids,
         "skill_release_id": scope.skill_release_id,
         "enneagram_types": sorted(enneagram_types),
         "max_safety_level": max_safety_level,

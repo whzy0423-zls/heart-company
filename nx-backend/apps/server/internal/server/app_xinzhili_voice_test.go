@@ -447,13 +447,17 @@ func TestAppXinzhiliVoiceTurnAddsTheoryDocumentsToModelInput(t *testing.T) {
 
 func TestAppXinzhiliVoiceTurnUsesLayeredKnowledgeForPrimaryCard(t *testing.T) {
 	store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	store.messages = []chat.Message{
+		{Role: "user", Content: "我面对冲突时总是先逃避。"},
+		{Role: "assistant", Content: "可以先稳定身体感受。"},
+	}
 	resolver := &layeredKnowledgeResolver{mainType: 5, revision: 7}
 	searcher := newLayeredKnowledgeSearcher()
 	generator := &layeredKnowledgeGenerator{}
 	s := newSuccessfulXinzhiliVoiceServer(t)
 	s.appChat = store
 	s.xinzhiliSavePair = nil
-	s.xinzhiliTranscribe = func(context.Context, []byte, string) (string, error) { return "1 2 3 4 这些型号的反馈", nil }
+	s.xinzhiliTranscribe = func(context.Context, []byte, string) (string, error) { return "那具体应该怎么做？", nil }
 	s.appKnowledge = appknowledge.NewCoordinator(resolver, searcher, searcher)
 	s.ragGen = generator
 	s.appChatProfilesForCardOverride = func(_ context.Context, _, cardID int64) (rag.UserProfile, rag.ConversationCard) {
@@ -473,6 +477,10 @@ func TestAppXinzhiliVoiceTurnUsesLayeredKnowledgeForPrimaryCard(t *testing.T) {
 	}
 	if len(resolver.requestedTypes) != 0 {
 		t.Fatalf("voice must keep legacy current-card retrieval, requested types = %v", resolver.requestedTypes)
+	}
+	query := searcher.lastQuery()
+	if !strings.Contains(query, "我面对冲突时总是先逃避") || !strings.Contains(query, "那具体应该怎么做") || strings.Contains(query, "稳定身体感受") {
+		t.Fatalf("xinzhili contextual retrieval query=%q", query)
 	}
 	input := generator.lastInput()
 	if input.RuntimeInstructions != "" || input.MaxOutputTokens != 0 || input.CompletionTimeout != 0 || input.SourceLimit != 0 || input.SourceSnippetRunes != 0 {

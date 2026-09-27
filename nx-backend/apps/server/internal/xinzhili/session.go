@@ -917,9 +917,11 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 			knowledgeErr   error
 			contextLoads   sync.WaitGroup
 		)
+		historyReady := make(chan struct{})
 		contextLoads.Add(4)
 		go func() {
 			defer contextLoads.Done()
+			defer close(historyReady)
 			history, summary, _ = s.deps.Conversations.History(turn.ctx, turn.conversation, 20)
 		}()
 		go func() {
@@ -936,18 +938,25 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 		}()
 		go func() {
 			defer contextLoads.Done()
+			select {
+			case <-historyReady:
+			case <-turn.ctx.Done():
+				knowledgeErr = turn.ctx.Err()
+				return
+			}
+			retrievalQuery := rag.BuildRetrievalQuery(question, history, summary)
 			if s.deps.LayeredKnowledge != nil {
-				result, err := s.deps.LayeredKnowledge.Retrieve(turn.ctx, turn.input.UserID, turn.conversation.ID, turn.input.CardID, question)
+				result, err := s.deps.LayeredKnowledge.Retrieve(turn.ctx, turn.input.UserID, turn.conversation.ID, turn.input.CardID, retrievalQuery)
 				knowledgeErr = err
 				knowledgeDocs = result.Documents
 				knowledgeTrace = result.Trace
 				return
 			}
 			if s.deps.Knowledge != nil {
-				knowledgeDocs, _ = s.deps.Knowledge.Search(turn.ctx, question, turn.input.KnowledgeTopK, turn.input.KnowledgeMinScore)
+				knowledgeDocs, _ = s.deps.Knowledge.Search(turn.ctx, retrievalQuery, turn.input.KnowledgeTopK, turn.input.KnowledgeMinScore)
 			}
 			if s.deps.Theory != nil {
-				theoryDocs, _ = s.deps.Theory.Search(turn.ctx, question, turn.input.TheoryTopK, turn.input.TheoryMinScore)
+				theoryDocs, _ = s.deps.Theory.Search(turn.ctx, retrievalQuery, turn.input.TheoryTopK, turn.input.TheoryMinScore)
 			}
 		}()
 		contextLoads.Wait()

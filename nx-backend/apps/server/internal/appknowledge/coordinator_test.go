@@ -106,9 +106,9 @@ func TestCoordinatorLangChainUsesResolvedReleaseScope(t *testing.T) {
 
 func TestCoordinatorLangChainPassesEveryConfiguredTheoryRelease(t *testing.T) {
 	bindings := []*Binding{
-		{Layer: LayerTheory, ReleaseID: 101},
-		{Layer: LayerTheory, ReleaseID: 201},
-		{Layer: LayerTheory, ReleaseID: 202},
+		{Layer: LayerTheory, LibraryKey: "enneagram-core", ReleaseID: 101},
+		{Layer: LayerTheory, LibraryKey: "skill-qinmi-guanxi", ReleaseID: 201},
+		{Layer: LayerTheory, LibraryKey: "skill-social-psychology-myers", ReleaseID: 202},
 	}
 	resolver := &coordinatorResolverStub{resolution: ConversationResolution{
 		CardID: 9, CardRevision: 4, MainType: 3,
@@ -120,8 +120,8 @@ func TestCoordinatorLangChainPassesEveryConfiguredTheoryRelease(t *testing.T) {
 	if _, err := coordinator.Retrieve(context.Background(), Input{UserID: 7, SessionID: 8, CardID: 9, Query: "亲密关系"}); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(remote.input.TheoryReleaseIDs, []int64{101, 201, 202}) {
-		t.Fatalf("remote theory releases = %v", remote.input.TheoryReleaseIDs)
+	if !reflect.DeepEqual(remote.input.TheoryReleaseIDs, []int64{101}) || !reflect.DeepEqual(remote.input.SkillReleaseIDs, []int64{201, 202}) {
+		t.Fatalf("remote releases theory=%v skill=%v", remote.input.TheoryReleaseIDs, remote.input.SkillReleaseIDs)
 	}
 }
 
@@ -241,8 +241,8 @@ func TestCoordinatorScopesExplicitBookRequestToMatchingTheoryRelease(t *testing.
 	if remote.input.Public {
 		t.Fatal("strict named-book request included public knowledge")
 	}
-	if !reflect.DeepEqual(remote.input.TheoryReleaseIDs, []int64{201}) {
-		t.Fatalf("named-book theory releases=%v, want [201]", remote.input.TheoryReleaseIDs)
+	if len(remote.input.TheoryReleaseIDs) != 0 || !reflect.DeepEqual(remote.input.SkillReleaseIDs, []int64{201}) {
+		t.Fatalf("named-book releases theory=%v skill=%v, want []/[201]", remote.input.TheoryReleaseIDs, remote.input.SkillReleaseIDs)
 	}
 	if len(remote.input.EnneagramReleaseIDs) != 0 {
 		t.Fatalf("named-book request included type releases=%v", remote.input.EnneagramReleaseIDs)

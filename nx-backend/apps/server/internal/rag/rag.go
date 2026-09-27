@@ -86,6 +86,7 @@ type AskInput struct {
 	History             []Message        `json:"history"`
 	ConversationSummary string           `json:"conversationSummary,omitempty"`
 	Question            string           `json:"question"`
+	RetrievalQuery      string           `json:"-"`
 	UserProfile         UserProfile      `json:"userProfile"`
 	ConversationCard    ConversationCard `json:"conversationCard,omitempty"`
 	UserPreferences     []string         `json:"userPreferences,omitempty"`
@@ -195,7 +196,7 @@ func (s *Service) Ask(ctx context.Context, input AskInput) (Answer, error) {
 
 	sourceLimit := boundedSourceOverride(input.SourceLimit, maxSourceLimit)
 	sourceSnippetRunes := boundedSourceOverride(input.SourceSnippetRunes, maxSourceSnippetRunes)
-	matches := s.search(question, relevantMainType(input), sourceValueOrDefault(sourceLimit, defaultSourceLimit))
+	matches := s.search(effectiveRetrievalQuery(input, question), relevantMainType(input), sourceValueOrDefault(sourceLimit, defaultSourceLimit))
 	if len(matches) == 0 {
 		// 检索未命中：仍尝试让 AI 结合九型常识作答（Sources 为空）；
 		// 只有 AI 不可用或返回空时，才回退到固定兜底文案。
@@ -319,7 +320,7 @@ func (s *Service) AskStream(ctx context.Context, input AskInput, emit StreamEmit
 
 	sourceLimit := boundedSourceOverride(input.SourceLimit, maxSourceLimit)
 	sourceSnippetRunes := boundedSourceOverride(input.SourceSnippetRunes, maxSourceSnippetRunes)
-	matches := s.search(question, relevantMainType(input), sourceValueOrDefault(sourceLimit, defaultSourceLimit))
+	matches := s.search(effectiveRetrievalQuery(input, question), relevantMainType(input), sourceValueOrDefault(sourceLimit, defaultSourceLimit))
 	if len(matches) == 0 {
 		if s.generator != nil {
 			generated, err := s.generateStreaming(ctx, GenerateInput{
@@ -514,6 +515,13 @@ func sourceValueOrDefault(value, fallback int) int {
 		return value
 	}
 	return fallback
+}
+
+func effectiveRetrievalQuery(input AskInput, question string) string {
+	if query := strings.TrimSpace(input.RetrievalQuery); query != "" {
+		return query
+	}
+	return question
 }
 
 func (s *Service) search(question string, mainType int, limit int) []scoredDoc {

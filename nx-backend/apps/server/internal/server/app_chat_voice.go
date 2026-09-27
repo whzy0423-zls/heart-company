@@ -181,7 +181,10 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		extraction = preparedExtraction
-		docs, trace, knowledgeErr := s.retrieveAppChatKnowledge(ctx, userInfo.ID, sessionID, sess.CardID, transcript)
+		generator := s.generator()
+		promptContext := s.appChatContextForPrompt(ctx, sessionID, generator)
+		retrievalQuery := rag.BuildRetrievalQuery(transcript, promptContext.History, promptContext.Summary)
+		docs, trace, knowledgeErr := s.retrieveAppChatKnowledge(ctx, userInfo.ID, sessionID, sess.CardID, retrievalQuery)
 		if knowledgeErr != nil {
 			httpx.Fail(w, http.StatusBadGateway, "知识检索失败，请重试")
 			return
@@ -191,12 +194,11 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		if memories, memoryErr := s.appChatMemoriesForPrompt(ctx, userInfo.ID, sess.CardID, 6); memoryErr == nil {
 			profile.Memories = memories
 		}
-		generator := s.generator()
-		promptContext := s.appChatContextForPrompt(ctx, sessionID, generator)
 		answer, err = rag.NewService(docs, rag.WithGenerator(generator), rag.WithStrictGeneratorErrors()).Ask(ctx, rag.AskInput{
 			History:             promptContext.History,
 			ConversationSummary: promptContext.Summary,
 			Question:            transcript,
+			RetrievalQuery:      retrievalQuery,
 			UserProfile:         profile,
 			ConversationCard:    conversationCard,
 			UserPreferences:     preferences,

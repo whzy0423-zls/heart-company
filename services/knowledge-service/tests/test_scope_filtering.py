@@ -74,3 +74,37 @@ def test_document_outside_requested_release_is_rejected() -> None:
 
     assert response.status_code == 500
     assert response.json()["detail"] == "retriever returned document outside requested scope"
+
+
+def test_multiple_skill_releases_are_allowed_without_cross_scope_leakage() -> None:
+    captured = None
+
+    async def skill_retriever(query):
+        nonlocal captured
+        captured = query.scope.skill_release_ids
+        return [
+            RetrievedDocument(
+                id="skill-202",
+                content="技能知识",
+                library="skill",
+                release_id=202,
+                score=0.91,
+                source="skill-book",
+                locator={},
+            )
+        ]
+
+    body = request_body()
+    body["scope"]["theoryReleaseIds"] = []
+    body["scope"]["skillReleaseIds"] = [201, 202]
+    app.dependency_overrides[get_retriever] = lambda: skill_retriever
+    try:
+        response = TestClient(app).post(
+            "/internal/v1/retrieve", json=body, headers=AUTH
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert captured == [201, 202]
+    assert response.json()["documents"][0]["releaseId"] == 202

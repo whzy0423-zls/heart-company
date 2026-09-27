@@ -19,16 +19,15 @@ import (
 )
 
 const (
-	skillHistoryLimit         = 20
-	skillSearchLimit          = 6
-	skillSearchMinScore       = 0.20
-	skillPinnedSearchMinScore = 0.0
-	skillContextRunes         = 4000
-	skillContextChunkRunes    = 1600
-	skillMaxOutputTokens      = 700
-	skillCompletionTimeout    = 70 * time.Second
-	publicSourceSnippetRunes  = 120
-	skillPersistenceTimeout   = 5 * time.Second
+	skillHistoryLimit        = 20
+	skillSearchLimit         = 6
+	skillSearchMinScore      = 0.20
+	skillContextRunes        = 4000
+	skillContextChunkRunes   = 1600
+	skillMaxOutputTokens     = 700
+	skillCompletionTimeout   = 70 * time.Second
+	publicSourceSnippetRunes = 120
+	skillPersistenceTimeout  = 5 * time.Second
 )
 
 type RuntimeStore interface {
@@ -147,13 +146,14 @@ func (r *Runtime) Generate(ctx context.Context, appUserID, sessionID int64, ques
 	if err != nil {
 		return Result{}, err
 	}
+	retrievalQuery := rag.BuildRetrievalQuery(question, history, summary)
 	var retrieval appknowledge.RemoteResult
 	initialContext := ""
 	if session.SkillKey == "enneagram-personality-library" {
-		retrieval.Documents, initialContext, err = r.sceneKnowledge(ctx, appUserID, sessionID, session.TheoryReleaseID, question)
+		retrieval.Documents, initialContext, err = r.sceneKnowledge(ctx, appUserID, sessionID, session.TheoryReleaseID, retrievalQuery)
 		retrieval.RetrievalMethod = "local"
 	} else {
-		retrieval, err = r.retrieveKnowledge(ctx, appUserID, session, question)
+		retrieval, err = r.retrieveKnowledge(ctx, appUserID, session, retrievalQuery)
 	}
 	if err != nil {
 		return Result{}, fmt.Errorf("search skill knowledge: %w", err)
@@ -207,15 +207,15 @@ func (r *Runtime) Generate(ctx context.Context, appUserID, sessionID int64, ques
 
 func (r *Runtime) retrieveKnowledge(ctx context.Context, appUserID int64, session Session, question string) (appknowledge.RemoteResult, error) {
 	local := func() (appknowledge.RemoteResult, error) {
-		documents, err := r.searcher.SearchReleaseChunks(ctx, session.TheoryReleaseID, question, skillSearchLimit, skillPinnedSearchMinScore)
+		documents, err := r.searcher.SearchReleaseChunks(ctx, session.TheoryReleaseID, question, skillSearchLimit, skillSearchMinScore)
 		return appknowledge.RemoteResult{Documents: documents, RetrievalMethod: "local"}, err
 	}
 	request := appknowledge.RemoteRequest{
-		RequestID:        newSkillRequestID(session.ID),
-		Query:            question,
-		Scene:            "skill_chat",
-		Public:           false,
-		TheoryReleaseIDs: []int64{session.TheoryReleaseID},
+		RequestID:       newSkillRequestID(session.ID),
+		Query:           question,
+		Scene:           "skill_chat",
+		Public:          false,
+		SkillReleaseIDs: []int64{session.TheoryReleaseID},
 	}
 	selected := r.rolloutPercent >= 100 || (r.rolloutPercent > 0 && int(appUserID%100) < r.rolloutPercent)
 	switch r.remoteBackend {
