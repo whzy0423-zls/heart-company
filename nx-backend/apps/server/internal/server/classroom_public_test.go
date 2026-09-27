@@ -678,6 +678,42 @@ func playbackDB(t *testing.T, access classroom.AccessLevel) *sql.DB {
 	})
 }
 
+func TestClassroomAppPlaybackUsesAppUserNamespace(t *testing.T) {
+	var queriedAppUsers, queriedWXUsers bool
+	db := openClassroomTestDB(t, func(q string, _ []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(q, "JOIN classroom_media_assets m"):
+			return &classroomRows{cols: make([]string, 22), values: [][]driver.Value{{int64(7), nil, false, "Lesson", "video", "published", false, "public", int64(0), int64(3), int64(3), "bucket", "private/media.mp4", "media-v1", "video", "ready", int64(60), nil, nil, nil, nil, nil}}}, nil
+		case strings.Contains(q, "FROM app_users"):
+			queriedAppUsers = true
+			return &classroomRows{cols: []string{"member_level", "member_expires_at"}, values: [][]driver.Value{{"free", nil}}}, nil
+		case strings.Contains(q, "FROM wx_users"):
+			queriedWXUsers = true
+			return &classroomRows{cols: []string{"member_level", "member_expires_at"}}, nil
+		case strings.Contains(q, "SELECT series_id,content_id FROM classroom_entitlements"):
+			return &classroomRows{cols: []string{"series_id", "content_id"}}, nil
+		default:
+			return nil, fmt.Errorf("unexpected query: %s", q)
+		}
+	})
+	s := &Server{
+		classroomPublic:         newClassroomPublicDB(db),
+		classroomPlaybackSigner: fakeClassroomSigner{key: "app-user"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/app/classroom/content/7/play", nil)
+	req = req.WithContext(contextWithAppUser(req.Context(), auth.UserInfo{ID: 38, TokenKind: auth.TokenKindApp}))
+	rr := httptest.NewRecorder()
+
+	s.classroomAppPlayback(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("response=%d %s", rr.Code, rr.Body.String())
+	}
+	if !queriedAppUsers || queriedWXUsers {
+		t.Fatalf("queried app_users=%t wx_users=%t", queriedAppUsers, queriedWXUsers)
+	}
+}
+
 func TestClassroomDBBackedPlaybackHandlerAnonymousAndJWTPaths(t *testing.T) {
 	t.Run("anonymous public", func(t *testing.T) {
 		db := playbackDB(t, classroom.AccessPublic)

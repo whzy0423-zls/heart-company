@@ -818,6 +818,9 @@ func (d *classroomPublicDB) loadAccessSnapshot(ctx context.Context, uid int64) (
 	if uid <= 0 {
 		return v, nil
 	}
+	if appUser, ok := ctx.Value(appContextKey{}).(auth.UserInfo); ok && appUser.ID == uid {
+		return d.loadAppAccessSnapshot(ctx, v, uid)
+	}
 	var level int
 	var exp *time.Time
 	if err := d.db.QueryRowContext(ctx, "SELECT member_level,member_expires_at FROM wx_users WHERE id=$1", uid).Scan(&level, &exp); err != nil {
@@ -842,6 +845,20 @@ func (d *classroomPublicDB) loadAccessSnapshot(ctx context.Context, uid int64) (
 		}
 	}
 	return v, rows.Err()
+}
+
+func (d *classroomPublicDB) loadAppAccessSnapshot(ctx context.Context, v classroomAccessSnapshot, uid int64) (classroomAccessSnapshot, error) {
+	var level string
+	var exp sql.NullTime
+	if err := d.db.QueryRowContext(ctx, `SELECT member_level,member_expires_at FROM app_users WHERE id=$1 AND status='active'`, uid).Scan(&level, &exp); err != nil {
+		return v, err
+	}
+	var expiresAt *time.Time
+	if exp.Valid {
+		expiresAt = &exp.Time
+	}
+	v.member = appEffectivePlanCode(level, expiresAt, time.Now()) != "free"
+	return v, nil
 }
 func (v classroomAccessSnapshot) allows(access classroom.AccessLevel, contentID int64, seriesID *int64) bool {
 	owned := v.contentOwned[contentID]
