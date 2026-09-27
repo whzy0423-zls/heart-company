@@ -661,6 +661,18 @@ func TestChatTokenBudgetExpandsForLongMultiPartSituationalQuestion(t *testing.T)
 	}
 }
 
+func TestChatTokenBudgetExpandsForShortWhyAndActionQuestion(t *testing.T) {
+	question := "为什么我总是在亲密关系里害怕被抛弃？我今天可以怎么做？"
+	for _, tier := range []string{"", "basic"} {
+		if got := chatTokenBudgetForTier(question, tier); got != 420 {
+			t.Fatalf("chatTokenBudgetForTier(%q) = %d, want 420", tier, got)
+		}
+	}
+	if got := chatTokenBudgetForTier("为什么他今天没回我？", "basic"); got != 220 {
+		t.Fatalf("single-intent question budget = %d, want 220", got)
+	}
+}
+
 func TestRequestsEnneagramOverview(t *testing.T) {
 	tests := []struct {
 		question string

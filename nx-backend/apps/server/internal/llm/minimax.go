@@ -1386,6 +1386,13 @@ func chatTokenBudget(question string) int {
 
 func needsExpandedSituationalBudget(question string) bool {
 	question = strings.TrimSpace(question)
+	if strings.Contains(question, "为什么") {
+		for _, marker := range []string{"怎么", "如何", "建议", "怎么办", "做什么", "准备"} {
+			if strings.Contains(question, marker) {
+				return true
+			}
+		}
+	}
 	if len([]rune(question)) < 32 {
 		return false
 	}
