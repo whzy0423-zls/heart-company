@@ -292,8 +292,8 @@ func (s *Server) ensureAppChatMessageWritable(ctx context.Context, appUserID, me
 	return s.ensureCardWritable(ctx, appUserID, session.CardID)
 }
 
-func (s *Server) retrieveAppChatKnowledge(ctx context.Context, userID, sessionID, cardID int64, query string) ([]rag.Document, *chat.KnowledgeTrace, error) {
-	if shouldSkipAppChatKnowledge(query) {
+func (s *Server) retrieveAppChatKnowledge(ctx context.Context, userID, sessionID, cardID int64, question, query string) ([]rag.Document, *chat.KnowledgeTrace, error) {
+	if shouldSkipAppChatKnowledge(question) {
 		return nil, nil, nil
 	}
 	if selectedType := chat.EnneagramType(ctx); selectedType > 0 {
@@ -302,8 +302,8 @@ func (s *Server) retrieveAppChatKnowledge(ctx context.Context, userID, sessionID
 	return s.retrieveKnowledgeForScene(ctx, s.appKnowledge, "app_chat", userID, sessionID, cardID, query)
 }
 
-func (s *Server) retrieveAppChatKnowledgeForTypes(ctx context.Context, userID, sessionID, cardID int64, query string, requestedTypes []int) ([]rag.Document, *chat.KnowledgeTrace, error) {
-	if shouldSkipAppChatKnowledge(query) {
+func (s *Server) retrieveAppChatKnowledgeForTypes(ctx context.Context, userID, sessionID, cardID int64, question, query string, requestedTypes []int) ([]rag.Document, *chat.KnowledgeTrace, error) {
+	if shouldSkipAppChatKnowledge(question) {
 		return nil, nil, nil
 	}
 	if selectedType := chat.EnneagramType(ctx); selectedType > 0 {
@@ -1835,7 +1835,7 @@ func (s *Server) loadAppChatPromptInputs(ctx context.Context, userID, sessionID,
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		out.docs, out.trace, out.knowledgeErr = s.retrieveAppChatKnowledgeForTypes(ctx, userID, sessionID, cardID, out.retrievalQuery, requestedTypes)
+		out.docs, out.trace, out.knowledgeErr = s.retrieveAppChatKnowledgeForTypes(ctx, userID, sessionID, cardID, question, out.retrievalQuery, requestedTypes)
 	}()
 	go func() { defer wg.Done(); out.profile, out.card = s.appChatProfilesForCard(ctx, userID, cardID) }()
 	go func() { defer wg.Done(); out.memories, _ = s.appChatMemoriesForPrompt(ctx, userID, cardID, 6) }()

@@ -520,6 +520,33 @@ func TestAppChatRetrievalUsesRecentUserQuestionForContextDependentFollowUp(t *te
 	}
 }
 
+func TestAppChatContextualFollowUpDoesNotInheritRealtimeSkipFromHistory(t *testing.T) {
+	store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	store.cardID = 77
+	store.messages = []chat.Message{
+		{Role: "user", Content: "今天上海天气怎么样？"},
+		{Role: "assistant", Content: "请查看实时天气服务。"},
+		{Role: "user", Content: "伴侣越解释，我越觉得不被理解。"},
+		{Role: "assistant", Content: "可以先请对方回应你的感受。"},
+	}
+	resolver := &layeredKnowledgeResolver{mainType: 4, revision: 1}
+	searcher := newLayeredKnowledgeSearcher()
+	server := newLayeredKnowledgeServer(t, store, resolver, searcher, &layeredKnowledgeGenerator{})
+
+	response := httptest.NewRecorder()
+	server.appChatRouter(response, layeredKnowledgeRequest(t, "/api/app/chat/sessions/42/ask", "那刚才第二个句子，如果对方继续辩解，我下一句怎么说？"))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if resolver.calls != 1 {
+		t.Fatalf("contextual follow-up retrieval calls=%d, want 1", resolver.calls)
+	}
+	if len(store.allTraces()) != 1 {
+		t.Fatalf("contextual follow-up traces=%d, want 1", len(store.allTraces()))
+	}
+}
+
 func TestAppChatLayeredKnowledgeRequestedTypeLimitsAndLegacyBoundary(t *testing.T) {
 	explicitResolver := &layeredKnowledgeResolver{mainType: 6, revision: 1}
 	explicitSearcher := newLayeredKnowledgeSearcher()

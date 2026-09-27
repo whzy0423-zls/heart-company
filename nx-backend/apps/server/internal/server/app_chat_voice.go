@@ -184,7 +184,7 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		generator := s.generator()
 		promptContext := s.appChatContextForPrompt(ctx, sessionID, generator)
 		retrievalQuery := rag.BuildRetrievalQuery(transcript, promptContext.History, promptContext.Summary)
-		docs, trace, knowledgeErr := s.retrieveAppChatKnowledge(ctx, userInfo.ID, sessionID, sess.CardID, retrievalQuery)
+		docs, trace, knowledgeErr := s.retrieveAppChatKnowledge(ctx, userInfo.ID, sessionID, sess.CardID, transcript, retrievalQuery)
 		if knowledgeErr != nil {
 			httpx.Fail(w, http.StatusBadGateway, "知识检索失败，请重试")
 			return
