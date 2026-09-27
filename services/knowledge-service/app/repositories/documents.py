@@ -29,6 +29,13 @@ class DocumentRecord:
     embedding: list[float]
 
 
+@dataclass(frozen=True)
+class PendingEmbeddingDocument:
+    id: str
+    title: str
+    content: str
+
+
 class PostgresDocumentRepository:
     def __init__(self, database_url: str) -> None:
         self.database_url = database_url
@@ -143,6 +150,57 @@ class PostgresDocumentRepository:
     def delete_by_index_version(self, index_version: str) -> None:
         with psycopg.connect(self.database_url) as connection, connection.cursor() as cursor:
             cursor.execute("DELETE FROM knowledge_documents WHERE index_version=%s", (index_version,))
+
+    def count_missing_embeddings(self, *, library: str | None = None) -> int:
+        where = "embedding IS NULL"
+        params: tuple[Any, ...] = ()
+        if library:
+            where += " AND library_kind=%s"
+            params = (library,)
+        with psycopg.connect(self.database_url) as connection, connection.cursor() as cursor:
+            cursor.execute(f"SELECT count(*) FROM knowledge_documents WHERE {where}", params)
+            row = cursor.fetchone()
+        return int(row[0]) if row else 0
+
+    def load_missing_embeddings(self, *, library: str | None = None, limit: int) -> list[PendingEmbeddingDocument]:
+        where = "embedding IS NULL"
+        params: list[Any] = []
+        if library:
+            where += " AND library_kind=%s"
+            params.append(library)
+        params.append(limit)
+        with psycopg.connect(self.database_url) as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"""SELECT id,title,content FROM knowledge_documents
+                    WHERE {where} ORDER BY id LIMIT %s""",
+                tuple(params),
+            )
+            rows = cursor.fetchall()
+        return [PendingEmbeddingDocument(str(row[0]), str(row[1]), str(row[2])) for row in rows]
+
+    def update_embeddings(
+        self,
+        documents: list[PendingEmbeddingDocument],
+        vectors: list[list[float]],
+        *,
+        model: str,
+        index_version: str,
+    ) -> int:
+        if len(documents) != len(vectors):
+            raise ValueError("document and embedding counts differ")
+        if not documents:
+            return 0
+        with psycopg.connect(self.database_url) as connection, connection.cursor() as cursor:
+            cursor.executemany(
+                """UPDATE knowledge_documents
+                   SET embedding_model=%s,index_version=%s,embedding=%s::vector,update_time=now()
+                   WHERE id=%s AND embedding IS NULL""",
+                [
+                    (model, index_version, _vector_literal(vector), document.id)
+                    for document, vector in zip(documents, vectors, strict=True)
+                ],
+            )
+            return max(int(cursor.rowcount), 0)
 
     def lexical_search(
         self,
