@@ -26,6 +26,56 @@ def test_embedding_client_sends_openai_compatible_request_and_retries_rate_limit
     assert attempts == 2
 
 
+def test_embedding_client_honors_retry_after_for_rate_limit() -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(429, headers={"Retry-After": "7"}, json={"error": "rate limited"})
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.1, 0.2]}]})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    client = OpenAICompatibleEmbeddingClient(
+        "https://embedding.test",
+        "TOKEN",
+        "model",
+        http_client=http,
+        retries=2,
+        sleep_fn=delays.append,
+    )
+
+    assert client.embed(["文本"]) == [[0.1, 0.2]]
+    assert delays == [7.0]
+
+
+def test_embedding_client_uses_bounded_exponential_backoff_without_retry_after() -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 8:
+            return httpx.Response(429, json={"error": "rate limited"})
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.1, 0.2]}]})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    client = OpenAICompatibleEmbeddingClient(
+        "https://embedding.test",
+        "TOKEN",
+        "model",
+        http_client=http,
+        retries=7,
+        sleep_fn=delays.append,
+    )
+
+    assert client.embed(["文本"]) == [[0.1, 0.2]]
+    assert delays == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0]
+
+
 def test_embed_in_batches_retries_only_failed_batch() -> None:
     calls: list[list[str]] = []
 
