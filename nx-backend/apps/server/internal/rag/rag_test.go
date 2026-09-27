@@ -373,6 +373,22 @@ func TestAskSuggestionsUseRelevantHistoryForDetailedContextualContinuation(t *te
 	}
 }
 
+func TestSelectedTypeSuggestionsUseConciseProjectRiskFocus(t *testing.T) {
+	suggestions := buildSuggestions(AskInput{
+		Question:           "当我担心合作项目出问题时，你会建议我怎么准备？请结合6号型在压力下的关注点。",
+		SuggestionMainType: 6,
+	})
+
+	if len(suggestions) != 3 {
+		t.Fatalf("suggestions=%+v, want 3", suggestions)
+	}
+	for _, suggestion := range suggestions {
+		if !strings.Contains(suggestion, "合作项目中的风险准备") || strings.Contains(suggestion, "请结合") {
+			t.Fatalf("suggestion topic is not concise: %q", suggestion)
+		}
+	}
+}
+
 func TestAskUnrelatedQuestionDoesNotProduceEnneagramSuggestions(t *testing.T) {
 	service := NewService(nil, WithGenerator(&fakeGenerator{answer: "先热锅，再炒鸡蛋。"}))
 

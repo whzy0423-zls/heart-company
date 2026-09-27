@@ -281,14 +281,34 @@ func skillChunkIDs(documents []rag.Document) []int64 {
 	out := make([]int64, 0, len(documents))
 	seen := make(map[int64]bool, len(documents))
 	for _, document := range documents {
-		value := strings.TrimPrefix(strings.TrimSpace(document.ID), "theory:")
-		id, err := strconv.ParseInt(value, 10, 64)
-		if err == nil && id > 0 && !seen[id] {
+		id, ok := skillChunkID(document.ID)
+		if ok && !seen[id] {
 			seen[id] = true
 			out = append(out, id)
 		}
 	}
 	return out
+}
+
+func skillChunkID(documentID string) (int64, bool) {
+	documentID = strings.TrimSpace(documentID)
+	value := ""
+	if strings.HasPrefix(documentID, "theory:") {
+		value = strings.TrimPrefix(documentID, "theory:")
+	} else if strings.HasPrefix(documentID, "legacy-theory:") {
+		parts := strings.Split(documentID, ":")
+		if len(parts) != 3 {
+			return 0, false
+		}
+		if releaseID, err := strconv.ParseInt(parts[1], 10, 64); err != nil || releaseID <= 0 {
+			return 0, false
+		}
+		value = parts[2]
+	} else {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(value, 10, 64)
+	return id, err == nil && id > 0
 }
 
 func skillRuntimeInstructions(instructions, safetyProfile string) string {

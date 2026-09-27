@@ -889,6 +889,11 @@ func conciseSuggestionTopic(text string, mainType int) string {
 	if index := strings.IndexAny(firstClause, "?？"); index >= 0 {
 		firstClause = strings.TrimSpace(firstClause[:index])
 	}
+	if strings.Contains(firstClause, "项目") &&
+		containsAny(firstClause, "担心", "风险", "出问题") &&
+		containsAny(firstClause, "准备", "预案", "应对") {
+		return "合作项目中的风险准备"
+	}
 	if containsAny(firstClause, "伴侣", "亲密关系") &&
 		containsAny(firstClause, "冲突", "辩解", "解释", "不被理解", "沟通") {
 		return "伴侣冲突中被理解的需要"

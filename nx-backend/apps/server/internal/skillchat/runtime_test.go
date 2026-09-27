@@ -110,6 +110,19 @@ func TestRuntimeRemoteKnowledgeUsesOnlyPinnedSkillRelease(t *testing.T) {
 	}
 }
 
+func TestSkillChunkIDsAcceptRemoteLegacyTheoryIDs(t *testing.T) {
+	ids := skillChunkIDs([]rag.Document{
+		{ID: "legacy-theory:8:340"},
+		{ID: "theory:711"},
+		{ID: "legacy-theory:8:340"},
+		{ID: "legacy-theory:other"},
+	})
+
+	if len(ids) != 2 || ids[0] != 340 || ids[1] != 711 {
+		t.Fatalf("chunk ids=%v, want [340 711]", ids)
+	}
+}
+
 func TestRuntimeRemoteKnowledgeFallbackPolicy(t *testing.T) {
 	tests := []struct {
 		name      string
