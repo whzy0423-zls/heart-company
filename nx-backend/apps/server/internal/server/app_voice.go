@@ -24,7 +24,12 @@ import (
 var errASRNotConfigured = errors.New("语音识别未配置 ASR_API_BASE/ASR_API_KEY；请在后台“模型配置 → 芯之力语音配置 → ASR 语音识别”配置，或检查服务器环境变量")
 
 var newASRHTTPClient = func(timeout time.Duration) *http.Client {
-	return &http.Client{Timeout: timeout, Transport: netguard.NewGuardedTransport()}
+	return &http.Client{
+		Timeout: timeout,
+		Transport: netguard.NewGuardedTransportWithOptions(netguard.TransportOptions{
+			ResponseHeaderTimeout: timeout,
+		}),
+	}
 }
 
 // appVoiceRecognize 接收音频文件并调用语音识别服务

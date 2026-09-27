@@ -32,6 +32,21 @@ func TestRecognizeSpeechRequiresASRConfig(t *testing.T) {
 	}
 }
 
+func TestDefaultASRHTTPClientUsesConfiguredResponseHeaderTimeout(t *testing.T) {
+	configuredTimeout := 90 * time.Second
+	client := newASRHTTPClient(configuredTimeout)
+	if client.Timeout != configuredTimeout {
+		t.Fatalf("client timeout=%s want=%s", client.Timeout, configuredTimeout)
+	}
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type=%T want *http.Transport", client.Transport)
+	}
+	if transport.ResponseHeaderTimeout != configuredTimeout {
+		t.Fatalf("response header timeout=%s want=%s", transport.ResponseHeaderTimeout, configuredTimeout)
+	}
+}
+
 func TestRecognizeSpeechPrefersStoredXinzhiliVoiceASRConfig(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer stored-key" {
