@@ -204,7 +204,11 @@ export default function AppDownloadSection({
                     {viewModel.actionLabel}
                   </button>
                 ) : (
-                  <a className="app-download__action" href={viewModel.actionHref}>
+                  <a
+                    className="app-download__action"
+                    href={viewModel.actionHref}
+                    download="nine-xing-android.apk"
+                  >
                     {viewModel.actionLabel}
                   </a>
                 )

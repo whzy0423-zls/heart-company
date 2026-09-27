@@ -1704,9 +1704,11 @@ img[data-zoom] { cursor: zoom-in; }
   font-weight: 800;
   cursor: pointer;
 }
-.app-download__action { position: relative; isolation: isolate; overflow: hidden; color: #fff; background: var(--ink); transition: transform .2s, opacity .2s; }
-.app-download__action::after { content: ""; position: absolute; inset: 0; z-index: -1; background: linear-gradient(110deg, transparent 28%, rgba(255,255,255,.24) 46%, rgba(255,255,255,.34) 50%, transparent 72%); transform: translateX(-130%); animation: app-download-sheen 3.8s ease-in-out infinite; }
-.app-download__action:hover { transform: translateY(-2px); }
+.app-download__action { position: relative; isolation: isolate; overflow: hidden; color: #fff; background: var(--ink); touch-action: manipulation; -webkit-tap-highlight-color: transparent; transition: transform .2s, opacity .2s; }
+.app-download__action::after { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; background: linear-gradient(110deg, transparent 28%, rgba(255,255,255,.24) 46%, rgba(255,255,255,.34) 50%, transparent 72%); transform: translateX(-130%); animation: app-download-sheen 3.8s ease-in-out infinite; }
+@media (hover: hover) and (pointer: fine) {
+  .app-download__action:hover { transform: translateY(-2px); }
+}
 .app-download__action:focus-visible { outline: 3px solid rgba(43,127,255,.42); outline-offset: 3px; }
 .app-download__action:disabled { cursor: not-allowed; opacity: .5; }
 .app-download__action:disabled::after { animation: none; }

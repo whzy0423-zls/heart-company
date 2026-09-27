@@ -76,6 +76,29 @@ test('renders accessible device actions, 503 feedback, and retry controls', () =
   assert.match(componentSource, /showInstallSummary && \([\s\S]*className="app-download__install"/)
 })
 
+test('starts the Android package download on the first touch activation', () => {
+  assert.match(
+    componentSource,
+    /<a\s+className="app-download__action"\s+href=\{viewModel\.actionHref\}\s+download="nine-xing-android\.apk"\s*>/,
+    'Android CTA should use native download semantics instead of ordinary page navigation',
+  )
+  assert.match(
+    cssSource,
+    /\.app-download__action\s*\{[^}]*touch-action:\s*manipulation;/s,
+    'download CTA should activate immediately on touch devices',
+  )
+  assert.match(
+    cssSource,
+    /\.app-download__action::after\s*\{[^}]*pointer-events:\s*none;/s,
+    'the animated sheen must not participate in hit testing',
+  )
+  assert.match(
+    cssSource,
+    /@media\s*\(hover:\s*hover\)\s+and\s+\(pointer:\s*fine\)\s*\{[^}]*\.app-download__action:hover/s,
+    'hover movement should only run on devices with a real hover pointer',
+  )
+})
+
 test('reserves a responsive no-overflow footprint with accessible interactions', () => {
   assert.match(
     cssSource,
