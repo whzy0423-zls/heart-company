@@ -1,8 +1,7 @@
 <script setup>
 import { ref, onMounted, computed, getCurrentInstance } from 'vue'
-import { onShareAppMessage, onShareTimeline } from '@dcloudio/uni-app'
+import { onShareAppMessage, onShareTimeline, onShow } from '@dcloudio/uni-app'
 import { TYPES_INFO, CENTERS, RESULTS } from '../../data/enneagramGame'
-import { isWing } from '../../utils/enneagram'
 import { resultPersonaText } from '../../utils/resultPersona'
 import { getLastResult, normalizeLastResult } from '../../utils/session'
 import { ensureLogin } from '../../utils/auth'
@@ -17,8 +16,8 @@ import {
   normalizeClassroomContent,
 } from '../../utils/classroomDisplay'
 import { setBookingIntent } from '../../utils/bookingIntent'
-import { normalizeMiniappLearn } from '../../utils/miniappPages'
-import { getStoredSiteConfig } from '../../utils/siteConfig'
+import { normalizeMiniappLearn, normalizeMiniappPayment } from '../../utils/miniappPages'
+import { getStoredSiteConfig, refreshSiteConfig } from '../../utils/siteConfig'
 import { previewImage } from '../../utils/imagePreview'
 
 const result = ref(null)
@@ -28,7 +27,6 @@ const info = ref(null)
 const center = ref(null)
 const persona = ref('')
 const secondInfo = ref(null)
-const wing = ref(false)
 const growthInfo = ref(null)
 const stressInfo = ref(null)
 const saved = ref(false)
@@ -51,9 +49,27 @@ const avatarFailed = ref(false)
 const instance = getCurrentInstance()
 const classroomRecommendations = ref([])
 const classroomEnabled = ref(normalizeMiniappLearn(getStoredSiteConfig()).classroom.enabled)
+const paymentEnabled = ref(normalizeMiniappPayment(getStoredSiteConfig()).enabled)
 const classroomRecommendationLoading = ref(false)
 const classroomRecommendationError = ref('')
 let classroomRecommendationPromise = null
+let paymentRefreshTicket = 0
+
+async function refreshPaymentAvailability() {
+  const ticket = ++paymentRefreshTicket
+  try {
+    const config = await refreshSiteConfig()
+    if (ticket !== paymentRefreshTicket) return
+    paymentEnabled.value = normalizeMiniappPayment(config).enabled
+  } catch {
+    // Keep the last known value when a background refresh is unavailable.
+  }
+}
+
+onShow(() => {
+  paymentEnabled.value = normalizeMiniappPayment(getStoredSiteConfig()).enabled
+  void refreshPaymentAvailability()
+})
 
 const reportState = computed(() => reportDisplayState({
   recordId: recordId.value,
@@ -64,6 +80,9 @@ const reportState = computed(() => reportDisplayState({
 }))
 
 onMounted(() => {
+  const siteConfig = getStoredSiteConfig()
+  classroomEnabled.value = normalizeMiniappLearn(siteConfig).classroom.enabled
+  paymentEnabled.value = normalizeMiniappPayment(siteConfig).enabled
   const last = getLastResult()
   const cachedResult = normalizeLastResult(last.result)
   if (!cachedResult) {
@@ -79,7 +98,6 @@ onMounted(() => {
   center.value = CENTERS[TYPES_INFO[t].center]
   persona.value = resultPersonaText(RESULTS[t], last.gender)
   secondInfo.value = cachedResult.second ? TYPES_INFO[cachedResult.second] : null
-  wing.value = isWing(t, cachedResult.second)
   growthInfo.value = TYPES_INFO[TYPES_INFO[t].growth]
   stressInfo.value = TYPES_INFO[TYPES_INFO[t].stress]
   if (classroomEnabled.value) loadClassroomRecommendations()
@@ -172,7 +190,7 @@ async function loadReportContent() {
 }
 
 async function unlockReport() {
-  if (paying.value) return
+  if (paying.value || !paymentEnabled.value) return
   paying.value = true
   try {
     await ensureLogin()
@@ -334,8 +352,8 @@ function savePoster() {
     </view>
 
     <view v-if="secondInfo" class="secondary-panel nx-panel ios-card">
-      <text class="section-kicker">{{ wing ? '侧翼能量' : '副型能量' }}</text>
-      <text class="section-title">{{ wing ? '你的侧翼倾向' : '你的副型倾向' }}</text>
+      <text class="section-kicker">副型能量</text>
+      <text class="section-title">你的副型倾向</text>
       <text class="secondary-panel__text">主型 {{ result.type }} 号 {{ info.name }}，副型 {{ result.second }} 号 {{ secondInfo.name }} 特质也很突出，让你更立体。</text>
       <text class="secondary-panel__keywords">{{ secondInfo.keywords }}</text>
     </view>
@@ -366,12 +384,12 @@ function savePoster() {
       </view>
 
       <template v-if="reportState.key === 'needs-save'">
-        <text class="report__intro">先将本次结果存入成长档案，再查询专属报告价格。</text>
+        <text class="report__intro">{{ paymentEnabled ? '先将本次结果存入成长档案，再查询专属报告价格。' : '先将本次结果存入成长档案。' }}</text>
         <!-- #ifdef H5 -->
         <button class="report__cta report__cta--disabled" disabled>请在微信小程序内登录后保存</button>
         <!-- #endif -->
         <!-- #ifdef MP-WEIXIN -->
-        <button class="report__cta" :loading="saving" :disabled="saving" @click="saveRecord">{{ saving ? '正在存档' : '存入档案并查看价格' }}</button>
+        <button class="report__cta" :loading="saving" :disabled="saving" @click="saveRecord">{{ saving ? '正在存档' : paymentEnabled ? '存入档案并查看价格' : '存入档案' }}</button>
         <!-- #endif -->
       </template>
       <template v-else-if="reportState.key === 'status-loading'">
@@ -384,14 +402,17 @@ function savePoster() {
         <!-- #endif -->
       </template>
       <template v-else-if="reportState.key === 'ready'">
-        <view class="report__price"><text class="report__price-symbol">￥</text>{{ reportPriceYuan }}</view>
-        <text class="report__intro">结合你的核心动力、压力模式与成长方向，生成更完整的个性化解读。</text>
-        <!-- #ifdef H5 -->
-        <button class="report__cta report__cta--disabled" disabled>请在微信小程序内完成存档与支付</button>
-        <!-- #endif -->
-        <!-- #ifdef MP-WEIXIN -->
-        <button class="report__cta" :loading="paying" :disabled="paying" @click="unlockReport">￥{{ reportPriceYuan }} 解锁深度报告</button>
-        <!-- #endif -->
+        <template v-if="paymentEnabled">
+          <view class="report__price"><text class="report__price-symbol">￥</text>{{ reportPriceYuan }}</view>
+          <text class="report__intro">结合你的核心动力、压力模式与成长方向，生成更完整的个性化解读。</text>
+          <!-- #ifdef H5 -->
+          <button class="report__cta report__cta--disabled" disabled>请在微信小程序内完成存档与支付</button>
+          <!-- #endif -->
+          <!-- #ifdef MP-WEIXIN -->
+          <button class="report__cta" :loading="paying" :disabled="paying" @click="unlockReport">￥{{ reportPriceYuan }} 解锁深度报告</button>
+          <!-- #endif -->
+        </template>
+        <view v-else class="report__status" aria-live="polite">深度报告暂未开放购买</view>
       </template>
       <template v-else>
         <view v-if="reportLoading" class="report__status" aria-live="polite">报告生成中，请稍候</view>

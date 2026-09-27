@@ -50,7 +50,7 @@ func TestAppCompatibilityCreateReturnsReportWithCompatibleFieldNames(t *testing.
 	if data["createdAt"] == "" || data["created_at"] == "" {
 		t.Fatalf("expected createdAt aliases, got %+v", data)
 	}
-	if data["algorithmVersion"] != "v1" || data["algorithm_version"] != "v1" {
+	if data["algorithmVersion"] != "v2" || data["algorithm_version"] != "v2" {
 		t.Fatalf("expected algorithm version aliases, got %+v", data)
 	}
 	if data["relationLevel"] == "" || data["relation_level"] == "" {
@@ -78,6 +78,34 @@ func TestAppCompatibilityCreateReturnsReportWithCompatibleFieldNames(t *testing.
 	}
 	if data["isFull"] != true || data["is_full"] != true {
 		t.Fatalf("expected camel and snake isFull flags, got %+v", data)
+	}
+}
+
+func TestAppCompatibilityHidesLegacyAlgorithmReports(t *testing.T) {
+	s := newAppCompatibilityTestServer(t, "compatibility_legacy")
+
+	listResponse := performAppCompatibilityRequest(t, s.appCompatibilityRouter, http.MethodGet, "/api/app/compatibility", nil)
+	if listResponse.Code != http.StatusOK {
+		t.Fatalf("legacy-filtered list status = %d body=%s", listResponse.Code, listResponse.Body.String())
+	}
+	listBody := decodeAppCompatibilityResponse(t, listResponse)
+	items, ok := listBody.Data.([]any)
+	if !ok || len(items) != 0 {
+		t.Fatalf("legacy reports should be hidden from list, got %+v", listBody.Data)
+	}
+
+	for _, tc := range []struct {
+		method string
+		path   string
+		body   any
+	}{
+		{method: http.MethodGet, path: "/api/app/compatibility/11"},
+		{method: http.MethodPost, path: "/api/app/compatibility/11/ask", body: map[string]any{"question": "如何沟通？"}},
+	} {
+		response := performAppCompatibilityRequest(t, s.appCompatibilityRouter, tc.method, tc.path, tc.body)
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("%s %s should hide legacy report, got %d body=%s", tc.method, tc.path, response.Code, response.Body.String())
+		}
 	}
 }
 
@@ -124,7 +152,7 @@ func TestAppCompatibilityListAndDetailScopeToCurrentUser(t *testing.T) {
 	if !ok || detail["id"] != float64(11) || detail["cardAName"] != "本人" {
 		t.Fatalf("expected scoped detail with compatibility aliases, got %+v", detailBody.Data)
 	}
-	if detail["algorithmVersion"] != "v1" || detail["relationLevel"] == "" {
+	if detail["algorithmVersion"] != "v2" || detail["relationLevel"] == "" {
 		t.Fatalf("expected detail algorithm metadata, got %+v", detail)
 	}
 }
@@ -263,6 +291,9 @@ func (c *appCompatibilityTestConn) QueryContext(_ context.Context, query string,
 			values:  [][]driver.Value{{int64(11), now, now}},
 		}, nil
 	case strings.Contains(query, "FROM app_compatibility_reports"):
+		if c.mode == "compatibility_legacy" && strings.Contains(query, "algorithm_version =") {
+			return appCompatibilityReportRowsWithValues(nil), nil
+		}
 		return appCompatibilityReportRows(now), nil
 	default:
 		return nil, driver.ErrSkip
@@ -284,6 +315,16 @@ func appCompatibilityCardRows(values [][]driver.Value) driver.Rows {
 }
 
 func appCompatibilityReportRows(now time.Time) driver.Rows {
+	return appCompatibilityReportRowsWithValues([][]driver.Value{{
+		int64(11), int64(7), int64(1), int64(2), "本人", "朋友", int64(1), int64(5),
+		"本人与朋友的关系合盘显示：这段关系的关键在于看见彼此的节奏差异。",
+		[]byte(`["彼此能互补"]`), []byte(`["节奏不同"]`), []byte(`["先确认期待"]`), true,
+		"v2", "balanced", []byte(`{"stability":74,"resonance":72}`), []byte(`["cross_center"]`), []byte(`[{"code":"type_pair","title":"型号组合","detail":"基于双方主型计算"}]`),
+		now, now,
+	}})
+}
+
+func appCompatibilityReportRowsWithValues(values [][]driver.Value) driver.Rows {
 	return &appCompatibilityTestRows{
 		columns: []string{
 			"id", "app_user_id", "card_a_id", "card_b_id", "card_a_name", "card_b_name", "card_a_type", "card_b_type",
@@ -291,13 +332,7 @@ func appCompatibilityReportRows(now time.Time) driver.Rows {
 			"algorithm_version", "relation_level", "scores", "explain_tags", "evidence",
 			"create_time", "update_time",
 		},
-		values: [][]driver.Value{{
-			int64(11), int64(7), int64(1), int64(2), "本人", "朋友", int64(1), int64(5),
-			"本人与朋友的关系合盘显示：这段关系的关键在于看见彼此的节奏差异。",
-			[]byte(`["彼此能互补"]`), []byte(`["节奏不同"]`), []byte(`["先确认期待"]`), true,
-			"v1", "balanced", []byte(`{"stability":74,"resonance":72}`), []byte(`["cross_center"]`), []byte(`[{"code":"type_pair","title":"型号组合","detail":"基于双方主型计算"}]`),
-			now, now,
-		}},
+		values: values,
 	}
 }
 

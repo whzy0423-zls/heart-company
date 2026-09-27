@@ -7,7 +7,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/quiz"
 )
 
-const AlgorithmVersion = "v1"
+const AlgorithmVersion = "v2"
 
 type Level string
 
@@ -49,7 +49,6 @@ type Result struct {
 type normalizedCard struct {
 	Name           string
 	Type           int
-	WingType       int
 	TypeName       string
 	Center         string
 	CenterName     string
@@ -69,7 +68,6 @@ func Analyze(cardA, cardB quiz.Card) Result {
 	sameCenter := a.Center == b.Center
 	growthLink := isGrowthLink(a.Type, b.Type)
 	stressLink := isStressLink(a.Type, b.Type)
-	wingBridge := isWingBridge(a, b)
 
 	scores := calculateScores(scoreContext{
 		Distance:       distance,
@@ -77,13 +75,12 @@ func Analyze(cardA, cardB quiz.Card) Result {
 		SameCenter:     sameCenter,
 		GrowthLink:     growthLink,
 		StressLink:     stressLink,
-		WingBridge:     wingBridge,
 		HasFallback:    a.FallbackType || b.FallbackType,
 		HasMissingName: a.MissingName || b.MissingName,
 		MissingProfile: a.MissingProfile || b.MissingProfile,
 	})
 
-	tags := explainTags(a, b, sameType, sameCenter, growthLink, stressLink, wingBridge)
+	tags := explainTags(a, b, sameType, sameCenter, growthLink, stressLink)
 	level := levelFromScores(scores)
 
 	return Result{
@@ -93,7 +90,7 @@ func Analyze(cardA, cardB quiz.Card) Result {
 		ExplainTags:      tags,
 		Evidence:         buildEvidence(a, b, distance, sameType, sameCenter),
 		Summary:          buildSummary(a, b, level),
-		Highlights:       buildHighlights(a, b, sameType, sameCenter, growthLink, wingBridge),
+		Highlights:       buildHighlights(a, b, sameType, sameCenter, growthLink),
 		ConflictPoints:   buildConflictPoints(a, b, sameType, sameCenter, stressLink),
 		Suggestions:      buildSuggestions(a, b, growthLink, stressLink),
 	}
@@ -105,7 +102,6 @@ type scoreContext struct {
 	SameCenter     bool
 	GrowthLink     bool
 	StressLink     bool
-	WingBridge     bool
 	HasFallback    bool
 	HasMissingName bool
 	MissingProfile bool
@@ -151,12 +147,6 @@ func calculateScores(ctx scoreContext) Scores {
 		growth += 12
 		stability -= 8
 		conflictRisk += 12
-	}
-	if ctx.WingBridge {
-		resonance += 6
-		communication += 5
-		stability += 4
-		conflictRisk -= 4
 	}
 	if ctx.Distance == 2 || ctx.Distance == 3 {
 		growth += 5
@@ -211,18 +201,12 @@ func normalizeCard(card quiz.Card, fallbackName string) normalizedCard {
 		centerName = center.Name
 	}
 
-	wingType := card.WingType
-	if !validType(wingType) {
-		wingType = 0
-	}
-
 	profileText := strings.TrimSpace(string(card.Profile))
 	missingProfile := profileText == "" || profileText == "null"
 
 	return normalizedCard{
 		Name:           name,
 		Type:           typeID,
-		WingType:       wingType,
 		TypeName:       info.Name,
 		Center:         info.Center,
 		CenterName:     centerName,
@@ -232,7 +216,7 @@ func normalizeCard(card quiz.Card, fallbackName string) normalizedCard {
 	}
 }
 
-func explainTags(a, b normalizedCard, sameType, sameCenter, growthLink, stressLink, wingBridge bool) []string {
+func explainTags(a, b normalizedCard, sameType, sameCenter, growthLink, stressLink bool) []string {
 	tags := make([]string, 0, 8)
 	seen := map[string]bool{}
 	add := func(tag string) {
@@ -255,9 +239,6 @@ func explainTags(a, b normalizedCard, sameType, sameCenter, growthLink, stressLi
 	}
 	if stressLink {
 		add("stress_direction")
-	}
-	if wingBridge {
-		add("wing_bridge")
 	}
 	if a.FallbackType || b.FallbackType {
 		add("fallback_type")
@@ -323,7 +304,7 @@ func buildSummary(a, b normalizedCard, level Level) string {
 	}
 }
 
-func buildHighlights(a, b normalizedCard, sameType, sameCenter, growthLink, wingBridge bool) []string {
+func buildHighlights(a, b normalizedCard, sameType, sameCenter, growthLink bool) []string {
 	highlights := []string{
 		fmt.Sprintf("%s的%s特质与%s的%s特质可以互相提供参照。", a.Name, a.TypeName, b.Name, b.TypeName),
 	}
@@ -336,9 +317,6 @@ func buildHighlights(a, b normalizedCard, sameType, sameCenter, growthLink, wing
 	}
 	if growthLink {
 		highlights = append(highlights, "这组型号存在成长方向连接，能提醒彼此看见更成熟的应对方式。")
-	}
-	if wingBridge {
-		highlights = append(highlights, "侧翼与主型之间有桥接，能降低理解彼此风格的成本。")
 	}
 	return highlights
 }
@@ -410,10 +388,6 @@ func isGrowthLink(a, b int) bool {
 
 func isStressLink(a, b int) bool {
 	return quiz.TypesInfo[a].Stress == b || quiz.TypesInfo[b].Stress == a
-}
-
-func isWingBridge(a, b normalizedCard) bool {
-	return (a.WingType != 0 && a.WingType == b.Type) || (b.WingType != 0 && b.WingType == a.Type)
 }
 
 func validType(typeID int) bool {

@@ -30,9 +30,3 @@ export function calcType(answers, gender) {
 
   return { type: best, second, score, centers }
 }
-
-export function isWing(main, other) {
-  if (!other) return false
-  const diff = Math.abs(main - other)
-  return diff === 1 || diff === 8
-}

@@ -74,6 +74,10 @@ python3 scripts/verify-editorial-assets.py --group all
   - 临时覆盖可用：`VITE_API_BASE=https://xn--9iq9az5uo8fz16d.com/api npm run build:mp-weixin`
 - 后端**未配置微信 AppID/Secret 时自动启用 dev 登录回退**：`wx.login` 的 code 会被后端换成稳定的 `dev_xxx` openid，无需真实微信凭证即可跑通登录、存档、预约全流程。
 
+## 微信支付接入
+
+报告、课堂及后续付费功能的公共前端方法、后端接口契约和接入示例见 [小程序公共微信支付调用说明](docs/miniapp-payment-api.md)。金额由服务端配置并生成订单，支付完成后以服务端订单/权益状态为准。
+
 ## 上线前
 1. `src/manifest.json` 与 `mp-weixin.appid` 填入你的小程序 AppID。
 2. `.env.production` 的 `VITE_API_BASE` 改为你的 **HTTPS** 域名，并在小程序后台「开发管理 → 服务器域名」配置 request 合法域名。

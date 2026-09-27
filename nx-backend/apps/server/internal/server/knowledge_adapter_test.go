@@ -57,6 +57,29 @@ func TestAppKnowledgeRemoteAdapterMapsScopeAndDocuments(t *testing.T) {
 	}
 }
 
+func TestAppKnowledgeRemoteAdapterFiltersRetiredWingDocuments(t *testing.T) {
+	releaseID := int64(101)
+	client := &knowledgeRetrieveClientStub{response: knowledgeclient.RetrievalResponse{
+		RequestID: "req-wing-filter",
+		Documents: []knowledgeclient.Document{
+			{ID: "wing", Content: "1w9 侧翼关系说明", Library: "theory", ReleaseID: &releaseID, Source: "wing.pdf"},
+			{ID: "clean", Content: "关系中需要明确表达边界", Library: "theory", ReleaseID: &releaseID, Source: "clean.pdf"},
+		},
+	}}
+	adapter := appKnowledgeRemoteAdapter{client: client}
+
+	result, err := adapter.Retrieve(context.Background(), appknowledge.RemoteRequest{TheoryReleaseIDs: []int64{101}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Documents) != 1 || result.Documents[0].ID != "clean" {
+		t.Fatalf("retired wing documents must be filtered, got %+v", result.Documents)
+	}
+	if len(result.Citations) != 1 || result.Citations[0].DocumentID != "clean" {
+		t.Fatalf("filtered documents must not retain citations, got %+v", result.Citations)
+	}
+}
+
 func TestAppKnowledgeRemoteAdapterPreservesHTTPStatusForFallbackPolicy(t *testing.T) {
 	client := &knowledgeRetrieveClientStub{err: &knowledgeclient.ResponseError{StatusCode: 400, Body: "bad scope"}}
 	adapter := appKnowledgeRemoteAdapter{client: client}
@@ -75,7 +98,7 @@ func TestAppKnowledgeRemoteAdapterOmitsInvalidOptionalProfileTypes(t *testing.T)
 	if _, err := adapter.Retrieve(context.Background(), appknowledge.RemoteRequest{Scene: "skill_chat"}); err != nil {
 		t.Fatal(err)
 	}
-	if client.request.Profile.MainType != nil || client.request.Profile.WingType != nil {
+	if client.request.Profile.MainType != nil {
 		t.Fatalf("optional profile=%+v", client.request.Profile)
 	}
 }

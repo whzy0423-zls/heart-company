@@ -183,11 +183,14 @@ assert.doesNotMatch(
   "lifecycle flush failures must not become unhandled rejections",
 );
 assert.match(source, /paymentState/, "detail should render explicit payment states");
+assert.match(source, /normalizeMiniappPayment/, "detail should read the shared payment switch");
+assert.match(source, /paymentEnabled/, "detail should track payment visibility");
+assert.match(source, /暂不可购买/, "disabled payments should replace the purchase CTA with unavailable copy");
 assert.match(source, /retryPurchase/, "failed or cancelled payment should expose retry");
 assert.match(source, /cancelPurchase/, "pending payment feedback should be dismissible");
 assert.match(
   source,
-  /createClassroomPurchaseController/,
+  /createWechatPaymentController/,
   "purchase polling should use the bounded controller",
 );
 assert.match(
@@ -239,6 +242,11 @@ const getClassroomSeriesApi = (...args) => globalThis.__detailHarness.getSeries(
 const createClassroomOrderApi = (...args) => globalThis.__detailHarness.createOrder(...args)
 const getClassroomOrderStatusApi = (...args) => globalThis.__detailHarness.getOrderStatus(...args)
 const devPayClassroomOrderApi = (...args) => globalThis.__detailHarness.devPay(...args)
+const getStoredSiteConfig = () => globalThis.__detailHarness.siteConfig || {}
+const refreshSiteConfig = () => globalThis.__detailHarness.refreshSiteConfig()
+const normalizeMiniappPayment = (config = {}) => ({
+  enabled: typeof config?.home?.miniappPayment?.enabled === 'boolean' ? config.home.miniappPayment.enabled : true,
+})
 const updateClassroomProgressApi = async (_id, positionSeconds) => ({ positionSeconds, completed: false })
 const withClassroomPlaybackRetry = async (id, consume) => {
   globalThis.__detailHarness.playbackCalls += 1
@@ -258,13 +266,13 @@ const classroomCompletion = (position, duration) => ({ ratio: duration > 0 ? Mat
 const getToken = () => globalThis.__detailHarness.token
 const readAnonymousClassroomProgress = () => null
 const createClassroomProgressTracker = () => ({ record: async (positionSeconds) => ({ positionSeconds, completed: false }), flush: async () => {} })
-const createClassroomPurchaseController = (options) => {
+const createWechatPaymentController = (options) => {
   const purchase = async () => {
     try {
       options.onChange?.({ state: 'creating', message: 'creating' })
       const order = await options.create()
       options.onChange?.({ state: 'pending', message: 'pending' })
-      await options.pay(order)
+      await (options.devPay ? options.devPay(order) : undefined)
       const status = await options.status(order)
       if (status?.owned === true || status?.status === 'paid') {
         options.onChange?.({ state: 'success', message: 'success' })
@@ -285,7 +293,7 @@ const userErrorMessage = (error, fallback) => error?.message || fallback
 `;
 await writeFile(
   modulePath,
-  `${prelude}\n${executableScript}\nexport { contentId, content, loading, loadError, playbackUrl, playbackLoading, playbackError, playbackRetryLabel, audioPlaying, audioPosition, paymentState, purchaseInFlight, purchaseTarget, purchaseTargetError, loadDetail, refreshPlayback, handlePlaybackError, toggleAudio, seekAudio, startPurchase, retryPurchase }\n`,
+  `${prelude}\n${executableScript}\nexport { contentId, content, loading, loadError, playbackUrl, playbackLoading, playbackError, playbackRetryLabel, audioPlaying, audioPosition, paymentEnabled, paymentState, purchaseInFlight, purchaseTarget, purchaseTargetError, loadDetail, refreshPlayback, handlePlaybackError, toggleAudio, seekAudio, startPurchase, retryPurchase }\n`,
 );
 
 function deferred() {
@@ -353,6 +361,8 @@ async function createHarness({ type = "audio" } = {}) {
     playbackCalls: 0,
     audios: [],
     token: "jwt",
+    siteConfig: {},
+    refreshCalls: 0,
     getContent: async () => ({ id: 21, title: "课件", contentType: type, canPlay: true }),
     getSeries: async () => ({ series: {}, contents: [] }),
     orderCalls: [],
@@ -367,6 +377,10 @@ async function createHarness({ type = "audio" } = {}) {
     },
     devPay: async () => ({ paid: true }),
     playback: async () => ({ url: `https://signed.example/${type}` }),
+    refreshSiteConfig() {
+      this.refreshCalls += 1;
+      return Promise.resolve(this.siteConfig);
+    },
     video: {
       pauseCalls: 0,
       pause() {
@@ -420,6 +434,15 @@ async function flush() {
 }
 
 try {
+  {
+    const { page, state } = await createHarness();
+    page.paymentEnabled.value = false;
+    page.content.value = normalizeContent({ id: 21, contentType: "audio", canPlay: false });
+    page.purchaseTarget.value = { type: "content", id: "21", ready: true };
+    await page.startPurchase();
+    assert.equal(state.orderCalls.length, 0, "disabled payments must not create a detail order");
+  }
+
   {
     const { page, state } = await createHarness();
     const pending = deferred();

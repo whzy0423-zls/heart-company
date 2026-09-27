@@ -30,6 +30,7 @@ type Diagnostic struct {
 
 type Resolution struct {
 	Theory                *Binding     `json:"theory,omitempty"`
+	TheoryBindings        []*Binding   `json:"theoryBindings,omitempty"`
 	EnneagramType         *Binding     `json:"enneagramType,omitempty"`
 	RequestedTypeBindings []*Binding   `json:"requestedTypeBindings,omitempty"`
 	Diagnostics           []Diagnostic `json:"diagnostics,omitempty"`
@@ -185,6 +186,7 @@ func resolveBindingRows(mainType int, requestedTypes []int, rows []bindingRow) R
 		requestedSet[typeNumber] = struct{}{}
 	}
 	requestedBindings := make(map[int]*Binding, len(normalizedTypes))
+	theoryLibraries := make(map[int64]struct{})
 	validMainType := mainType >= 1 && mainType <= 9
 	for _, row := range rows {
 		diagnosticLayer := row.Layer
@@ -205,11 +207,19 @@ func resolveBindingRows(mainType int, requestedTypes []int, rows []bindingRow) R
 		}
 		switch row.Layer {
 		case LayerTheory:
-			if row.EnneagramType != nil || resolved.Theory != nil {
+			if row.EnneagramType != nil {
 				resolved.Diagnostics = append(resolved.Diagnostics, Diagnostic{Layer: row.Layer, Code: "invalid_theory_binding"})
 				continue
 			}
-			resolved.Theory = binding
+			if _, duplicate := theoryLibraries[row.LibraryID]; duplicate {
+				resolved.Diagnostics = append(resolved.Diagnostics, Diagnostic{Layer: row.Layer, Code: "duplicate_theory_binding"})
+				continue
+			}
+			theoryLibraries[row.LibraryID] = struct{}{}
+			resolved.TheoryBindings = append(resolved.TheoryBindings, binding)
+			if resolved.Theory == nil {
+				resolved.Theory = binding
+			}
 		case LayerEnneagramType:
 			if explicitTypes {
 				if row.EnneagramType == nil {

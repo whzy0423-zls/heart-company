@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const source = readFileSync(resolve(here, 'skill-library-management.vue'), 'utf8');
 
 describe('growth skill library management contract', () => {
   it('is mounted below App management with its own permissions', () => {
@@ -20,7 +21,6 @@ describe('growth skill library management contract', () => {
   });
 
   it('edits library, category and skill metadata without changing stable keys', () => {
-    const source = readFileSync(resolve(here, 'skill-library-management.vue'), 'utf8');
     for (const expected of [
       '技能名称',
       '技能简介',
@@ -46,5 +46,12 @@ describe('growth skill library management contract', () => {
     }
     expect(source).toContain('技能标识');
     expect(source).toContain('disabled');
+  });
+
+  it('places the book upload action in a prominent top panel', () => {
+    expect(source).toContain('导入书籍，生成成长技能');
+    expect(source).toContain('上传书籍并生成技能');
+    expect(source).toContain('importOpen = true');
+    expect(source).toContain('支持 TXT、Markdown、DOCX、EPUB、PDF');
   });
 });

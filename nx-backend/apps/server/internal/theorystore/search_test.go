@@ -47,6 +47,17 @@ func TestSearchReleaseChunksConstrainsReleaseInSQLAndNeverFallsBack(t *testing.T
 	}
 }
 
+func TestSearchReleaseSetChunksRanksAcrossEveryConfiguredRelease(t *testing.T) {
+	database := openTheoryReleaseSearchTestDB(t)
+	docs, err := NewStore(database).SearchReleaseSetChunks(context.Background(), []int64{71, 72, 71}, "冲突时如何表达需要", 4, 0.20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 1 || docs[0].ID != "theory:711" {
+		t.Fatalf("release-set docs=%+v", docs)
+	}
+}
+
 const theorySearchDriverName = "theory_active_search_test"
 
 var registerTheorySearchDriver sync.Once
@@ -89,7 +100,6 @@ func (theoryReleaseSearchConn) Begin() (driver.Tx, error)           { return nil
 func (theoryReleaseSearchConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	required := []string{
 		"FROM theory_release_cards mapping",
-		"mapping.release_id = $1",
 		"JOIN theory_library_releases release ON release.id = mapping.release_id",
 		"release.status IN ('ready','active','retired')",
 		"chunk.status = 'enabled'",
@@ -110,8 +120,19 @@ func (theoryReleaseSearchConn) QueryContext(_ context.Context, query string, arg
 			return nil, errors.New("unexpected type scope")
 		}
 	}
-	if (len(args) != 1 && len(args) != 2) || args[0].Value != int64(71) {
-		return nil, errors.New("release id must be the only SQL argument")
+	if len(args) != 1 && len(args) != 2 {
+		return nil, errors.New("unexpected release search arguments")
+	}
+	if releaseID, single := args[0].Value.(int64); single {
+		if releaseID != 71 || !strings.Contains(query, "mapping.release_id = $1") {
+			return nil, errors.New("single release search lost its exact boundary")
+		}
+	} else if releaseSet, multiple := args[0].Value.(string); multiple {
+		if releaseSet != `[71,72]` || !strings.Contains(query, "jsonb_array_elements_text($1::jsonb)") {
+			return nil, errors.New("release set was not normalized into one SQL boundary")
+		}
+	} else {
+		return nil, errors.New("release scope argument has an unexpected type")
 	}
 	return &theorySearchRows{values: [][]driver.Value{
 		{int64(711), "表达需要", "描述事实和感受，再提出清晰、可执行的请求。", []byte(`["冲突","表达","需要"]`), []byte(`["relationship"]`)},
@@ -143,8 +164,11 @@ func (theorySearchConn) QueryContext(_ context.Context, query string, args []dri
 			return nil, errors.New("active release query missing: " + fragment)
 		}
 	}
-	if len(args) != 2 {
-		return nil, errors.New("expected query and candidate limit arguments")
+	if strings.Contains(query, "LIMIT") {
+		return nil, errors.New("active search must score the complete active corpus before applying topK")
+	}
+	if len(args) != 1 {
+		return nil, errors.New("expected only the normalized query argument")
 	}
 	return &theorySearchRows{values: [][]driver.Value{
 		{int64(11), "冲突中的非暴力沟通", "在冲突中先描述事实，再表达感受和需要，最后提出清晰请求。", []byte(`["冲突","关系","沟通"]`), []byte(`["communication"]`)},

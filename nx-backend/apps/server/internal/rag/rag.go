@@ -27,6 +27,8 @@ var (
 	arabicEnneagramTypePattern    = regexp.MustCompile(`(?i)(^|[^a-z0-9])([1-9])(?:号)?型`)
 	englishEnneagramTypePattern   = regexp.MustCompile(`(?i)(^|[^a-z0-9])type[\s_-]*([1-9])`)
 	numberedTypeComparisonPattern = regexp.MustCompile(`([1-9一二三四五六七八九])号\s*(?:和|与|、|,|，|/)\s*([1-9一二三四五六七八九])号`)
+	retiredWingNumberPattern      = regexp.MustCompile(`(?i)[1-9]\s*w\s*[1-9]`)
+	retiredWingWordPattern        = regexp.MustCompile(`(?i)(^|[^a-z])wing([^a-z]|$)`)
 )
 
 var enneagramTypeAliases = [...][]string{
@@ -72,7 +74,6 @@ type ConversationCard struct {
 	Name     string `json:"name,omitempty"`
 	Relation string `json:"relation,omitempty"`
 	MainType int    `json:"mainType,omitempty"`
-	WingType int    `json:"wingType,omitempty"`
 	Profile  string `json:"profile,omitempty"`
 }
 
@@ -524,6 +525,9 @@ func (s *Service) search(question string, mainType int, limit int) []scoredDoc {
 		mainTypeToken = string(rune('0' + mainType))
 	}
 	for _, doc := range s.docs {
+		if ContainsRetiredWingContent(doc.ID + " " + doc.Title + " " + doc.Content + " " + strings.Join(doc.Tags, " ")) {
+			continue
+		}
 		text := strings.ToLower(doc.Title + " " + doc.Content + " " + strings.Join(doc.Tags, " "))
 		questionScore := 0
 		for _, term := range terms {
@@ -586,7 +590,7 @@ func isBroadEnneagramKnowledgeQuestion(question string) bool {
 
 func isEnneagramKnowledgeDocument(document Document) bool {
 	text := strings.ToLower(document.ID + " " + document.Title + " " + document.Content + " " + strings.Join(document.Tags, " "))
-	if containsAny(text, "九型", "主型", "翼型", "九种性格", "性格模式") {
+	if containsAny(text, "九型", "主型", "九种性格", "性格模式") {
 		return true
 	}
 	for _, aliases := range enneagramTypeAliases {
@@ -597,6 +601,16 @@ func isEnneagramKnowledgeDocument(document Document) bool {
 		}
 	}
 	return false
+}
+
+// ContainsRetiredWingContent identifies knowledge text from the retired wing feature.
+// Callers apply it only to retrieved knowledge, never to user-authored text or chat history.
+func ContainsRetiredWingContent(text string) bool {
+	lower := strings.ToLower(text)
+	if containsAny(lower, "侧翼", "翼型", "wingtype", "winglabel", "wing_type", "wing_label") {
+		return true
+	}
+	return retiredWingNumberPattern.MatchString(text) || retiredWingWordPattern.MatchString(text)
 }
 
 func tokenize(text string) []string {
@@ -893,7 +907,7 @@ func containsSuggestionPsychologicalPattern(text string) bool {
 			searchFrom = end
 		}
 	}
-	return containsAny(text, "九型", "主型", "翼型")
+	return containsAny(text, "九型", "主型")
 }
 
 func isStrongPatternTechnicalMatch(text string, keyword string, start int) bool {
@@ -1236,7 +1250,7 @@ func hasLocalEnneagramNumberContext(before string, after string) bool {
 		return false
 	}
 	for _, prefix := range []string{
-		"我是", "作为", "我像", "更像", "主型是", "翼型是", "类型是",
+		"我是", "作为", "我像", "更像", "主型是", "类型是",
 		"九型的", "九型里", "九型中的", "九型人格的", "分析", "看看",
 	} {
 		if strings.HasSuffix(before, prefix) {

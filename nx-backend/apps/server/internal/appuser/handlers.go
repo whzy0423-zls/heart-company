@@ -100,6 +100,9 @@ func (s *Store) handleAppUserDetail(w http.ResponseWriter, r *http.Request, id i
 	if care, careErr := s.CareSnapshot(r.Context(), id); careErr == nil {
 		user.CareLevel, user.CareLabel, user.CareSummary, user.CareTrend, user.CareDataStatus, user.CareEvaluatedAt = care.CareLevel, care.CareLabel, care.CareSummary, care.CareTrend, care.CareDataStatus, care.CareEvaluatedAt
 	}
+	if email, emailErr := s.FindEmail(r.Context(), id); emailErr == nil {
+		user.Email = email
+	}
 	httpx.OK(w, user)
 }
 

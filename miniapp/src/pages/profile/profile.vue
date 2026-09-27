@@ -7,6 +7,9 @@ import { hiddenCount, previewItems } from '../../utils/listPreview'
 import { clearBookingSession } from '../../utils/bookingSession'
 import { userErrorMessage } from '../../utils/userMessage'
 import { createWechatPayTestOrderApi, getUserInfoApi, listTestRecordsApi, listBookingsApi } from '../../api'
+import { requestWechatPayment } from '../../utils/payment'
+import { normalizeMiniappPayment } from '../../utils/miniappPages'
+import { getStoredSiteConfig, refreshSiteConfig } from '../../utils/siteConfig'
 import { previewImage } from '../../utils/imagePreview'
 
 const logged = ref(false)
@@ -17,6 +20,7 @@ const recordsError = ref('')
 const bookingsError = ref('')
 const logging = ref(false)
 const paymentTesting = ref(false)
+const paymentEnabled = ref(normalizeMiniappPayment(getStoredSiteConfig()).enabled)
 const profileLoading = ref(false)
 const userAvatarFailed = ref(false)
 const profileLogoFailed = ref(false)
@@ -29,8 +33,22 @@ const recordCountLabel = computed(() => profileLoading.value || recordsError.val
 const bookingCountLabel = computed(() => profileLoading.value || bookingsError.value ? '—' : String(bookingCount.value))
 let loadTicket = 0
 let sessionGeneration = 0
+let paymentRefreshTicket = 0
+
+async function refreshPaymentAvailability() {
+  const ticket = ++paymentRefreshTicket
+  try {
+    const config = await refreshSiteConfig()
+    if (ticket !== paymentRefreshTicket) return
+    paymentEnabled.value = normalizeMiniappPayment(config).enabled
+  } catch {
+    // Keep the last known value when a background refresh is unavailable.
+  }
+}
 
 onShow(() => {
+  paymentEnabled.value = normalizeMiniappPayment(getStoredSiteConfig()).enabled
+  void refreshPaymentAvailability()
   logged.value = !!getToken()
   if (logged.value) loadAll()
 })
@@ -209,23 +227,8 @@ function openTest() {
   uni.navigateTo({ url: '/pages/test/test' })
 }
 
-function requestWechatPayment(pay = {}) {
-  return new Promise((resolve, reject) => {
-    uni.requestPayment({
-      provider: 'wxpay',
-      timeStamp: pay.timeStamp,
-      nonceStr: pay.nonceStr,
-      package: pay.package,
-      signType: pay.signType || 'RSA',
-      paySign: pay.paySign,
-      success: resolve,
-      fail: reject,
-    })
-  })
-}
-
 async function testWechatPayment() {
-  if (paymentTesting.value) return
+  if (paymentTesting.value || !paymentEnabled.value) return
   paymentTesting.value = true
   try {
     const order = await createWechatPayTestOrderApi()
@@ -361,7 +364,7 @@ async function testWechatPayment() {
         </view>
       </view>
 
-      <view class="wechat-pay-test nx-panel ios-card">
+      <view v-if="paymentEnabled" class="wechat-pay-test nx-panel ios-card">
         <view class="section-head">
           <view>
             <text class="section-kicker">支付联调</text>

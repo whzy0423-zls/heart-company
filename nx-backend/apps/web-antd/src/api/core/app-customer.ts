@@ -2,6 +2,7 @@ import { requestClient } from '#/api/request';
 
 export interface AppCustomer {
   account?: string;
+  email?: string;
   avatar: string;
   createTime: string;
   id: number;
@@ -54,7 +55,6 @@ export interface AppUserInsight {
   sessionCount: number;
   status: string;
   updateTime: string;
-  wingType: number;
   careLevel?: number | null;
   careLabel?: string;
   careSummary?: string;
@@ -64,6 +64,7 @@ export interface AppUserInsight {
 }
 
 export interface UpdateAppCustomerInput {
+  email?: string;
   memberLevel: string;
   status: string;
 }

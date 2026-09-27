@@ -629,6 +629,9 @@ onMounted(() => {
           <Descriptions.Item label="手机号">
             {{ detail.phone }}
           </Descriptions.Item>
+          <Descriptions.Item label="绑定邮箱">
+            {{ detail.email || '未绑定' }}
+          </Descriptions.Item>
           <Descriptions.Item label="昵称">
             {{ detail.nickname || '-' }}
           </Descriptions.Item>
@@ -742,6 +745,9 @@ onMounted(() => {
       <Form :model="editForm" layout="vertical">
         <Form.Item label="手机号">
           <Input :value="editingCustomer?.phone || '-'" disabled />
+        </Form.Item>
+        <Form.Item label="绑定邮箱" name="email">
+          <Input v-model:value="editForm.email" allow-clear placeholder="用于密码找回，可留空解除绑定" />
         </Form.Item>
         <Form.Item label="会员等级" name="memberLevel" required>
           <Select

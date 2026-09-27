@@ -65,6 +65,9 @@ func (s *Server) adminAppUserUpdate(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if email, emailErr := s.appUsers.FindEmail(r.Context(), id); emailErr == nil {
+		updated.Email = email
+	}
 
 	beforeData := any(map[string]any{"lookupError": beforeErrString(beforeErr)})
 	if beforeErr == nil {

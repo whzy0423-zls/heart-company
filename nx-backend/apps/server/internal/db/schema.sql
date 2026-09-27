@@ -1434,7 +1434,7 @@ CREATE TABLE IF NOT EXISTS theory_library_releases (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_theory_active_release
   ON theory_library_releases(library_id) WHERE status = 'active';
 
--- App 对话只通过显式绑定选择正式理论核心和当前人物型号库。
+-- App 对话只通过显式绑定选择正式理论来源和当前人物型号库。
 CREATE TABLE IF NOT EXISTS app_chat_knowledge_bindings (
   id BIGSERIAL PRIMARY KEY,
   layer_kind TEXT NOT NULL CHECK (layer_kind IN ('theory','enneagram_type')),
@@ -1450,10 +1450,59 @@ CREATE TABLE IF NOT EXISTS app_chat_knowledge_bindings (
   )
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_app_chat_enabled_knowledge_binding
-  ON app_chat_knowledge_bindings(layer_kind, COALESCE(enneagram_type, 0)) WHERE status = 'enabled';
+DROP INDEX IF EXISTS uq_app_chat_enabled_knowledge_binding;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_app_chat_enabled_enneagram_binding
+  ON app_chat_knowledge_bindings(enneagram_type) WHERE status = 'enabled' AND layer_kind = 'enneagram_type';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_app_chat_enabled_theory_library_binding
+  ON app_chat_knowledge_bindings(theory_library_id) WHERE status = 'enabled' AND layer_kind = 'theory';
 CREATE INDEX IF NOT EXISTS idx_app_chat_knowledge_bindings_library
   ON app_chat_knowledge_bindings(theory_library_id, status, sort_order, id);
+
+-- 心理类成长技能可作为普通对话的显式理论来源；已有禁用记录不会被重新启用。
+WITH defaults(library_key, sort_order) AS (
+  VALUES
+    ('skill-qinmi-guanxi', 100),
+    ('skill-social-psychology-myers', 110),
+    ('skill-sociology-of-human-emotions', 120),
+    ('skill-crowd-psychology', 130),
+    ('skill-brain-and-cognitive-science', 140)
+)
+INSERT INTO app_chat_knowledge_bindings(layer_kind, enneagram_type, theory_library_id, status, sort_order)
+SELECT 'theory', NULL, library.id, 'enabled', defaults.sort_order
+FROM defaults
+JOIN theory_libraries library ON library.key = defaults.library_key
+WHERE NOT EXISTS (
+  SELECT 1 FROM app_chat_knowledge_bindings binding
+  WHERE binding.layer_kind = 'theory' AND binding.theory_library_id = library.id
+);
+
+CREATE OR REPLACE FUNCTION seed_default_app_chat_theory_binding() RETURNS TRIGGER AS $$
+DECLARE
+  default_sort_order INTEGER;
+BEGIN
+  default_sort_order := CASE NEW.key
+    WHEN 'skill-qinmi-guanxi' THEN 100
+    WHEN 'skill-social-psychology-myers' THEN 110
+    WHEN 'skill-sociology-of-human-emotions' THEN 120
+    WHEN 'skill-crowd-psychology' THEN 130
+    WHEN 'skill-brain-and-cognitive-science' THEN 140
+    ELSE NULL
+  END;
+  IF default_sort_order IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM app_chat_knowledge_bindings binding
+    WHERE binding.layer_kind = 'theory' AND binding.theory_library_id = NEW.id
+  ) THEN
+    INSERT INTO app_chat_knowledge_bindings(layer_kind, enneagram_type, theory_library_id, status, sort_order)
+    VALUES ('theory', NULL, NEW.id, 'enabled', default_sort_order);
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS theory_libraries_seed_app_chat_binding ON theory_libraries;
+CREATE TRIGGER theory_libraries_seed_app_chat_binding
+  AFTER INSERT ON theory_libraries
+  FOR EACH ROW EXECUTE FUNCTION seed_default_app_chat_theory_binding();
 
 -- ============ App 技能库（目录、分类、技能与不可变发布版本）============
 CREATE TABLE IF NOT EXISTS app_skill_libraries (
@@ -2869,6 +2918,7 @@ CREATE TABLE IF NOT EXISTS app_users (
   phone           TEXT NOT NULL UNIQUE,
   account         TEXT,
   password_hash   TEXT,
+  email           TEXT,
   nickname        TEXT NOT NULL DEFAULT '',
   avatar          TEXT NOT NULL DEFAULT '',
   status          TEXT NOT NULL DEFAULT 'active',
@@ -2891,6 +2941,7 @@ CREATE TABLE IF NOT EXISTS app_users (
 
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS account TEXT;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS password_hash TEXT;
+ALTER TABLE app_users ADD COLUMN IF NOT EXISTS email TEXT;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS user_code TEXT;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS invite_code TEXT;
 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS personality_visibility TEXT NOT NULL DEFAULT 'friends'
@@ -2950,7 +3001,23 @@ CREATE INDEX IF NOT EXISTS idx_care_evaluation_queue_status
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_account_unique
   ON app_users (lower(account))
-  WHERE account IS NOT NULL AND btrim(account) <> '';
+WHERE account IS NOT NULL AND btrim(account) <> '';
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_email_unique
+  ON app_users (lower(email))
+  WHERE email IS NOT NULL AND btrim(email) <> '';
+
+CREATE TABLE IF NOT EXISTS app_email_reset_codes (
+  id          BIGSERIAL PRIMARY KEY,
+  email       TEXT NOT NULL,
+  code_hash   TEXT NOT NULL,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  used        BOOLEAN NOT NULL DEFAULT false,
+  send_ip     TEXT NOT NULL DEFAULT '',
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_app_email_reset_codes_email
+  ON app_email_reset_codes(email, used, expires_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_user_code_unique
   ON app_users (lower(user_code))
   WHERE user_code IS NOT NULL AND btrim(user_code) <> '';
@@ -3292,6 +3359,16 @@ ALTER TABLE app_quiz_submissions ADD COLUMN IF NOT EXISTS wing_type      INT   N
 ALTER TABLE app_quiz_submissions ADD COLUMN IF NOT EXISTS second_type    INT   NOT NULL DEFAULT 0;
 
 ALTER TABLE app_user_cards       ADD COLUMN IF NOT EXISTS submission_id BIGINT REFERENCES app_quiz_submissions(id) ON DELETE SET NULL;
+
+-- 侧翼业务停用清理。生产执行前必须备份这些结构化历史数据；本迁移仅幂等归零/移除已知顶层键。
+UPDATE app_quiz_submissions SET wing_type = 0 WHERE wing_type <> 0;
+UPDATE app_user_cards SET wing = 0 WHERE wing <> 0;
+UPDATE app_quiz_submissions
+SET result = result - ARRAY['wingType','wingLabel','wing_type','wing_label']
+WHERE result ?| ARRAY['wingType','wingLabel','wing_type','wing_label'];
+UPDATE app_user_cards
+SET profile = profile - ARRAY['wingType','wingLabel','wing_type','wing_label']
+WHERE profile ?| ARRAY['wingType','wingLabel','wing_type','wing_label'];
 
 -- ----- App 关系合盘：缓存两张用户卡片的本地确定性合盘结果 -----
 CREATE TABLE IF NOT EXISTS app_compatibility_reports (
@@ -4045,6 +4122,11 @@ CREATE TABLE IF NOT EXISTS app_profile_versions (
   is_active   BOOLEAN NOT NULL DEFAULT true,
   create_time TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+UPDATE app_profile_versions SET wing_type = 0 WHERE wing_type <> 0;
+UPDATE app_profile_versions
+SET profile_json = profile_json - ARRAY['wingType','wingLabel','wing_type','wing_label']
+WHERE profile_json ?| ARRAY['wingType','wingLabel','wing_type','wing_label'];
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_profile_versions_active
   ON app_profile_versions(card_id)

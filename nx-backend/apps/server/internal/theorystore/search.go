@@ -11,8 +11,6 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
-const maxTheorySearchCandidates = 80
-
 type scoredTheoryDocument struct {
 	document rag.Document
 	score    float64
@@ -57,8 +55,7 @@ func (s *Store) SearchActiveChunks(parent context.Context, query string, topK in
 		       OR chunk.keywords::text ILIKE '%' || $1 || '%'
 		       OR chunk.tags::text ILIKE '%' || $1 || '%'
 		       OR char_length($1) >= 2)
-		ORDER BY chunk.id
-		LIMIT $2`, query, maxTheorySearchCandidates)
+		ORDER BY chunk.id`, query)
 	if err != nil {
 		return nil, fmt.Errorf("search active theory chunks: %w", err)
 	}
@@ -106,7 +103,13 @@ func (s *Store) SearchActiveChunks(parent context.Context, query string, topK in
 // explicit release. It deliberately has no active-library fallback so callers
 // cannot cross a skill version's knowledge boundary.
 func (s *Store) SearchReleaseChunks(parent context.Context, releaseID int64, query string, topK int, minScore float64) ([]rag.Document, error) {
-	return s.searchReleaseChunks(parent, releaseID, query, nil, topK, minScore)
+	return s.searchReleaseChunks(parent, []int64{releaseID}, query, nil, topK, minScore)
+}
+
+// SearchReleaseSetChunks ranks chunks from multiple explicitly configured
+// releases as one corpus so later bindings are not disadvantaged by order.
+func (s *Store) SearchReleaseSetChunks(parent context.Context, releaseIDs []int64, query string, topK int, minScore float64) ([]rag.Document, error) {
+	return s.searchReleaseChunks(parent, normalizeReleaseIDs(releaseIDs), query, nil, topK, minScore)
 }
 
 // SearchEnneagramReleaseChunks restricts the frozen scene snapshot to explicitly selected types.
@@ -121,7 +124,7 @@ func (s *Store) SearchEnneagramReleaseChunks(parent context.Context, releaseID i
 	}
 	var documents []rag.Document
 	for _, key := range keys {
-		matches, err := s.searchReleaseChunks(parent, releaseID, query, []string{key}, perLibrary, 0)
+		matches, err := s.searchReleaseChunks(parent, []int64{releaseID}, query, []string{key}, perLibrary, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -130,12 +133,12 @@ func (s *Store) SearchEnneagramReleaseChunks(parent context.Context, releaseID i
 	return documents, nil
 }
 
-func (s *Store) searchReleaseChunks(parent context.Context, releaseID int64, query string, keys []string, topK int, minScore float64) ([]rag.Document, error) {
+func (s *Store) searchReleaseChunks(parent context.Context, releaseIDs []int64, query string, keys []string, topK int, minScore float64) ([]rag.Document, error) {
 	if err := s.available(); err != nil {
 		return nil, err
 	}
 	query = normalizeSearchText(query)
-	if releaseID <= 0 || query == "" || topK <= 0 {
+	if len(releaseIDs) == 0 || query == "" || topK <= 0 {
 		return nil, nil
 	}
 	if topK > 20 {
@@ -150,8 +153,14 @@ func (s *Store) searchReleaseChunks(parent context.Context, releaseID int64, que
 	ctx, cancel := storeContext(parent)
 	defer cancel()
 
+	releaseFilter := "mapping.release_id = $1"
+	args := []any{releaseIDs[0]}
+	if len(releaseIDs) > 1 {
+		raw, _ := json.Marshal(releaseIDs)
+		releaseFilter = "mapping.release_id IN (SELECT jsonb_array_elements_text($1::jsonb)::bigint)"
+		args[0] = string(raw)
+	}
 	filter := ""
-	args := []any{releaseID}
 	if keys != nil {
 		raw, _ := json.Marshal(keys)
 		filter = " AND chunk.tags ?| ARRAY(SELECT jsonb_array_elements_text($2::jsonb)) "
@@ -162,7 +171,7 @@ func (s *Store) searchReleaseChunks(parent context.Context, releaseID int64, que
 		FROM theory_release_cards mapping
 		JOIN theory_library_releases release ON release.id = mapping.release_id
 		JOIN theory_chunks chunk ON chunk.id = mapping.chunk_id
-		WHERE mapping.release_id = $1
+		WHERE `+releaseFilter+`
 		  AND release.status IN ('ready','active','retired')
 		  AND chunk.status = 'enabled' `+filter+`
 		ORDER BY chunk.id`, args...)
@@ -206,6 +215,22 @@ func (s *Store) searchReleaseChunks(parent context.Context, releaseID int64, que
 		documents[i] = matches[i].document
 	}
 	return documents, nil
+}
+
+func normalizeReleaseIDs(releaseIDs []int64) []int64 {
+	normalized := make([]int64, 0, len(releaseIDs))
+	seen := make(map[int64]struct{}, len(releaseIDs))
+	for _, releaseID := range releaseIDs {
+		if releaseID <= 0 {
+			continue
+		}
+		if _, duplicate := seen[releaseID]; duplicate {
+			continue
+		}
+		seen[releaseID] = struct{}{}
+		normalized = append(normalized, releaseID)
+	}
+	return normalized
 }
 
 func theoryLexicalScore(query, title, content string, keywords []string) float64 {

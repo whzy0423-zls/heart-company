@@ -411,6 +411,9 @@ assert.match(
   "list cards should expose the effective access action",
 );
 assert.match(source, /startSeriesPurchase/, "paid series cards should expose direct purchase");
+assert.match(source, /normalizeMiniappPayment/, "classroom list should read the shared payment switch");
+assert.match(source, /paymentEnabled/, "classroom list should track payment visibility");
+assert.match(source, /if\s*\(!paymentEnabled\.value\)\s*return/, "disabled payments should guard series checkout");
 assert.match(
   source,
   /createClassroomOrderApi\("series",\s*item\.id\)/,
@@ -476,6 +479,11 @@ const createClassroomOrderApi = (...args) => globalThis.__classroomHarness.creat
 const getClassroomOrderStatusApi = (...args) => globalThis.__classroomHarness.getOrderStatus(...args)
 const devPayClassroomOrderApi = (...args) => globalThis.__classroomHarness.devPay(...args)
 const getToken = () => globalThis.__classroomHarness.token
+const getStoredSiteConfig = () => globalThis.__classroomHarness.siteConfig || {}
+const refreshSiteConfig = () => globalThis.__classroomHarness.refreshSiteConfig()
+const normalizeMiniappPayment = (config = {}) => ({
+  enabled: typeof config?.home?.miniappPayment?.enabled === 'boolean' ? config.home.miniappPayment.enabled : true,
+})
 const normalizeClassroomSeries = (value = {}) => ({ ...value, id: String(value.id || '') })
 const normalizeClassroomContent = (value = {}) => ({ ...value, id: String(value.id || '') })
 const classroomAccessLabel = (value) => value
@@ -483,7 +491,7 @@ const classroomContentRoute = (item) => item?.id ? '/detail/' + item.id : ''
 const classroomPurchaseAction = (item = {}) => item.purchaseState === 'purchase_required'
   ? { type: 'purchase', label: '立即购买' }
   : { type: 'play', label: '立即学习' }
-const createClassroomPurchaseController = (options) => {
+const createWechatPaymentController = (options) => {
   let stopped = false
   const controller = {
     async purchase() {
@@ -491,7 +499,7 @@ const createClassroomPurchaseController = (options) => {
       const order = await options.create()
       if (stopped) return
       options.onChange?.({ state: 'pending', message: 'pending' })
-      await options.pay(order)
+      await (options.devPay ? options.devPay(order) : undefined)
       if (stopped) return
       const status = await options.status(order)
       if (stopped) return
@@ -511,7 +519,7 @@ const userErrorMessage = (error, fallback) => error?.message || fallback
 `;
 await writeFile(
   modulePath,
-  `${prelude}\n${executableScript}\nexport { activeTab, seriesItems, expandedSeries, selectedSeries, seriesLoading, seriesError, seriesDetails, seriesPaymentTargetId, seriesPaymentState, selectTab, openSeries, retrySelectedSeries, startSeriesPurchase }\n`,
+  `${prelude}\n${executableScript}\nexport { activeTab, paymentEnabled, seriesItems, expandedSeries, selectedSeries, seriesLoading, seriesError, seriesDetails, seriesPaymentTargetId, seriesPaymentState, selectTab, openSeries, retrySelectedSeries, startSeriesPurchase }\n`,
 );
 
 function deferred() {
@@ -532,6 +540,8 @@ async function createHarness() {
     getSeries: async () => ({ series: { id: 1 }, contents: [] }),
     getContinue: async () => ({ items: [] }),
     token: "",
+    siteConfig: {},
+    refreshCalls: 0,
     orderCalls: [],
     statusCalls: [],
     stopCalls: 0,
@@ -545,6 +555,10 @@ async function createHarness() {
       return { status: "paid", owned: true };
     },
     devPay: async () => ({ paid: true }),
+    refreshSiteConfig() {
+      this.refreshCalls += 1;
+      return Promise.resolve(this.siteConfig);
+    },
   };
   globalThis.__classroomHarness = state;
   globalThis.uni = { navigateTo() {}, switchTab() {}, requestPayment() {} };
@@ -572,6 +586,24 @@ try {
     assert.equal(page.expandedSeries.value?.series?.id, "12", "series deep links should expand the requested series detail");
     assert.equal(page.seriesItems.value[0]?.title, "首页最近更新系列", "series deep links outside the first page should hydrate the visible card from detail data");
     assert.deepEqual(detailCalls, ["12"], "series deep links should fetch the requested series once");
+  }
+
+  {
+    const { page, state } = await createHarness();
+    state.siteConfig = { home: { miniappPayment: { enabled: false } } };
+    page.paymentEnabled.value = false;
+    await page.startSeriesPurchase({ id: "99", purchaseState: "purchase_required" });
+    assert.equal(state.orderCalls.length, 0, "disabled payments must not create a classroom order");
+  }
+
+  {
+    const { page, state } = await createHarness();
+    state.siteConfig = { home: { miniappPayment: { enabled: true } } };
+    state.refreshSiteConfig = async () => ({ home: { miniappPayment: { enabled: false } } });
+    state.onShow();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(page.paymentEnabled.value, false, "classroom should apply a freshly refreshed payment switch");
   }
 
   for (const outcome of ["resolve", "reject"]) {

@@ -9,6 +9,7 @@ import (
 
 	"nine-xing/nx-backend/apps/server/internal/chat"
 	"nine-xing/nx-backend/apps/server/internal/observability"
+	"nine-xing/nx-backend/apps/server/internal/quiz"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 	"nine-xing/nx-backend/apps/server/internal/theorystore"
 	"nine-xing/nx-backend/apps/server/internal/xinzhili"
@@ -64,7 +65,7 @@ func (a serverXinzhiliCards) OwnedCard(ctx context.Context, userID, cardID int64
 	}
 	return xinzhili.Card{
 		ID: card.ID, Name: card.Name, Relation: card.Relation, MainType: card.MainType,
-		WingType: card.WingType, Profile: strings.TrimSpace(string(card.Profile)),
+		Profile: strings.TrimSpace(string(quiz.SanitizeProfileJSON(card.Profile))),
 	}, nil
 }
 

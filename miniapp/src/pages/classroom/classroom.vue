@@ -19,7 +19,9 @@ import {
   normalizeClassroomContent,
   normalizeClassroomSeries,
 } from "../../utils/classroomDisplay";
-import { createClassroomPurchaseController } from "../../utils/classroomProgress";
+import { createWechatPaymentController } from "../../utils/payment";
+import { normalizeMiniappPayment } from "../../utils/miniappPages";
+import { getStoredSiteConfig, refreshSiteConfig } from "../../utils/siteConfig";
 import { getToken } from "../../utils/auth";
 import { userErrorMessage } from "../../utils/userMessage";
 
@@ -41,6 +43,7 @@ const seriesPaymentTargetId = ref("");
 const seriesPaymentState = ref("idle");
 const seriesPaymentMessage = ref("");
 const seriesPurchaseInFlight = ref(false);
+const paymentEnabled = ref(normalizeMiniappPayment(getStoredSiteConfig()).enabled);
 const coverImageErrors = ref({});
 let listTicket = 0;
 let seriesTicket = 0;
@@ -50,6 +53,18 @@ let seriesPurchaseController = null;
 let seriesPurchaseOperation = null;
 let seriesPurchaseTicket = 0;
 let disposed = false;
+let paymentRefreshTicket = 0;
+
+async function refreshPaymentAvailability() {
+  const ticket = ++paymentRefreshTicket;
+  try {
+    const config = await refreshSiteConfig();
+    if (disposed || ticket !== paymentRefreshTicket) return;
+    paymentEnabled.value = normalizeMiniappPayment(config).enabled;
+  } catch {
+    // Keep the cached switch when a background refresh is unavailable.
+  }
+}
 
 const activeItems = computed(() =>
   activeTab.value === "series" ? seriesItems.value : standaloneItems.value,
@@ -253,7 +268,11 @@ function openContinueLearning(item) {
 }
 
 function itemAction(item) {
-  return classroomPurchaseAction(item);
+  const action = classroomPurchaseAction(item);
+  if (!paymentEnabled.value && action.type === "purchase") {
+    return { type: "unavailable", label: "查看详情" };
+  }
+  return action;
 }
 
 function coverMediaKey(item) {
@@ -264,31 +283,13 @@ function markCoverImageError(key) {
   coverImageErrors.value = { ...coverImageErrors.value, [key]: true };
 }
 
-function requestSeriesPayment(pay = {}) {
-  return new Promise((resolve, reject) => {
-    uni.requestPayment({
-      provider: "wxpay",
-      timeStamp: pay.timeStamp,
-      nonceStr: pay.nonceStr,
-      package: pay.package,
-      signType: pay.signType || "RSA",
-      paySign: pay.paySign,
-      success: resolve,
-      fail: reject,
-    });
-  });
-}
-
 function createSeriesPurchase(item) {
   seriesPurchaseController?.stop();
   const purchaseTicket = ++seriesPurchaseTicket;
   seriesPaymentTargetId.value = item.id;
-  seriesPurchaseController = createClassroomPurchaseController({
+  seriesPurchaseController = createWechatPaymentController({
     create: () => createClassroomOrderApi("series", item.id),
-    pay: async (order) => {
-      if (order?.payParams?.devMode) return devPayClassroomOrderApi(order.outTradeNo);
-      return requestSeriesPayment(order?.payParams);
-    },
+    devPay: (order) => devPayClassroomOrderApi(order.outTradeNo),
     status: () => getClassroomOrderStatusApi("series", item.id),
     onChange: (snapshot) => {
       if (disposed || purchaseTicket !== seriesPurchaseTicket) return;
@@ -330,6 +331,7 @@ function trackSeriesPurchase(run) {
 }
 
 function startSeriesPurchase(item) {
+  if (!paymentEnabled.value) return;
   if (!item?.id || itemAction(item).type !== "purchase") return;
   if (seriesPurchaseOperation) return;
   if (!getToken()) {
@@ -340,6 +342,7 @@ function startSeriesPurchase(item) {
 }
 
 function retrySeriesPurchase(item) {
+  if (!paymentEnabled.value) return;
   if (seriesPurchaseOperation) return;
   if (seriesPaymentTargetId.value !== item?.id) return startSeriesPurchase(item);
   if (!seriesPurchaseController) return;
@@ -381,6 +384,8 @@ onLoad(async (options = {}) => {
 });
 
 onShow(() => {
+  paymentEnabled.value = normalizeMiniappPayment(getStoredSiteConfig()).enabled;
+  void refreshPaymentAvailability();
   if (skipNextShowRefresh) {
     skipNextShowRefresh = false;
     return;
@@ -591,6 +596,7 @@ onUnload(() => {
 
         <view
           v-if="
+            paymentEnabled &&
             activeTab === 'series' &&
             seriesPaymentTargetId === item.id &&
             seriesPaymentState !== 'idle' &&

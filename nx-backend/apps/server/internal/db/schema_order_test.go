@@ -52,6 +52,26 @@ func TestSchemaMigratesExistingQuizSubmissionWingType(t *testing.T) {
 	}
 }
 
+func TestSchemaRetiresStructuredWingData(t *testing.T) {
+	raw, err := os.ReadFile("schema.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(raw)
+	for _, statement := range []string{
+		"UPDATE app_quiz_submissions SET wing_type = 0",
+		"UPDATE app_user_cards SET wing = 0",
+		"UPDATE app_profile_versions SET wing_type = 0",
+		"result = result - ARRAY['wingType','wingLabel','wing_type','wing_label']",
+		"profile = profile - ARRAY['wingType','wingLabel','wing_type','wing_label']",
+		"profile_json = profile_json - ARRAY['wingType','wingLabel','wing_type','wing_label']",
+	} {
+		if !strings.Contains(sql, statement) {
+			t.Fatalf("schema is missing wing retirement statement %q", statement)
+		}
+	}
+}
+
 func TestSchemaMigratesChatSessionContextSummary(t *testing.T) {
 	raw, err := os.ReadFile("schema.sql")
 	if err != nil {

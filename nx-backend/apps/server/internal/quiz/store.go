@@ -55,7 +55,6 @@ type Submission struct {
 	Result        json.RawMessage `json:"result"`
 	PrimaryType   int             `json:"primaryType"`
 	SecondType    int             `json:"secondType"`
-	WingType      int             `json:"wingType"`
 	Gender        string          `json:"gender"`
 	QuizVersion   string          `json:"quizVersion"`
 	Score         json.RawMessage `json:"score"`
@@ -64,7 +63,14 @@ type Submission struct {
 	CreateTime    string          `json:"createTime"`
 }
 
-// Card 用户卡片。DB 列名为 enneagram/wing，对外 JSON 暴露为 mainType/wingType。
+func (s Submission) MarshalJSON() ([]byte, error) {
+	type submissionJSON Submission
+	out := submissionJSON(s)
+	out.Result = SanitizeProfileJSON(s.Result)
+	return json.Marshal(out)
+}
+
+// Card 用户卡片。DB 兼容列 wing 不再参与业务或对外 JSON。
 type Card struct {
 	ID         int64           `json:"id"`
 	AppUserID  int64           `json:"appUserId"`
@@ -72,7 +78,6 @@ type Card struct {
 	Name       string          `json:"name"`
 	Relation   string          `json:"relation"`
 	MainType   int             `json:"mainType"`
-	WingType   int             `json:"wingType"`
 	Profile    json.RawMessage `json:"profile"`
 	Status     string          `json:"status"`
 	CreateTime string          `json:"createTime"`
@@ -85,13 +90,19 @@ type Card struct {
 	RetentionUntil    string `json:"retentionUntil,omitempty"`
 }
 
+func (c Card) MarshalJSON() ([]byte, error) {
+	type cardJSON Card
+	out := cardJSON(c)
+	out.Profile = SanitizeProfileJSON(c.Profile)
+	return json.Marshal(out)
+}
+
 // SubmitResult 提交测试后的返回：落库的 submission + upsert 后的主卡 + 画像。
 // CardInput 用于创建/更新副卡的客户端请求体。
 type CardInput struct {
 	Name     string `json:"name"`
 	Relation string `json:"relation"`
 	MainType int    `json:"mainType"`
-	WingType int    `json:"wingType"`
 }
 
 // QuestionInput 用于后台新建/更新题目。
@@ -251,7 +262,7 @@ func (s *Store) Submit(ctx context.Context, appUserID int64, in SubmitInput) (Su
 	}
 
 	sr := calcType(rawScore, in.Gender)
-	persona := buildPersona(sr.Type, sr.Second, sr.Wing, sr.Centers, in.Gender)
+	persona := buildPersona(sr.Type, sr.Second, sr.Centers, in.Gender)
 
 	answersJSON, _ := json.Marshal(in.Answers)
 	personaJSON, _ := json.Marshal(persona)
@@ -265,7 +276,6 @@ func (s *Store) Submit(ctx context.Context, appUserID int64, in SubmitInput) (Su
 	sub.Result = personaJSON
 	sub.PrimaryType = sr.Type
 	sub.SecondType = sr.Second
-	sub.WingType = sr.Wing
 	sub.Gender = in.Gender
 	sub.QuizVersion = quizVersion
 	sub.Score = scoreJSON
@@ -279,7 +289,7 @@ func (s *Store) Submit(ctx context.Context, appUserID int64, in SubmitInput) (Su
 		  gender, quiz_version, score, adjusted_score, centers)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 		 RETURNING id, create_time`,
-		appUserID, answersJSON, personaJSON, sr.Type, sr.Second, sr.Wing,
+		appUserID, answersJSON, personaJSON, sr.Type, sr.Second, 0,
 		in.Gender, quizVersion, scoreJSON, adjJSON, centersJSON,
 	).Scan(&sub.ID, &submissionCreateTime)
 	if err != nil {
@@ -288,7 +298,7 @@ func (s *Store) Submit(ctx context.Context, appUserID int64, in SubmitInput) (Su
 	sub.CreateTime = formatTime(submissionCreateTime)
 
 	// upsert 主卡：每个用户唯一一张 active 主卡（schema 部分唯一索引保证）。
-	card, err := s.upsertPrimaryCard(ctx, tx, appUserID, sub.ID, sr.Type, sr.Wing, personaJSON)
+	card, err := s.upsertPrimaryCard(ctx, tx, appUserID, sub.ID, sr.Type, personaJSON)
 	if err != nil {
 		return res, err
 	}
@@ -336,8 +346,9 @@ func validateAnswers(answers []AnswerItem, weights map[int64]map[string]map[int]
 }
 
 // upsertPrimaryCard 在事务内创建或更新用户主卡。
-func (s *Store) upsertPrimaryCard(ctx context.Context, tx *sql.Tx, appUserID, submissionID int64, mainType, wingType int, profile json.RawMessage) (Card, error) {
+func (s *Store) upsertPrimaryCard(ctx context.Context, tx *sql.Tx, appUserID, submissionID int64, mainType int, profile json.RawMessage) (Card, error) {
 	var c Card
+	var ignoredWing int
 	var createTime, updateTime time.Time
 	err := tx.QueryRowContext(ctx,
 		`INSERT INTO app_user_cards
@@ -347,9 +358,9 @@ func (s *Store) upsertPrimaryCard(ctx context.Context, tx *sql.Tx, appUserID, su
 		 DO UPDATE SET enneagram=EXCLUDED.enneagram, wing=EXCLUDED.wing,
 		   profile=EXCLUDED.profile, submission_id=EXCLUDED.submission_id,
 		   revision=app_user_cards.revision+1, update_time=now()
-		 RETURNING id, app_user_id, card_type, name, relation, enneagram, wing, profile, status, create_time, update_time`,
-		appUserID, mainType, wingType, profile, submissionID,
-	).Scan(&c.ID, &c.AppUserID, &c.CardType, &c.Name, &c.Relation, &c.MainType, &c.WingType, &c.Profile, &c.Status, &createTime, &updateTime)
+		 RETURNING id, app_user_id, card_type, name, relation, enneagram, 0, profile, status, create_time, update_time`,
+		appUserID, mainType, 0, profile, submissionID,
+	).Scan(&c.ID, &c.AppUserID, &c.CardType, &c.Name, &c.Relation, &c.MainType, &ignoredWing, &c.Profile, &c.Status, &createTime, &updateTime)
 	if err != nil {
 		return c, fmt.Errorf("quiz: upsert primary card: %w", err)
 	}
@@ -358,13 +369,17 @@ func (s *Store) upsertPrimaryCard(ctx context.Context, tx *sql.Tx, appUserID, su
 	return c, nil
 }
 
-const cardCols = `id, app_user_id, card_type, name, relation, enneagram, wing, profile, status, create_time, update_time`
+const cardCols = `id, app_user_id, card_type, name, relation, enneagram, 0, profile, status, create_time, update_time`
 
 func scanCard(row interface{ Scan(...interface{}) error }) (Card, error) {
 	var c Card
+	var ignoredWing int
 	var createTime, updateTime time.Time
 	err := row.Scan(&c.ID, &c.AppUserID, &c.CardType, &c.Name, &c.Relation,
-		&c.MainType, &c.WingType, &c.Profile, &c.Status, &createTime, &updateTime)
+		&c.MainType, &ignoredWing, &c.Profile, &c.Status, &createTime, &updateTime)
+	if err == nil {
+		c.Profile = SanitizeProfileJSON(c.Profile)
+	}
 	c.CreateTime = formatTime(createTime)
 	c.UpdateTime = formatTime(updateTime)
 	return c, err
@@ -373,15 +388,16 @@ func scanCard(row interface{ Scan(...interface{}) error }) (Card, error) {
 // LatestSubmission 返回用户最近一次测试结果，无记录返回 ErrNotFound。
 func (s *Store) LatestSubmission(ctx context.Context, appUserID int64) (Submission, error) {
 	var sub Submission
+	var ignoredWing int
 	var createTime time.Time
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, app_user_id, answers, result, primary_type, second_type, wing_type,
+		`SELECT id, app_user_id, answers, result, primary_type, second_type, 0,
 		        gender, quiz_version, score, adjusted_score, centers, create_time
 		 FROM app_quiz_submissions WHERE app_user_id = $1
 		 ORDER BY create_time DESC, id DESC LIMIT 1`,
 		appUserID,
 	).Scan(&sub.ID, &sub.AppUserID, &sub.Answers, &sub.Result, &sub.PrimaryType,
-		&sub.SecondType, &sub.WingType, &sub.Gender, &sub.QuizVersion,
+		&sub.SecondType, &ignoredWing, &sub.Gender, &sub.QuizVersion,
 		&sub.Score, &sub.AdjustedScore, &sub.Centers, &createTime)
 	if errors.Is(err, sql.ErrNoRows) {
 		return sub, ErrNotFound
@@ -389,6 +405,7 @@ func (s *Store) LatestSubmission(ctx context.Context, appUserID int64) (Submissi
 	if err != nil {
 		return sub, err
 	}
+	sub.Result = SanitizeProfileJSON(sub.Result)
 	sub.CreateTime = formatTime(createTime)
 	return sub, nil
 }
@@ -492,7 +509,7 @@ func (s *Store) CreateCardWithLimit(ctx context.Context, appUserID int64, limit 
 		return c, ErrCardLimit
 	}
 
-	persona := buildPersona(in.MainType, 0, in.WingType, nil, "")
+	persona := buildPersona(in.MainType, 0, nil, "")
 	profileJSON, _ := json.Marshal(persona)
 
 	c, err = scanCard(tx.QueryRowContext(ctx,
@@ -500,7 +517,7 @@ func (s *Store) CreateCardWithLimit(ctx context.Context, appUserID int64, limit 
 		 (app_user_id, card_type, name, relation, enneagram, wing, profile, status)
 		 VALUES ($1,'secondary',$2,$3,$4,$5,$6,'active')
 		 RETURNING `+cardCols,
-		appUserID, in.Name, in.Relation, in.MainType, in.WingType, profileJSON))
+		appUserID, in.Name, in.Relation, in.MainType, 0, profileJSON))
 	if err != nil {
 		return c, fmt.Errorf("quiz: insert card: %w", err)
 	}
@@ -524,7 +541,7 @@ func (s *Store) GetCard(ctx context.Context, appUserID, cardID int64) (Card, err
 
 // UpdateCard 更新副卡（仅 name/relation/type），按 id+用户 校验越权。
 func (s *Store) UpdateCard(ctx context.Context, appUserID, cardID int64, in CardInput) (Card, error) {
-	persona := buildPersona(in.MainType, 0, in.WingType, nil, "")
+	persona := buildPersona(in.MainType, 0, nil, "")
 	profileJSON, _ := json.Marshal(persona)
 	c, err := scanCard(s.db.QueryRowContext(ctx,
 		`UPDATE app_user_cards
@@ -532,7 +549,7 @@ func (s *Store) UpdateCard(ctx context.Context, appUserID, cardID int64, in Card
 		     revision=revision+1, update_time=now()
 		 WHERE id=$6 AND app_user_id=$7 AND card_type='secondary' AND status='active'
 		 RETURNING `+cardCols,
-		in.Name, in.Relation, in.MainType, in.WingType, profileJSON, cardID, appUserID))
+		in.Name, in.Relation, in.MainType, 0, profileJSON, cardID, appUserID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, ErrNotFound
 	}

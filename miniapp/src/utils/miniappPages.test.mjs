@@ -8,7 +8,7 @@ const dir = await mkdtemp(join(tmpdir(), 'nx-miniapp-pages-'))
 try {
   const modulePath = join(dir, 'miniappPages.mjs')
   await writeFile(modulePath, await readFile(new URL('./miniappPages.js', import.meta.url), 'utf8'))
-  const { normalizeMiniappLearn } = await import(pathToFileURL(modulePath).href)
+  const { normalizeMiniappLearn, normalizeMiniappPayment } = await import(pathToFileURL(modulePath).href)
 
   const DEFAULT_LEARN = {
     hero: {
@@ -48,6 +48,30 @@ try {
     normalizeMiniappLearn(),
     DEFAULT_LEARN,
     'missing miniappLearn configuration should retain every current learn-page default',
+  )
+
+  assert.deepEqual(
+    normalizeMiniappPayment(),
+    { enabled: true },
+    'missing miniappPayment configuration should preserve the backwards-compatible enabled default',
+  )
+  assert.equal(
+    normalizeMiniappPayment({ home: { miniappPayment: { enabled: false } } }).enabled,
+    false,
+    'an explicit false should hide every new payment entrance',
+  )
+  assert.equal(
+    normalizeMiniappPayment({ home: { miniappPayment: { enabled: 'false' } } }).enabled,
+    true,
+    'malformed payment visibility values should retain the enabled default',
+  )
+  const throwingPaymentConfig = Object.defineProperty({}, 'home', {
+    get() { throw new Error('malformed payment config getter') },
+  })
+  assert.deepEqual(
+    normalizeMiniappPayment(throwingPaymentConfig),
+    { enabled: true },
+    'unexpected payment config access errors should use a fresh default',
   )
 
   const source = {

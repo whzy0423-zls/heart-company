@@ -35,7 +35,6 @@ export interface QuizCard {
   relation: string;
   status: string;
   updateTime: string;
-  wingType: number;
 }
 
 export function getQuizQuestionsApi() {

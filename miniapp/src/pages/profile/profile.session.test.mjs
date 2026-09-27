@@ -58,6 +58,10 @@ const TYPES_INFO = {}
 const ensureLogin = () => globalThis.__profileHarness.ensureLogin()
 const getToken = () => globalThis.__profileHarness.token
 const clearToken = () => globalThis.__profileHarness.clearToken()
+const getStoredSiteConfig = () => globalThis.__profileHarness.siteConfig || {}
+const normalizeMiniappPayment = (config = {}) => ({
+  enabled: typeof config?.home?.miniappPayment?.enabled === 'boolean' ? config.home.miniappPayment.enabled : true,
+})
 const hiddenCount = (items) => Math.max(0, items.length - 3)
 const previewItems = (items) => items.slice(0, 3)
 const clearBookingSession = () => globalThis.__profileHarness.clearBookingSession()
@@ -65,11 +69,12 @@ const userErrorMessage = (error, fallback) => error?.message || fallback
 const getUserInfoApi = () => globalThis.__profileHarness.getUserInfoApi()
 const listTestRecordsApi = () => globalThis.__profileHarness.listTestRecordsApi()
 const listBookingsApi = () => globalThis.__profileHarness.listBookingsApi()
+const refreshSiteConfig = () => globalThis.__profileHarness.refreshSiteConfig()
 `
 
 await writeFile(
   modulePath,
-  `${harnessPrelude}\n${executableScript}\nexport { logged, user, records, bookings, recordsError, bookingsError, profileLoading, loadAll }\n`,
+  `${harnessPrelude}\n${executableScript}\nexport { logged, user, records, bookings, recordsError, bookingsError, profileLoading, paymentEnabled, loadAll }\n`,
 )
 
 let moduleCounter = 0
@@ -95,6 +100,8 @@ function authError(token, statusCode = 401) {
 async function createHarness() {
   const state = {
     token: '',
+    siteConfig: {},
+    refreshCalls: 0,
     clearTokenCalls: 0,
     sessionClearCalls: 0,
     toasts: [],
@@ -109,6 +116,10 @@ async function createHarness() {
     },
     clearBookingSession() {
       this.sessionClearCalls += 1
+    },
+    refreshSiteConfig() {
+      this.refreshCalls += 1
+      return Promise.resolve(this.siteConfig)
     },
   }
 
@@ -125,6 +136,16 @@ async function createHarness() {
 }
 
 try {
+  {
+    const { page, state } = await createHarness()
+    state.siteConfig = { home: { miniappPayment: { enabled: true } } }
+    state.refreshSiteConfig = async () => ({ home: { miniappPayment: { enabled: false } } })
+    state.onShow()
+    await Promise.resolve()
+    await Promise.resolve()
+    assert.equal(page.paymentEnabled.value, false, 'profile should apply a freshly refreshed payment switch')
+  }
+
   {
     const { page, state } = await createHarness()
     const pendingUser = deferred()

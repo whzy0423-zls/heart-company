@@ -338,6 +338,28 @@ onMounted(load);
       <template #action><Button size="small" @click="load">重试</Button></template>
     </Alert>
 
+    <Card
+      v-if="canEdit"
+      class="mb-4 border-2 border-dashed border-emerald-300 bg-emerald-50/70 dark:border-emerald-800 dark:bg-emerald-950/20"
+      :bordered="false"
+    >
+      <div class="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <div class="flex items-center gap-2 text-lg font-semibold text-emerald-800 dark:text-emerald-200">
+            <IconifyIcon icon="lucide:book-up-2" />
+            导入书籍，生成成长技能
+          </div>
+          <div class="mt-1 text-sm text-emerald-700/80 dark:text-emerald-300/80">
+            上传原始书籍后提取正文、生成技能草稿，检查后即可发布到 App。支持 TXT、Markdown、DOCX、EPUB、PDF。
+          </div>
+        </div>
+        <Button type="primary" size="large" @click="importOpen = true">
+          <IconifyIcon icon="lucide:upload" />
+          上传书籍并生成技能
+        </Button>
+      </div>
+    </Card>
+
     <div class="mb-4 grid gap-3 md:grid-cols-4">
       <div class="rounded-md border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
         <div class="text-sm text-gray-500">当前技能库</div>

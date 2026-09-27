@@ -23,7 +23,6 @@ type DirectionRef struct {
 type ScoreResult struct {
 	Type     int             `json:"type"`
 	Second   int             `json:"second"`
-	Wing     int             `json:"wing"`
 	Score    map[int]int     `json:"score"`
 	Adjusted map[int]float64 `json:"adjusted"`
 	Centers  []CenterPct     `json:"centers"`
@@ -36,8 +35,6 @@ type Persona struct {
 	MainEn     string       `json:"mainEn"`
 	SecondType int          `json:"secondType,omitempty"`
 	SecondName string       `json:"secondName,omitempty"`
-	WingType   int          `json:"wingType,omitempty"`
-	WingLabel  string       `json:"wingLabel,omitempty"`
 	Center     string       `json:"center"`
 	CenterName string       `json:"centerName"`
 	Color      string       `json:"color"`
@@ -56,7 +53,7 @@ type Persona struct {
 	GenderText string       `json:"genderText,omitempty"`
 }
 
-// calcType 移植自 miniapp calcType：原始分 → 性别加权调整分 → 主型/副型 → 三中心占比 → 侧翼。
+// calcType 移植自 miniapp calcType：原始分 → 性别加权调整分 → 主型/副型 → 三中心占比。
 // rawScore[id] 已由服务端从题库 option.weights 累加得到（不信任客户端传入的分值）。
 func calcType(rawScore map[int]int, gender string) ScoreResult {
 	score := make(map[int]int, 9)
@@ -125,32 +122,15 @@ func calcType(rawScore map[int]int, gender string) ScoreResult {
 	return ScoreResult{
 		Type:     best,
 		Second:   second,
-		Wing:     wingOf(best, score),
 		Score:    score,
 		Adjusted: adjusted,
 		Centers:  centers,
 	}
 }
 
-// wingOf 侧翼 = 相邻两型中原始分较高者（环形：1 的相邻是 9 和 2，9 的相邻是 8 和 1）。
-func wingOf(primary int, score map[int]int) int {
-	left := primary - 1
-	if left < 1 {
-		left = 9
-	}
-	right := primary + 1
-	if right > 9 {
-		right = 1
-	}
-	if score[left] >= score[right] {
-		return left
-	}
-	return right
-}
-
 // buildPersona 由型号组装画像。secondType<=0 表示无副型；centers 可为 nil（如手动建副卡）。
 // gender 为空时不附性别专属文案。
-func buildPersona(mainType, secondType, wingType int, centers []CenterPct, gender string) Persona {
+func buildPersona(mainType, secondType int, centers []CenterPct, gender string) Persona {
 	info := TypesInfo[mainType]
 	res := TypeResults[mainType]
 
@@ -186,15 +166,6 @@ func buildPersona(mainType, secondType, wingType int, centers []CenterPct, gende
 	if secondType >= 1 && secondType <= 9 {
 		p.SecondType = secondType
 		p.SecondName = TypesInfo[secondType].Name
-	}
-	if wingType >= 1 && wingType <= 9 {
-		p.WingType = wingType
-		for _, w := range info.Wings {
-			if w.ID == wingType {
-				p.WingLabel = w.Label
-				break
-			}
-		}
 	}
 	switch gender {
 	case "male":

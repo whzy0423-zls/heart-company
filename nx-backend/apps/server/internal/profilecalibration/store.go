@@ -635,7 +635,7 @@ func (s *Store) finishReport(ctx context.Context, appUserID, id int64, accept bo
 	if accept {
 		newStatus = "accepted"
 		profileJSON, _ := json.Marshal(buildProfile(suggested))
-		if _, err := tx.ExecContext(ctx, `UPDATE app_user_cards SET enneagram=$1, profile=$2::jsonb, update_time=now() WHERE id=$3 AND app_user_id=$4 AND status='active'`, suggested, string(profileJSON), cardID, appUserID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE app_user_cards SET enneagram=$1, wing=0, profile=$2::jsonb, update_time=now() WHERE id=$3 AND app_user_id=$4 AND status='active'`, suggested, string(profileJSON), cardID, appUserID); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE app_profile_versions SET is_active=false WHERE card_id=$1`, cardID); err != nil {

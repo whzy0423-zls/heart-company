@@ -48,6 +48,8 @@ for (const name of ['default', ...Array.from({ length: 9 }, (_, index) => String
 assert.ok(template && script && style, 'result page should expose template, script, and scoped style')
 assert.match(script, /listClassroomStandaloneApi/, 'result page should request standalone classroom recommendations')
 assert.match(script, /normalizeClassroomContent/, 'result page should normalize recommended classroom items')
+assert.match(script, /normalizeMiniappPayment/, 'result page should read the shared payment switch')
+assert.match(template, /v-if="paymentEnabled"/, 'result page should hide the report purchase surface when payments are disabled')
 assert.match(script, /classroomContentRoute/, 'result page should share classroom detail routing')
 assert.match(script, /setBookingIntent\(\{\s*kind:\s*['"]enterprise['"],\s*intentText:\s*['"]企业九型工作坊['"]\s*\}\)/, 'result enterprise CTA should store an enterprise booking intent')
 assert.match(script, /function\s+resultShareImage\s*\(type\)/, 'result sharing should resolve a stable local cover')
@@ -71,6 +73,7 @@ const harnessPrelude = `
 const ref = (value) => ({ value })
 const computed = (getter) => ({ get value() { return getter() } })
 const onMounted = (handler) => { globalThis.__resultHarness.onMounted = handler }
+const onShow = (handler) => { globalThis.__resultHarness.onShow = handler }
 const getCurrentInstance = () => ({ proxy: {} })
 const onShareAppMessage = (handler) => { globalThis.__resultHarness.shareAppMessage = handler }
 const onShareTimeline = (handler) => { globalThis.__resultHarness.shareTimeline = handler }
@@ -81,7 +84,6 @@ const TYPES_INFO = {
 }
 const CENTERS = { gut: { name: '腹中心' }, heart: { name: '心中心' }, head: { name: '脑中心' } }
 const RESULTS = { 1: { title: '一号改革者', summary: '重视原则', growth: '放松一点' } }
-const isWing = () => false
 const resultPersonaText = () => '个人画像'
 const getLastResult = () => globalThis.__resultHarness.lastResult
 const normalizeLastResult = (value) => value && value.type ? value : null
@@ -102,13 +104,17 @@ const classroomContentRoute = (item) => item?.id ? '/classroom-detail/' + item.i
 const classroomAccessLabel = (value) => value === 'paid' ? '付费课件' : '免费'
 const setBookingIntent = (intent) => { globalThis.__resultHarness.intents.push(intent); return true }
 const getStoredSiteConfig = () => globalThis.__resultHarness.siteConfig
+const refreshSiteConfig = () => globalThis.__resultHarness.refreshSiteConfig()
 const normalizeMiniappLearn = (config = {}) => ({
   classroom: { enabled: typeof config?.home?.miniappLearn?.classroom?.enabled === 'boolean' ? config.home.miniappLearn.classroom.enabled : true },
+})
+const normalizeMiniappPayment = (config = {}) => ({
+  enabled: typeof config?.home?.miniappPayment?.enabled === 'boolean' ? config.home.miniappPayment.enabled : true,
 })
 `
 await writeFile(
   modulePath,
-  `${harnessPrelude}\n${executableScript}\nexport { result, r, info, classroomEnabled, classroomRecommendations, classroomRecommendationLoading, classroomRecommendationError, loadClassroomRecommendations, openClassroomRecommendation, goClassroom, goBooking, restart, goRelation, resultShareImage }\n`,
+  `${harnessPrelude}\n${executableScript}\nexport { result, r, info, classroomEnabled, paymentEnabled, classroomRecommendations, classroomRecommendationLoading, classroomRecommendationError, loadClassroomRecommendations, openClassroomRecommendation, goClassroom, goBooking, restart, goRelation, resultShareImage }\n`,
 )
 
 let caseId = 0
@@ -122,9 +128,14 @@ async function createHarness(overrides = {}) {
     toasts: [],
     intents: [],
     siteConfig: {},
+    refreshCalls: 0,
     shareAppMessage: null,
     shareTimeline: null,
     listStandalone: async () => ({ items: [] }),
+    refreshSiteConfig() {
+      this.refreshCalls += 1
+      return Promise.resolve(this.siteConfig)
+    },
     ...overrides,
   }
   globalThis.__resultHarness = state
@@ -149,6 +160,26 @@ try {
     await Promise.resolve()
     assert.equal(page.classroomEnabled.value, false, 'disabled site config should hide result-page classroom entry')
     assert.equal(state.classroomCalls.length, 0, 'disabled site config should skip classroom recommendation requests')
+  }
+
+  {
+    const { page, state } = await createHarness({
+      siteConfig: { home: { miniappPayment: { enabled: false } } },
+    })
+    state.onMounted()
+    await Promise.resolve()
+    assert.equal(page.paymentEnabled.value, false, 'result page should adopt a disabled payment config')
+  }
+
+  {
+    const { page, state } = await createHarness({
+      siteConfig: { home: { miniappPayment: { enabled: true } } },
+    })
+    state.refreshSiteConfig = async () => ({ home: { miniappPayment: { enabled: false } } })
+    state.onShow()
+    await Promise.resolve()
+    await Promise.resolve()
+    assert.equal(page.paymentEnabled.value, false, 'result page should apply a freshly refreshed payment switch')
   }
 
   {

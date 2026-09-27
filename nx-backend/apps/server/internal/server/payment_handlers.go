@@ -107,6 +107,9 @@ func validateWxPayCallbackAgainstOrder(env config.Env, result wxpay.CallbackResu
 // createWechatPayTestOrder 创建固定 0.10 元的真实微信支付测试单。
 // 金额、商品和订单关联信息全部由服务端固定，客户端只负责拉起收银台。
 func (s *Server) createWechatPayTestOrder(w http.ResponseWriter, r *http.Request) {
+	if !s.requireMiniappPayment(w, r) {
+		return
+	}
 	if s.pay == nil {
 		httpx.Fail(w, http.StatusServiceUnavailable, "payment service is not configured")
 		return
@@ -147,6 +150,9 @@ type reportOrderRequest struct {
 
 // createReportOrder 为深度报告下单，返回小程序拉起支付所需参数。
 func (s *Server) createReportOrder(w http.ResponseWriter, r *http.Request) {
+	if !s.requireMiniappPayment(w, r) {
+		return
+	}
 	if s.pay == nil {
 		httpx.Fail(w, http.StatusServiceUnavailable, "payment service is not configured")
 		return
@@ -228,6 +234,9 @@ func (s *Server) createReportOrder(w http.ResponseWriter, r *http.Request) {
 func (s *Server) devPayReportOrder(w http.ResponseWriter, r *http.Request) {
 	if config.IsProduction(s.env.AppEnv) || s.pay == nil || !s.pay.DevMode() {
 		httpx.Fail(w, http.StatusNotFound, "Not Found")
+		return
+	}
+	if !s.requireMiniappPayment(w, r) {
 		return
 	}
 	user := userFromRequest(r)

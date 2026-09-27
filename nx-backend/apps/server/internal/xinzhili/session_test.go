@@ -1611,7 +1611,7 @@ func (f *sessionFixture) input(turnID string) StartTurnInput {
 type fakeCardProvider struct{}
 
 func (*fakeCardProvider) OwnedCard(context.Context, int64, int64) (Card, error) {
-	return Card{ID: 22, Name: "小林", Relation: "朋友", MainType: 6, WingType: 5}, nil
+	return Card{ID: 22, Name: "小林", Relation: "朋友", MainType: 6}, nil
 }
 
 type fakeConversationStore struct {

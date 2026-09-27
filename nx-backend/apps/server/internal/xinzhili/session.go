@@ -28,7 +28,6 @@ type Card struct {
 	Name     string
 	Relation string
 	MainType int
-	WingType int
 	Profile  string
 }
 
@@ -972,7 +971,7 @@ func (s *session) startGeneration(turn *activeTurn, question string) {
 		input := rag.GenerateInput{
 			History: history, ConversationSummary: summary, Question: question, Sources: sources,
 			UserProfile:      rag.UserProfile{Memories: memories},
-			ConversationCard: rag.ConversationCard{Name: turn.card.Name, Relation: turn.card.Relation, MainType: turn.card.MainType, WingType: turn.card.WingType, Profile: turn.card.Profile},
+			ConversationCard: rag.ConversationCard{Name: turn.card.Name, Relation: turn.card.Relation, MainType: turn.card.MainType, Profile: turn.card.Profile},
 			UserPreferences:  preferences, CurrentDirectives: directives, Tier: "companion",
 		}
 		answer, err := s.deps.Generator.GenerateStream(turn.ctx, input, func(delta string) error {

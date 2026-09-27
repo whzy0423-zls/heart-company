@@ -120,6 +120,16 @@ try {
   assert.ok(retryStates.includes("cancelled"));
   assert.ok(retryStates.includes("success"));
 
+  const reportLike = createClassroomPurchaseController({
+    create: async () => ({ outTradeNo: "report-1", payParams: {} }),
+    pay: async () => {},
+    status: async () => ({ unlocked: true }),
+    isPaid: (status) => status?.unlocked === true,
+    wait: async () => {},
+  });
+  await reportLike.purchase();
+  assert.equal(reportLike.snapshot().state, "success", "business adapters may define paid state");
+
   console.log("classroom progress and order tests passed");
 } finally {
   await rm(dir, { force: true, recursive: true });

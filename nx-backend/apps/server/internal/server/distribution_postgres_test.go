@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -24,7 +25,7 @@ func distributionDatabase(t *testing.T) *sql.DB {
 	}
 	db, _ := testdb.OpenIsolatedSchema(t, dsn, "distribution")
 	_, err := db.Exec(`CREATE TABLE users(id BIGINT PRIMARY KEY);
- CREATE TABLE app_users(id BIGINT PRIMARY KEY);
+ CREATE TABLE app_users(id BIGINT PRIMARY KEY, phone TEXT NOT NULL DEFAULT '', account TEXT, nickname TEXT NOT NULL DEFAULT '');
  CREATE TABLE app_orders(id BIGINT PRIMARY KEY);
  INSERT INTO app_users VALUES(100),(200),(300),(400);
  INSERT INTO app_orders VALUES(1);`)
@@ -50,6 +51,38 @@ func distributionDatabase(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	return db
+}
+
+func TestDistributionPostgresAdminAgentListIncludesAppUserIdentity(t *testing.T) {
+	db := distributionDatabase(t)
+	if _, err := db.Exec(`UPDATE app_users SET phone='13800138000', account='agent-account', nickname='代理昵称' WHERE id=100`); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{db: db}
+	w := httptest.NewRecorder()
+	s.adminDistributionAgents(w, httptest.NewRequest(http.MethodGet, "/api/admin/distribution/agents", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Data struct {
+			Items []struct {
+				AppUserAccount  string `json:"appUserAccount"`
+				AppUserPhone    string `json:"appUserPhone"`
+				AppUserNickname string `json:"appUserNickname"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Data.Items) == 0 {
+		t.Fatal("expected at least one agent")
+	}
+	got := body.Data.Items[0]
+	if got.AppUserAccount != "agent-account" || got.AppUserPhone != "13800138000" || got.AppUserNickname != "代理昵称" {
+		t.Fatalf("identity=%+v", got)
+	}
 }
 
 func TestDistributionPostgresCommissionSnapshotAndReplay(t *testing.T) {
@@ -93,7 +126,7 @@ func TestDistributionPostgresAdminAgentCreateAutoGeneratesAgentCode(t *testing.T
 	}
 
 	created := distributionRequest(s.adminDistributionAgentCreate, "/", `{"appUserId":400}`)
-	if created.Code != 200 || !strings.Contains(created.Body.String(), `"agentCode":"A400"`) {
+	if created.Code != 200 || !regexp.MustCompile(`"agentCode":"[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}"`).MatchString(created.Body.String()) {
 		t.Fatalf("create agent status=%d body=%s", created.Code, created.Body.String())
 	}
 }

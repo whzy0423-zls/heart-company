@@ -36,6 +36,12 @@ export const DEFAULT_MINIAPP_LEARN = Object.freeze({
   bottomCtaText: '先完成测试，建立你的学习地图',
 })
 
+export const DEFAULT_MINIAPP_PAYMENT = Object.freeze({
+  // Keep payments available for existing deployments until the admin explicitly
+  // switches the feature off.
+  enabled: true,
+})
+
 function isRecord(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
@@ -118,5 +124,20 @@ export function normalizeMiniappLearn(config) {
     }
   } catch {
     return createDefaults()
+  }
+}
+
+export function normalizeMiniappPayment(config) {
+  try {
+    const source = isRecord(config?.home?.miniappPayment)
+      ? config.home.miniappPayment
+      : {}
+    return {
+      enabled: typeof source.enabled === 'boolean'
+        ? source.enabled
+        : DEFAULT_MINIAPP_PAYMENT.enabled,
+    }
+  } catch {
+    return { enabled: DEFAULT_MINIAPP_PAYMENT.enabled }
   }
 }

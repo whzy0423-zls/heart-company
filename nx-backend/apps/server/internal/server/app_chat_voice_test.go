@@ -351,7 +351,6 @@ func TestVoiceChatPassesCurrentConversationCardToGenerator(t *testing.T) {
 			Name:     "妈妈",
 			Relation: "家人",
 			MainType: 2,
-			WingType: 1,
 			Profile:  `{"primaryMotivation":"希望被需要"}`,
 		}
 	}
@@ -370,7 +369,7 @@ func TestVoiceChatPassesCurrentConversationCardToGenerator(t *testing.T) {
 		t.Fatalf("voice chat failed: %d %s", response.Code, response.Body.String())
 	}
 	card := generator.input.ConversationCard
-	if card.CardType != "secondary" || card.Name != "妈妈" || card.Relation != "家人" || card.MainType != 2 || card.WingType != 1 || !strings.Contains(card.Profile, "希望被需要") {
+	if card.CardType != "secondary" || card.Name != "妈妈" || card.Relation != "家人" || card.MainType != 2 || !strings.Contains(card.Profile, "希望被需要") {
 		t.Fatalf("secondary conversation card missing from voice generation: %+v", card)
 	}
 	if generator.input.Tier != "basic" {

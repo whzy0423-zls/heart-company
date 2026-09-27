@@ -202,3 +202,30 @@ func TestSiteFieldMissingDistinguishesMissingAndEmpty(t *testing.T) {
 		t.Fatal("explicit empty customerServiceQr should not be treated as missing")
 	}
 }
+
+func TestMiniappPaymentEnabledDefaultsOnAndHonorsExplicitSwitch(t *testing.T) {
+	if !MiniappPaymentEnabled(SiteConfig{}) {
+		t.Fatal("missing miniapp payment config should stay enabled for backwards compatibility")
+	}
+
+	config := validConfig()
+	config.Home["miniappPayment"] = map[string]any{"enabled": false}
+	if MiniappPaymentEnabled(config) {
+		t.Fatal("explicitly disabled miniapp payment should be disabled")
+	}
+
+	config.Home["miniappPayment"] = map[string]any{"enabled": true}
+	if !MiniappPaymentEnabled(config) {
+		t.Fatal("explicitly enabled miniapp payment should be enabled")
+	}
+}
+
+func TestMiniappPaymentEnabledIgnoresMalformedLegacyValues(t *testing.T) {
+	config := validConfig()
+	for _, value := range []any{"false", nil, []any{false}} {
+		config.Home["miniappPayment"] = value
+		if !MiniappPaymentEnabled(config) {
+			t.Fatalf("malformed legacy value %#v should preserve the enabled default", value)
+		}
+	}
+}

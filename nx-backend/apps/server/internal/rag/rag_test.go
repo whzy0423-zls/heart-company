@@ -183,6 +183,19 @@ func TestSearchDoesNotUseMainTypeAsOnlyRelevanceEvidence(t *testing.T) {
 	}
 }
 
+func TestSelectDocumentsFiltersRetiredWingKnowledge(t *testing.T) {
+	documents := []Document{
+		{ID: "clean", Title: "关系沟通", Content: "关系沟通需要尊重边界并明确表达。"},
+		{ID: "wing-cn", Title: "关系沟通与侧翼", Content: "关系沟通参考。"},
+		{ID: "wing-label", Title: "关系沟通", Content: "1w9 在关系沟通中的表现。"},
+	}
+
+	selected := SelectDocuments(documents, "关系沟通", 1, 10)
+	if len(selected) != 1 || selected[0].ID != "clean" {
+		t.Fatalf("retired wing documents must be filtered, got %+v", selected)
+	}
+}
+
 func TestSearchUsesMainTypeAsBoostAfterQuestionMatch(t *testing.T) {
 	service := NewService([]Document{
 		{ID: "type-2", Title: "2号 助人型", Content: "关系沟通需要尊重彼此边界。"},
@@ -228,7 +241,6 @@ func TestAskSuggestionsStayOnCurrentCardTypeAndRecentFocus(t *testing.T) {
 			CardType: "primary",
 			Name:     "本人",
 			MainType: 4,
-			WingType: 5,
 		},
 	})
 	if err != nil {

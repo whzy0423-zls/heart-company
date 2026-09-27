@@ -852,7 +852,6 @@ func TestBuildUserPromptIncludesSecondaryConversationCardBoundary(t *testing.T) 
 		"称呼=妈妈",
 		"与用户关系=家人",
 		"主型=2号",
-		"翼型=1号",
 		"希望被需要",
 		"不要把当前关注对象当成正在输入的用户本人",
 		"不要冒充当前关注对象",
@@ -860,6 +859,9 @@ func TestBuildUserPromptIncludesSecondaryConversationCardBoundary(t *testing.T) 
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("secondary card prompt missing %q: %s", want, prompt)
 		}
+	}
+	if strings.Contains(prompt, "翼型") || strings.Contains(strings.ToLower(prompt), "wing") {
+		t.Fatalf("legacy wing data leaked into prompt: %s", prompt)
 	}
 }
 
@@ -875,7 +877,6 @@ func TestBuildUserPromptUsesCurrentConversationTypeAsReplyPersona(t *testing.T) 
 			Name:     "妈妈",
 			Relation: "家人",
 			MainType: 2,
-			WingType: 1,
 		},
 	})
 

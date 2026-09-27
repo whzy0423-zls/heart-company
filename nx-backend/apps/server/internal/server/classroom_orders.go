@@ -86,6 +86,9 @@ func parseClassroomOrderTarget(targetType, refID string) (classroomOrderTarget, 
 }
 
 func (s *Server) classroomOrderCreate(w http.ResponseWriter, r *http.Request) {
+	if !s.requireMiniappPayment(w, r) {
+		return
+	}
 	if s.classroomOrders == nil {
 		httpx.Fail(w, http.StatusServiceUnavailable, "classroom payment is not configured")
 		return
@@ -133,6 +136,9 @@ func (s *Server) classroomOrderStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) classroomOrderDevPay(w http.ResponseWriter, r *http.Request) {
 	if config.IsProduction(s.env.AppEnv) || s.pay == nil || !s.pay.DevMode() || s.classroomOrders == nil {
 		httpx.Fail(w, http.StatusNotFound, "Not Found")
+		return
+	}
+	if !s.requireMiniappPayment(w, r) {
 		return
 	}
 	var body struct {

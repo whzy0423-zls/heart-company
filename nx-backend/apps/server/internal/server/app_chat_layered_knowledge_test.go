@@ -73,6 +73,52 @@ func TestAppChatAskStreamUsesLayeredKnowledgeAndPersistsInternalTrace(t *testing
 	assertSourceIDs(t, generator.lastSources(), "public", "theory", "type-6")
 }
 
+func TestAppChatQuickSuggestionCanBeSentAsARelevantFollowUp(t *testing.T) {
+	store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+	store.cardID = 77
+	resolver := &layeredKnowledgeResolver{mainType: 3, revision: 1}
+	searcher := newLayeredKnowledgeSearcher()
+	generator := &layeredKnowledgeGenerator{}
+	server := newLayeredKnowledgeServer(t, store, resolver, searcher, generator)
+
+	first := httptest.NewRecorder()
+	server.appChatRouter(first, layeredKnowledgeRequest(t, "/api/app/chat/sessions/42/ask", "什么是九型人格"))
+	if first.Code != http.StatusOK {
+		t.Fatalf("first status = %d body=%s", first.Code, first.Body.String())
+	}
+	var firstPayload struct {
+		Data askResponse `json:"data"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &firstPayload); err != nil {
+		t.Fatalf("decode first response: %v", err)
+	}
+	if len(firstPayload.Data.Answer.Suggestions) != 3 {
+		t.Fatalf("first suggestions = %+v, want 3", firstPayload.Data.Answer.Suggestions)
+	}
+	for _, suggestion := range firstPayload.Data.Answer.Suggestions {
+		if !strings.Contains(suggestion, "3号") {
+			t.Fatalf("suggestion leaked a different current type: %q", suggestion)
+		}
+	}
+	assertSourceIDs(t, generator.lastSources(), "public", "theory", "type-3")
+
+	followUp := firstPayload.Data.Answer.Suggestions[0]
+	second := httptest.NewRecorder()
+	server.appChatRouter(second, layeredKnowledgeRequest(t, "/api/app/chat/sessions/42/ask", followUp))
+	if second.Code != http.StatusOK {
+		t.Fatalf("follow-up status = %d body=%s", second.Code, second.Body.String())
+	}
+	if got := generator.lastInput().Question; got != followUp {
+		t.Fatalf("follow-up question = %q, want %q", got, followUp)
+	}
+	if resolver.calls != 2 {
+		t.Fatalf("knowledge resolver calls = %d, want 2", resolver.calls)
+	}
+	if got := len(store.allTraces()); got != 2 {
+		t.Fatalf("persisted knowledge traces = %d, want 2", got)
+	}
+}
+
 func TestAppChatAskSurfacesNonRetryableKnowledgeFailure(t *testing.T) {
 	store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
 	store.cardID = 77

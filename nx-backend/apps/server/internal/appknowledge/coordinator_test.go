@@ -49,6 +49,19 @@ type releaseSearchStub struct {
 	mu            sync.Mutex
 }
 
+type releaseSetSearchStub struct {
+	releaseSearchStub
+	releaseSets [][]int64
+}
+
+func (s *releaseSetSearchStub) SearchReleaseSetChunks(_ context.Context, releaseIDs []int64, _ string, _ int, _ float64) ([]rag.Document, error) {
+	s.releaseSets = append(s.releaseSets, append([]int64(nil), releaseIDs...))
+	return []rag.Document{
+		{ID: "theory:psych-1", Title: "亲密关系", Content: "心理知识一"},
+		{ID: "theory:psych-2", Title: "社会心理学", Content: "心理知识二"},
+	}, nil
+}
+
 type remoteRetrieverStub struct {
 	result RemoteResult
 	err    error
@@ -88,6 +101,27 @@ func TestCoordinatorLangChainUsesResolvedReleaseScope(t *testing.T) {
 	}
 	if !reflect.DeepEqual(remote.input.TheoryReleaseIDs, []int64{101}) || !reflect.DeepEqual(remote.input.EnneagramReleaseIDs, []int64{103}) || remote.input.MainType != 3 {
 		t.Fatalf("remote scope = %+v", remote.input)
+	}
+}
+
+func TestCoordinatorLangChainPassesEveryConfiguredTheoryRelease(t *testing.T) {
+	bindings := []*Binding{
+		{Layer: LayerTheory, ReleaseID: 101},
+		{Layer: LayerTheory, ReleaseID: 201},
+		{Layer: LayerTheory, ReleaseID: 202},
+	}
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{
+		CardID: 9, CardRevision: 4, MainType: 3,
+		Resolution: Resolution{Theory: bindings[0], TheoryBindings: bindings},
+	}}
+	remote := &remoteRetrieverStub{}
+	coordinator := NewCoordinator(resolver, &publicSearchStub{}, &releaseSearchStub{}, WithRemote("langchain", remote, nil))
+
+	if _, err := coordinator.Retrieve(context.Background(), Input{UserID: 7, SessionID: 8, CardID: 9, Query: "亲密关系"}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(remote.input.TheoryReleaseIDs, []int64{101, 201, 202}) {
+		t.Fatalf("remote theory releases = %v", remote.input.TheoryReleaseIDs)
 	}
 }
 
@@ -365,6 +399,37 @@ func TestCoordinatorReturnsPublicTheoryAndCurrentTypeWithTrace(t *testing.T) {
 		result.Trace.LayerHits[LayerEnneagramType].LibraryID != 13 ||
 		result.Trace.LayerHits[LayerEnneagramType].ReleaseID != 103 {
 		t.Fatalf("layer hits = %+v", result.Trace.LayerHits)
+	}
+}
+
+func TestCoordinatorSearchesAllConfiguredTheoryLibrariesAsOneRankedSet(t *testing.T) {
+	bindings := []*Binding{
+		{Layer: LayerTheory, LibraryID: 10, LibraryKey: "enneagram-core", ReleaseID: 100},
+		{Layer: LayerTheory, LibraryID: 21, LibraryKey: "skill-qinmi-guanxi", ReleaseID: 201},
+		{Layer: LayerTheory, LibraryID: 22, LibraryKey: "skill-social-psychology-myers", ReleaseID: 202},
+	}
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{
+		CardID: 9, CardRevision: 4, MainType: 3,
+		Resolution: Resolution{Theory: bindings[0], TheoryBindings: bindings},
+	}}
+	searcher := &releaseSetSearchStub{}
+
+	result, err := NewCoordinator(resolver, &publicSearchStub{}, searcher).Retrieve(context.Background(), Input{
+		UserID: 7, SessionID: 8, CardID: 9, Query: "亲密关系里发生冲突怎么办",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(searcher.releaseSets, [][]int64{{100, 201, 202}}) {
+		t.Fatalf("release sets = %v, want one globally ranked search", searcher.releaseSets)
+	}
+	if got := documentIDs(result.Documents); !reflect.DeepEqual(got, []string{"theory:psych-1", "theory:psych-2"}) {
+		t.Fatalf("documents = %v", got)
+	}
+	theoryHit := result.Trace.LayerHits[LayerTheory]
+	if !reflect.DeepEqual(theoryHit.LibraryIDs, []int64{10, 21, 22}) ||
+		!reflect.DeepEqual(theoryHit.ReleaseIDs, []int64{100, 201, 202}) {
+		t.Fatalf("theory trace = %+v", theoryHit)
 	}
 }
 

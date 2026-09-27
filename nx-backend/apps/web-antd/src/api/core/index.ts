@@ -4,6 +4,7 @@ export * from './analytics';
 export * from './app-agent-discount';
 export * from './app-analytics';
 export * from './app-customer';
+export * from './app-email';
 export * from './app-order';
 export * from './app-plan';
 export * from './app-ops';

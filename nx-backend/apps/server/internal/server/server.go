@@ -982,6 +982,13 @@ func (s *Server) routes() {
 		}
 		s.requirePermission(permission, s.appFeatureConfig)(w, r)
 	})
+	s.mux.HandleFunc("/api/app/email-config", func(w http.ResponseWriter, r *http.Request) {
+		permission := "App:Email:View"
+		if r.Method == http.MethodPut {
+			permission = "App:Email:Manage"
+		}
+		s.requirePermission(permission, s.appEmailConfigHandler)(w, r)
+	})
 	s.mux.HandleFunc("/api/distribution-poster-config", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			s.requireAnyPermission([]string{"Customer:App:List", "Agent:Distribution:View"}, s.distributionPosterConfig)(w, r)
@@ -1020,6 +1027,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/auth/register", s.method(http.MethodPost, s.appRegisterWithPassword))
 	s.mux.HandleFunc("/api/app/auth/login", s.method(http.MethodPost, s.appLoginWithPassword))
 	s.mux.HandleFunc("/api/app/auth/reset-password", s.method(http.MethodPost, s.appResetPassword))
+	s.mux.HandleFunc("/api/app/auth/send-email-code", s.method(http.MethodPost, s.appSendEmailCode))
+	s.mux.HandleFunc("/api/app/auth/reset-password-email", s.method(http.MethodPost, s.appResetPasswordEmail))
 	s.mux.HandleFunc("/api/app/auth/refresh", s.method(http.MethodPost, s.appRefreshToken))
 	s.mux.HandleFunc("/api/app/auth/logout", s.method(http.MethodPost, s.appLogout))
 	s.mux.HandleFunc("/api/app/user/info", s.method(http.MethodGet, s.requireAppAuth(s.appUserInfo)))

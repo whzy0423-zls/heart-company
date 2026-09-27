@@ -10,12 +10,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"nine-xing/nx-backend/apps/server/internal/quiz"
 )
 
 type User struct {
 	ID                    int64    `json:"id"`
 	Phone                 string   `json:"phone"`
 	Account               string   `json:"account,omitempty"`
+	Email                 string   `json:"email,omitempty"`
 	Nickname              string   `json:"nickname"`
 	Avatar                string   `json:"avatar"`
 	Status                string   `json:"status"`
@@ -41,8 +44,9 @@ type User struct {
 }
 
 type UpdateAdminFieldsInput struct {
-	Status      string `json:"status"`
-	MemberLevel string `json:"memberLevel"`
+	Status      string  `json:"status"`
+	MemberLevel string  `json:"memberLevel"`
+	Email       *string `json:"email"`
 }
 
 // UpdateSelfProfileInput is limited to the two fields an app user may edit.
@@ -128,6 +132,17 @@ func (s *Store) FindByID(ctx context.Context, id int64) (User, error) {
 	return u, nil
 }
 
+func (s *Store) FindEmail(ctx context.Context, id int64) (string, error) {
+	var email sql.NullString
+	if err := s.db.QueryRowContext(ctx, `SELECT email FROM app_users WHERE id=$1`, id).Scan(&email); err != nil {
+		return "", err
+	}
+	if !email.Valid {
+		return "", nil
+	}
+	return email.String, nil
+}
+
 // UpdateSelfProfile updates only the authenticated user's public identity.
 func (s *Store) UpdateSelfProfile(ctx context.Context, id int64, input UpdateSelfProfileInput) (User, error) {
 	if id <= 0 {
@@ -183,8 +198,8 @@ func (s *Store) UpdateAdminFields(ctx context.Context, id int64, input UpdateAdm
 	}
 	status := strings.TrimSpace(input.Status)
 	memberLevel := strings.TrimSpace(input.MemberLevel)
-	if status == "" && memberLevel == "" {
-		return User{}, fmt.Errorf("status or memberLevel is required")
+	if status == "" && memberLevel == "" && input.Email == nil {
+		return User{}, fmt.Errorf("status, memberLevel or email is required")
 	}
 	if status != "" && !validAppUserStatus(status) {
 		return User{}, fmt.Errorf("invalid status")
@@ -200,19 +215,45 @@ func (s *Store) UpdateAdminFields(ctx context.Context, id int64, input UpdateAdm
 	if memberLevel != "" {
 		memberLevelArg = memberLevel
 	}
+	var emailArg any
+	if input.Email != nil {
+		email := NormalizeEmail(*input.Email)
+		if email != "" {
+			if err := ValidateEmail(email); err != nil {
+				return User{}, err
+			}
+			emailArg = email
+		} else {
+			emailArg = ""
+		}
+	}
 
 	var u User
 	var lastLogin, memberStartedAt, memberExpiresAt sql.NullTime
 	var createTime, updateTime time.Time
-	err := s.db.QueryRowContext(ctx,
-		`UPDATE app_users
-		    SET status = COALESCE($1::text, status),
-		        member_level = COALESCE($2::text, member_level),
-		        update_time = now()
-		  WHERE id = $3
-		    RETURNING id, phone, COALESCE(account, ''), nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time`,
-		statusArg, memberLevelArg, id).
-		Scan(&u.ID, &u.Phone, &u.Account, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
+	var err error
+	if input.Email == nil {
+		err = s.db.QueryRowContext(ctx,
+			`UPDATE app_users
+			    SET status = COALESCE($1::text, status),
+			        member_level = COALESCE($2::text, member_level),
+			        update_time = now()
+			  WHERE id = $3
+			    RETURNING id, phone, COALESCE(account, ''), nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time`,
+			statusArg, memberLevelArg, id).
+			Scan(&u.ID, &u.Phone, &u.Account, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
+	} else {
+		err = s.db.QueryRowContext(ctx,
+			`UPDATE app_users
+			    SET status = COALESCE($1::text, status),
+			        member_level = COALESCE($2::text, member_level),
+			        email = CASE WHEN $3::text IS NULL THEN email ELSE NULLIF($3::text, '') END,
+			        update_time = now()
+			  WHERE id = $4
+			    RETURNING id, phone, COALESCE(account, ''), nickname, avatar, status, member_level, member_started_at, member_expires_at, register_source, last_login_at, create_time, update_time`,
+			statusArg, memberLevelArg, emailArg, id).
+			Scan(&u.ID, &u.Phone, &u.Account, &u.Nickname, &u.Avatar, &u.Status, &u.MemberLevel, &memberStartedAt, &memberExpiresAt, &u.RegisterSource, &lastLogin, &createTime, &updateTime)
+	}
 	if err != nil {
 		return User{}, err
 	}
@@ -254,7 +295,6 @@ type UserInsight struct {
 	UpdateTime                 string          `json:"updateTime"`
 	PrimaryType                int             `json:"primaryType"`
 	SecondType                 int             `json:"secondType"`
-	WingType                   int             `json:"wingType"`
 	Gender                     string          `json:"gender"`
 	LatestQuizTime             string          `json:"latestQuizTime"`
 	Profile                    json.RawMessage `json:"profile"`
@@ -274,6 +314,13 @@ type UserInsight struct {
 	CareTrend                  string          `json:"careTrend,omitempty"`
 	CareDataStatus             string          `json:"careDataStatus,omitempty"`
 	CareEvaluatedAt            string          `json:"careEvaluatedAt,omitempty"`
+}
+
+func (u UserInsight) MarshalJSON() ([]byte, error) {
+	type insightJSON UserInsight
+	out := insightJSON(u)
+	out.Profile = quiz.SanitizeProfileJSON(u.Profile)
+	return json.Marshal(out)
 }
 
 func (s *Store) populateCare(ctx context.Context, user *User) {
@@ -459,7 +506,7 @@ func (s *Store) ListInsights(ctx context.Context, query map[string]string) (Page
 		SELECT
 		  u.id, u.phone, COALESCE(u.account, ''), u.nickname, u.avatar, u.status, u.member_level, u.register_source,
 		  u.last_login_at, u.create_time, u.update_time,
-		  COALESCE(sub.primary_type, 0), COALESCE(sub.second_type, 0), COALESCE(sub.wing_type, 0),
+		  COALESCE(sub.primary_type, 0), COALESCE(sub.second_type, 0),
 		  COALESCE(sub.gender, ''), sub.create_time,
 		  COALESCE(card.profile, sub.result, '{}'::jsonb),
 		  COALESCE(sub.score, '{}'::jsonb),
@@ -470,7 +517,7 @@ func (s *Store) ListInsights(ctx context.Context, query map[string]string) (Page
 		  COALESCE(comp.compatibility_count, 0), COALESCE(comp_latest.latest_compatibility_summary, '')
 		FROM app_users u
 		LEFT JOIN LATERAL (
-		  SELECT id, primary_type, second_type, wing_type, gender, result, score, centers, create_time
+		  SELECT id, primary_type, second_type, gender, result, score, centers, create_time
 		  FROM app_quiz_submissions
 		  WHERE app_user_id = u.id
 		  ORDER BY create_time DESC, id DESC
@@ -538,7 +585,7 @@ func (s *Store) ListInsights(ctx context.Context, query map[string]string) (Page
 		if err := rows.Scan(
 			&item.ID, &item.Phone, &item.Account, &item.Nickname, &item.Avatar, &item.Status, &item.MemberLevel, &item.RegisterSource,
 			&lastLogin, &createTime, &updateTime,
-			&item.PrimaryType, &item.SecondType, &item.WingType,
+			&item.PrimaryType, &item.SecondType,
 			&item.Gender, &latestQuiz,
 			&profileRaw, &scoreRaw, &centersRaw,
 			&item.CardCount,
@@ -559,7 +606,7 @@ func (s *Store) ListInsights(ctx context.Context, query map[string]string) (Page
 		if latestChat.Valid {
 			item.LatestChatTime = formatTime(latestChat.Time)
 		}
-		item.Profile = json.RawMessage(profileRaw)
+		item.Profile = quiz.SanitizeProfileJSON(profileRaw)
 		item.Score = json.RawMessage(scoreRaw)
 		item.Centers = json.RawMessage(centersRaw)
 		items = append(items, item)

@@ -114,7 +114,7 @@ function cardProfileSummary(card: QuizCard) {
     profile.summary ||
     profile.title ||
     profile.motive ||
-    `主型 ${card.mainType || '-'} / 侧翼 ${card.wingType || '-'}`
+    `主型 ${card.mainType || '-'}`
   );
 }
 
@@ -412,10 +412,9 @@ onMounted(() => {
           <Descriptions.Item label="注册 / 最近登录">
             {{ detail.createTime || '-' }} / {{ detail.lastLoginAt || '-' }}
           </Descriptions.Item>
-          <Descriptions.Item label="主型 / 副型 / 侧翼">
+          <Descriptions.Item label="主型 / 副型">
             {{ enneagramLabel(detail.primaryType) }} /
-            {{ enneagramLabel(detail.secondType) }} /
-            {{ enneagramLabel(detail.wingType) }}
+            {{ enneagramLabel(detail.secondType) }}
           </Descriptions.Item>
           <Descriptions.Item label="中心占比">
             {{ getCenterSummary(detail.centers) }}
@@ -494,8 +493,8 @@ onMounted(() => {
             </Space>
           </div>
           <Descriptions :column="1" bordered size="small">
-            <Descriptions.Item label="主型 / 侧翼">
-              {{ enneagramLabel(card.mainType) }} / {{ enneagramLabel(card.wingType) }}
+            <Descriptions.Item label="主型">
+              {{ enneagramLabel(card.mainType) }}
             </Descriptions.Item>
             <Descriptions.Item label="画像摘要">
               {{ cardProfileSummary(card) }}

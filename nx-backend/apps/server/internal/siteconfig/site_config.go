@@ -49,6 +49,25 @@ type SiteConfig struct {
 
 const defaultConfigKey = "default"
 
+// MiniappPaymentEnabled returns the effective 小程序支付开关 from the
+// dynamic site configuration. Configurations written before the switch was
+// introduced do not contain home.miniappPayment, so the missing or malformed
+// value intentionally keeps payment enabled for backwards compatibility.
+func MiniappPaymentEnabled(config SiteConfig) bool {
+	if config.Home == nil {
+		return true
+	}
+	payment, ok := config.Home["miniappPayment"].(map[string]any)
+	if !ok {
+		return true
+	}
+	enabled, ok := payment["enabled"].(bool)
+	if !ok {
+		return true
+	}
+	return enabled
+}
+
 func Read(path string) (SiteConfig, error) {
 	file, err := os.ReadFile(path)
 	if err != nil {

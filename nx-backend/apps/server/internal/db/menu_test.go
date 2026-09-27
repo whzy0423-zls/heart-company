@@ -10,6 +10,7 @@ func TestDefaultMenusIncludeMiniappHomeManagement(t *testing.T) {
 	var foundCatalog bool
 	var foundHome bool
 	var foundLearn bool
+	var foundPayment bool
 	for _, menu := range defaultMenus {
 		switch menu.Name {
 		case "MiniappManage":
@@ -27,6 +28,11 @@ func TestDefaultMenusIncludeMiniappHomeManagement(t *testing.T) {
 			if menu.ID != 1302 || menu.PID != 1300 || menu.Path != "/miniapp/learn" || menu.Component != "/miniapp/learn" || menu.AuthCode != "Website:Write" || menu.Type != "menu" || menu.Sort != 2 || menu.Icon != "lucide:book-open" || menu.Title != "学习页管理" {
 				t.Fatalf("unexpected miniapp learn management menu: %+v", menu)
 			}
+		case "MiniappPayment":
+			foundPayment = true
+			if menu.ID != 1303 || menu.PID != 1300 || menu.Path != "/miniapp/payment" || menu.Component != "/miniapp/payment" || menu.AuthCode != "Website:Write" || menu.Type != "menu" || menu.Sort != 3 || menu.Icon != "lucide:credit-card" || menu.Title != "支付设置" {
+				t.Fatalf("unexpected miniapp payment management menu: %+v", menu)
+			}
 		}
 	}
 	if !foundCatalog {
@@ -37,6 +43,9 @@ func TestDefaultMenusIncludeMiniappHomeManagement(t *testing.T) {
 	}
 	if !foundLearn {
 		t.Fatal("expected default menu MiniappLearn")
+	}
+	if !foundPayment {
+		t.Fatal("expected default menu MiniappPayment")
 	}
 }
 
@@ -103,6 +112,27 @@ func TestDefaultMenusIncludeAppReleaseManagement(t *testing.T) {
 	}
 	if !foundWrite {
 		t.Fatal("expected App release write permission button")
+	}
+}
+
+func TestDefaultMenusIncludeAppEmailConfigurationWritePermission(t *testing.T) {
+	var pageFound, writeFound bool
+	for _, menu := range defaultMenus {
+		switch menu.ID {
+		case 1623:
+			pageFound = true
+			if menu.PID != 1600 || menu.Path != "/app/email-config" || menu.Component != "/app/email-config" || menu.AuthCode != "App:Email:View" || menu.Type != "menu" {
+				t.Fatalf("unexpected App email config page: %+v", menu)
+			}
+		case 1624:
+			writeFound = true
+			if menu.PID != 1623 || menu.AuthCode != "App:Email:Manage" || menu.Type != "button" {
+				t.Fatalf("unexpected App email config write permission: %+v", menu)
+			}
+		}
+	}
+	if !pageFound || !writeFound {
+		t.Fatalf("expected App email page and write permission, page=%t write=%t", pageFound, writeFound)
 	}
 }
 

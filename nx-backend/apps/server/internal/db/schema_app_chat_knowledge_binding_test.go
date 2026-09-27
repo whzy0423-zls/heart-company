@@ -27,12 +27,26 @@ func TestSchemaIncludesAppChatKnowledgeBindingContract(t *testing.T) {
 		}
 	}
 	for _, fragment := range []string{
-		"CREATE UNIQUE INDEX IF NOT EXISTS uq_app_chat_enabled_knowledge_binding",
-		"ON app_chat_knowledge_bindings(layer_kind, COALESCE(enneagram_type, 0)) WHERE status = 'enabled'",
+		"DROP INDEX IF EXISTS uq_app_chat_enabled_knowledge_binding",
+		"CREATE UNIQUE INDEX IF NOT EXISTS uq_app_chat_enabled_enneagram_binding",
+		"ON app_chat_knowledge_bindings(enneagram_type) WHERE status = 'enabled' AND layer_kind = 'enneagram_type'",
+		"CREATE UNIQUE INDEX IF NOT EXISTS uq_app_chat_enabled_theory_library_binding",
+		"ON app_chat_knowledge_bindings(theory_library_id) WHERE status = 'enabled' AND layer_kind = 'theory'",
 		"idx_app_chat_knowledge_bindings_library",
 	} {
 		if !strings.Contains(sqlText, fragment) {
 			t.Errorf("knowledge binding schema missing %q", fragment)
+		}
+	}
+	for _, libraryKey := range []string{
+		"skill-qinmi-guanxi",
+		"skill-social-psychology-myers",
+		"skill-sociology-of-human-emotions",
+		"skill-crowd-psychology",
+		"skill-brain-and-cognitive-science",
+	} {
+		if !strings.Contains(sqlText, libraryKey) {
+			t.Errorf("knowledge binding schema does not seed %q", libraryKey)
 		}
 	}
 }

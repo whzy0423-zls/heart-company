@@ -20,9 +20,11 @@ import {
 import {
   classroomCompletion,
   createClassroomProgressTracker,
-  createClassroomPurchaseController,
   readAnonymousClassroomProgress,
 } from "../../utils/classroomProgress";
+import { createWechatPaymentController } from "../../utils/payment";
+import { normalizeMiniappPayment } from "../../utils/miniappPages";
+import { getStoredSiteConfig, refreshSiteConfig } from "../../utils/siteConfig";
 import { getToken } from "../../utils/auth";
 import { userErrorMessage } from "../../utils/userMessage";
 
@@ -46,6 +48,7 @@ const purchaseInFlight = ref(false);
 const purchaseTarget = ref({ type: "content", id: "", ready: true });
 const purchaseOffer = ref(null);
 const purchaseTargetError = ref("");
+const paymentEnabled = ref(normalizeMiniappPayment(getStoredSiteConfig()).enabled);
 const coverImageFailed = ref(false);
 let detailTicket = 0;
 let playbackTicket = 0;
@@ -59,8 +62,42 @@ let progressTracker = null;
 let purchaseController = null;
 let purchaseOperation = null;
 let requestedResumePosition = 0;
+let paymentRefreshTicket = 0;
 
-const accessAction = computed(() => classroomPurchaseAction(purchaseOffer.value || content.value));
+async function refreshPaymentAvailability() {
+  const previous = paymentEnabled.value;
+  const ticket = ++paymentRefreshTicket;
+  try {
+    const config = await refreshSiteConfig();
+    if (disposed || ticket !== paymentRefreshTicket) return;
+    const next = normalizeMiniappPayment(config).enabled;
+    paymentEnabled.value = next;
+    // A detail opened while payment was offline skipped parent-series lookup.
+    // Rebuild the purchase target when the switch comes back online instead of
+    // accidentally falling back to a single-lesson order.
+    if (
+      !previous &&
+      next &&
+      contentId.value &&
+      !content.value.canPlay &&
+      content.value.effectiveAccess === "paid" &&
+      content.value.accessLevel === "inherit" &&
+      purchaseTarget.value.type !== "series"
+    ) {
+      await loadDetail();
+    }
+  } catch {
+    // Keep the cached switch when a background refresh is unavailable.
+  }
+}
+
+const accessAction = computed(() => {
+  const action = classroomPurchaseAction(purchaseOffer.value || content.value);
+  if (!paymentEnabled.value && action.type === "purchase") {
+    return { type: "unavailable", label: "暂不可购买" };
+  }
+  return action;
+});
 const progressPercent = computed(() => {
   if (progressCompleted.value) return 100;
   return Math.min(
@@ -292,6 +329,7 @@ async function loadDetail() {
     purchaseTargetError.value = "";
     purchaseTarget.value = { type: "content", id: normalized.id, ready: true };
     if (
+      paymentEnabled.value &&
       !normalized.canPlay &&
       normalized.effectiveAccess === "paid" &&
       normalized.accessLevel === "inherit"
@@ -397,31 +435,14 @@ function formatTime(seconds) {
   return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, "0")}`;
 }
 
-function requestWechatPayment(pay = {}) {
-  return new Promise((resolve, reject) => {
-    uni.requestPayment({
-      provider: "wxpay",
-      timeStamp: pay.timeStamp,
-      nonceStr: pay.nonceStr,
-      package: pay.package,
-      signType: pay.signType || "RSA",
-      paySign: pay.paySign,
-      success: resolve,
-      fail: reject,
-    });
-  });
-}
-
 function ensurePurchaseController() {
+  if (!paymentEnabled.value) return null;
   if (purchaseController) return purchaseController;
   const target = { ...purchaseTarget.value };
   if (!target.ready || !target.id) return null;
-  purchaseController = createClassroomPurchaseController({
+  purchaseController = createWechatPaymentController({
     create: () => createClassroomOrderApi(target.type, target.id),
-    pay: async (order) => {
-      if (order?.payParams?.devMode) return devPayClassroomOrderApi(order.outTradeNo);
-      return requestWechatPayment(order?.payParams);
-    },
+    devPay: (order) => devPayClassroomOrderApi(order.outTradeNo),
     status: () => getClassroomOrderStatusApi(target.type, target.id),
     onChange: (snapshot) => {
       if (disposed) return;
@@ -456,7 +477,7 @@ function trackPurchase(run) {
 }
 
 function startPurchase() {
-  if (disposed || purchaseOperation) return;
+  if (disposed || purchaseOperation || !paymentEnabled.value) return;
   if (!getToken()) {
     uni.switchTab({ url: "/pages/profile/profile" });
     return;
@@ -468,7 +489,7 @@ function startPurchase() {
 }
 
 function retryPurchase() {
-  if (disposed || purchaseOperation) return;
+  if (disposed || purchaseOperation || !paymentEnabled.value) return;
   const controller = ensurePurchaseController();
   if (!controller) return;
   return trackPurchase(() => controller.retry());
@@ -481,7 +502,7 @@ function cancelPurchase() {
 }
 
 function handleAccessAction() {
-  if (disposed) return;
+  if (disposed || !paymentEnabled.value) return;
   if (accessAction.value.type === "login" || accessAction.value.type === "member") {
     uni.switchTab({ url: "/pages/profile/profile" });
     return;
@@ -494,6 +515,7 @@ function handleAccessAction() {
 onLoad((options = {}) => {
   disposed = false;
   pageVisible = true;
+  paymentEnabled.value = normalizeMiniappPayment(getStoredSiteConfig()).enabled;
   contentId.value = String(options.id || "").trim();
   requestedResumePosition = Math.max(0, Math.floor(Number(options.position) || 0));
   loadDetail();
@@ -510,7 +532,9 @@ onHide(() => {
 
 onShow(() => {
   if (disposed) return;
+  paymentEnabled.value = normalizeMiniappPayment(getStoredSiteConfig()).enabled;
   pageVisible = true;
+  void refreshPaymentAvailability();
   if (content.value.canPlay && !playbackUrl.value && !playbackLoading.value && !playbackError.value) {
     refreshPlayback();
   }
@@ -603,7 +627,7 @@ onUnload(() => {
       <view v-if="!content.canPlay" class="access-panel ios-card" aria-live="polite">
         <text class="panel-eyebrow">访问方式</text>
         <text class="access-panel__title">{{ accessAction.label }}</text>
-        <text class="access-panel__copy">完成对应访问步骤后，即可进入本课件学习。</text>
+        <text class="access-panel__copy">{{ accessAction.type === "unavailable" ? "该课件暂未开放购买。" : "完成对应访问步骤后，即可进入本课件学习。" }}</text>
         <text v-if="purchaseTargetError" class="access-panel__error">{{ purchaseTargetError }}</text>
         <view class="detail-actions detail-actions--stacked">
           <button v-if="purchaseTargetError" class="detail-action" @click="loadDetail">
@@ -731,7 +755,7 @@ onUnload(() => {
       </view>
 
       <view
-        v-if="!content.canPlay && accessAction.type === 'purchase' && paymentState !== 'idle'"
+        v-if="paymentEnabled && !content.canPlay && accessAction.type === 'purchase' && paymentState !== 'idle'"
         class="payment-panel ios-card"
         aria-live="polite"
       >

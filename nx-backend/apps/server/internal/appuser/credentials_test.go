@@ -140,6 +140,22 @@ func TestNicknameValidation(t *testing.T) {
 	}
 }
 
+func TestEmailValidation(t *testing.T) {
+	if got, want := NormalizeEmail("  User@Example.COM "), "user@example.com"; got != want {
+		t.Fatalf("NormalizeEmail() = %q, want %q", got, want)
+	}
+	for _, value := range []string{"user@example.com", "a+b@example.cn"} {
+		if err := ValidateEmail(value); err != nil {
+			t.Fatalf("ValidateEmail(%q) error = %v", value, err)
+		}
+	}
+	for _, value := range []string{"", "plain", "@example.com", "user@"} {
+		if err := ValidateEmail(value); !errors.Is(err, ErrInvalidEmail) {
+			t.Fatalf("ValidateEmail(%q) error = %v, want ErrInvalidEmail", value, err)
+		}
+	}
+}
+
 func TestCredentialDomainErrors(t *testing.T) {
 	tests := []struct {
 		name string

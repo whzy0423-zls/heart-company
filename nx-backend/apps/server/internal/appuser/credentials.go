@@ -18,6 +18,7 @@ var (
 	ErrInvalidAccount         = errors.New("invalid account")
 	ErrInvalidPassword        = errors.New("invalid password")
 	ErrInvalidNickname        = errors.New("invalid nickname")
+	ErrInvalidEmail           = errors.New("invalid email")
 	ErrInvalidSMSCode         = errors.New("invalid sms code")
 	ErrAccountTaken           = errors.New("account already exists")
 	ErrPhoneAlreadyRegistered = errors.New("phone already registered")
@@ -28,6 +29,7 @@ var (
 var accountPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{3,31}$`)
 
 var phoneIdentifierPattern = regexp.MustCompile(`^1[3-9][0-9]{9}$`)
+var emailPattern = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
 
 const passwordAuthenticationDummyHash = "$2b$10$sQ/LjuVpMbqmFYb/Ukb0.ebUav7SmTzniaVsy0sNW/ZmwD5HU.hPq"
 
@@ -81,6 +83,18 @@ func ValidateNickname(raw string) error {
 	length := utf8.RuneCountInString(NormalizeNickname(raw))
 	if length < 1 || length > 32 {
 		return ErrInvalidNickname
+	}
+	return nil
+}
+
+func NormalizeEmail(raw string) string {
+	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+func ValidateEmail(raw string) error {
+	value := NormalizeEmail(raw)
+	if len(value) < 3 || len(value) > 320 || !emailPattern.MatchString(value) {
+		return ErrInvalidEmail
 	}
 	return nil
 }
@@ -293,8 +307,10 @@ func (s *Store) ResetPassword(ctx context.Context, in ResetPasswordInput) error 
 }
 
 func (s *Store) RegisterWithPassword(ctx context.Context, in RegisterWithPasswordInput) (User, error) {
-	if err := ValidateAccount(in.Account); err != nil {
-		return User{}, err
+	if strings.TrimSpace(in.Account) != "" {
+		if err := ValidateAccount(in.Account); err != nil {
+			return User{}, err
+		}
 	}
 	if err := ValidatePassword(in.Password); err != nil {
 		return User{}, err
@@ -360,40 +376,56 @@ func (s *Store) RegisterWithPassword(ctx context.Context, in RegisterWithPasswor
 		return User{}, ErrPhoneAlreadyRegistered
 	}
 
-	var accountOwnerID int64
-	err = tx.QueryRowContext(ctx, `
-		SELECT id
-		FROM app_users
-		WHERE account IS NOT NULL
-		  AND btrim(account) <> ''
-		  AND lower(account)=lower($1)
-		ORDER BY id
-		LIMIT 1
-	`, account).Scan(&accountOwnerID)
-	if err == nil && (!existingUser || accountOwnerID != existingUserID) {
-		return User{}, ErrAccountTaken
-	}
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return User{}, fmt.Errorf("check appuser account ownership: %w", err)
+	if account != "" {
+		var accountOwnerID int64
+		err = tx.QueryRowContext(ctx, `
+			SELECT id
+			FROM app_users
+			WHERE account IS NOT NULL
+			  AND btrim(account) <> ''
+			  AND lower(account)=lower($1)
+			ORDER BY id
+			LIMIT 1
+		`, account).Scan(&accountOwnerID)
+		if err == nil && (!existingUser || accountOwnerID != existingUserID) {
+			return User{}, ErrAccountTaken
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return User{}, fmt.Errorf("check appuser account ownership: %w", err)
+		}
 	}
 
 	var userID int64
 	if existingUser {
-		err = tx.QueryRowContext(ctx, `
-			UPDATE app_users
-			SET account=$1,
-			    password_hash=$2,
-			    nickname=$3,
-			    update_time=now()
-			WHERE id=$4
-			RETURNING id
-		`, account, string(passwordHash), nickname, existingUserID).Scan(&userID)
+		if account == "" {
+			err = tx.QueryRowContext(ctx, `
+				UPDATE app_users
+				SET password_hash=$1, nickname=$2, update_time=now()
+				WHERE id=$3
+				RETURNING id
+			`, string(passwordHash), nickname, existingUserID).Scan(&userID)
+		} else {
+			err = tx.QueryRowContext(ctx, `
+				UPDATE app_users
+				SET account=$1, password_hash=$2, nickname=$3, update_time=now()
+				WHERE id=$4
+				RETURNING id
+			`, account, string(passwordHash), nickname, existingUserID).Scan(&userID)
+		}
 	} else {
-		err = tx.QueryRowContext(ctx, `
-			INSERT INTO app_users (phone, account, password_hash, nickname, register_source)
-			VALUES ($1, $2, $3, $4, 'account_sms')
-			RETURNING id
-		`, in.Phone, account, string(passwordHash), nickname).Scan(&userID)
+		if account == "" {
+			err = tx.QueryRowContext(ctx, `
+				INSERT INTO app_users (phone, password_hash, nickname, register_source)
+				VALUES ($1, $2, $3, 'phone_sms')
+				RETURNING id
+			`, in.Phone, string(passwordHash), nickname).Scan(&userID)
+		} else {
+			err = tx.QueryRowContext(ctx, `
+				INSERT INTO app_users (phone, account, password_hash, nickname, register_source)
+				VALUES ($1, $2, $3, $4, 'account_sms')
+				RETURNING id
+			`, in.Phone, account, string(passwordHash), nickname).Scan(&userID)
+		}
 	}
 	if err != nil {
 		return User{}, fmt.Errorf("write appuser registration: %w", mapRegisterWithPasswordError(err))

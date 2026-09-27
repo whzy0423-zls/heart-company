@@ -10,6 +10,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/appuser"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/lifestory"
+	"nine-xing/nx-backend/apps/server/internal/quiz"
 )
 
 type appPrivacyPolicyResponse struct {
@@ -63,7 +64,6 @@ type appPrivacyCard struct {
 	Name       string          `json:"name"`
 	Relation   string          `json:"relation"`
 	MainType   int             `json:"mainType"`
-	WingType   int             `json:"wingType"`
 	Profile    json.RawMessage `json:"profile"`
 	Status     string          `json:"status"`
 	CreateTime string          `json:"createTime"`
@@ -311,7 +311,7 @@ func (s *Server) appPrivacyDeleteAccount(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) appPrivacyCards(r *http.Request, appUserID int64) ([]appPrivacyCard, error) {
 	rows, err := s.db.QueryContext(r.Context(),
-		`SELECT id, app_user_id, card_type, name, relation, enneagram, wing, profile, status, create_time, update_time
+		`SELECT id, app_user_id, card_type, name, relation, enneagram, 0, profile, status, create_time, update_time
 		   FROM app_user_cards
 		  WHERE app_user_id = $1
 		  ORDER BY CASE WHEN card_type = 'primary' THEN 0 ELSE 1 END, create_time, id`,
@@ -323,10 +323,12 @@ func (s *Server) appPrivacyCards(r *http.Request, appUserID int64) ([]appPrivacy
 	cards := []appPrivacyCard{}
 	for rows.Next() {
 		var card appPrivacyCard
+		var ignoredWing int
 		var createTime, updateTime time.Time
-		if err := rows.Scan(&card.ID, &card.AppUserID, &card.CardType, &card.Name, &card.Relation, &card.MainType, &card.WingType, &card.Profile, &card.Status, &createTime, &updateTime); err != nil {
+		if err := rows.Scan(&card.ID, &card.AppUserID, &card.CardType, &card.Name, &card.Relation, &card.MainType, &ignoredWing, &card.Profile, &card.Status, &createTime, &updateTime); err != nil {
 			return nil, err
 		}
+		card.Profile = quiz.SanitizeProfileJSON(card.Profile)
 		card.CreateTime = appMemoryTime(createTime)
 		card.UpdateTime = appMemoryTime(updateTime)
 		cards = append(cards, card)

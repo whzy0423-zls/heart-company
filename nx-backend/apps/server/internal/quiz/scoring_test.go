@@ -1,15 +1,71 @@
 package quiz
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 )
+
+func TestPublicQuizJSONOmitsWingFields(t *testing.T) {
+	t.Parallel()
+
+	fixtures := []struct {
+		name  string
+		value any
+	}{
+		{name: "score", value: calcType(map[int]int{1: 5, 2: 4}, "")},
+		{name: "persona", value: decodeLegacyPersona(t)},
+		{name: "card", value: decodeLegacyCard(t)},
+		{name: "submission", value: decodeLegacySubmission(t)},
+		{name: "type metadata", value: TypesInfo[1]},
+	}
+
+	for _, fixture := range fixtures {
+		fixture := fixture
+		t.Run(fixture.name, func(t *testing.T) {
+			raw, err := json.Marshal(fixture.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(strings.ToLower(string(raw)), "wing") {
+				t.Fatalf("public JSON still exposes wing data: %s", raw)
+			}
+		})
+	}
+}
+
+func decodeLegacyPersona(t *testing.T) Persona {
+	t.Helper()
+	var value Persona
+	if err := json.Unmarshal([]byte(`{"mainType":1,"wingType":2,"wingLabel":"1w2"}`), &value); err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+func decodeLegacyCard(t *testing.T) Card {
+	t.Helper()
+	var value Card
+	if err := json.Unmarshal([]byte(`{"id":1,"mainType":1,"wingType":2,"profile":{"wingLabel":"1w2","nested":{"wing_type":2},"summary":"保留"}}`), &value); err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+func decodeLegacySubmission(t *testing.T) Submission {
+	t.Helper()
+	var value Submission
+	if err := json.Unmarshal([]byte(`{"id":1,"primaryType":1,"wingType":2,"result":{"wing_label":"1w2","summary":"保留"}}`), &value); err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
 
 // scoring_test.go 校验 Go calcType 与 miniapp src/utils/enneagram.js 的 calcType 行为一致：
 //   adjusted[id] = score[id] + (score[id]*weight - score[id]) * 0.15
 //   排名：调整分降序，同分 id 升序
 //   second = 第一个 id != best 且 raw > 0 的型号，无则 0
 //   三中心占比：math.Round((centerScore/centerTotal)*100)，centerTotal 为 0 时取 1
-// Wing 字段来自 Go 侧 wingOf 规则（JS calcType 不返回 wing），单独断言。
 
 func centerPct(centers []CenterPct, key string) int {
 	for _, c := range centers {
@@ -27,7 +83,6 @@ func TestCalcType(t *testing.T) {
 		score      map[int]int
 		wantType   int
 		wantSecond int
-		wantWing   int
 		wantGut    int
 		wantHeart  int
 		wantHead   int
@@ -40,8 +95,6 @@ func TestCalcType(t *testing.T) {
 			// 排名 5(8) 1(5) 9(4) 2(3) 6(2) 8(1) 3/4/7(0)
 			wantType:   5,
 			wantSecond: 1,
-			// primary=5：left=4(0) right=6(2) → 0>=2 否 → 6
-			wantWing: 6,
 			// gut=1,8,9=10 heart=2,3,4=3 head=5,6,7=10 total=23
 			wantGut:   43, // round(10/23*100)=43
 			wantHeart: 13, // round(3/23*100)=13
@@ -55,11 +108,9 @@ func TestCalcType(t *testing.T) {
 			// adjusted[1]=10.6 adjusted[2]=9.7
 			wantType:   1,
 			wantSecond: 2,
-			// primary=1：left=9(0) right=2(10) → 0>=10 否 → 2
-			wantWing:  2,
-			wantGut:   50, // gut=1=10 heart=2=10 head=0 total=20
-			wantHeart: 50,
-			wantHead:  0,
+			wantGut:    50, // gut=1=10 heart=2=10 head=0 total=20
+			wantHeart:  50,
+			wantHead:   0,
 		},
 		{
 			// 女性权重：2↑(1.4) 1↓(0.9)，调整分把 2 顶到 1 之上（与男性相反）。
@@ -69,11 +120,9 @@ func TestCalcType(t *testing.T) {
 			// adjusted[1]=9.85 adjusted[2]=10.6
 			wantType:   2,
 			wantSecond: 1,
-			// primary=2：left=1(10) right=3(0) → 10>=0 是 → 1
-			wantWing:  1,
-			wantGut:   50,
-			wantHeart: 50,
-			wantHead:  0,
+			wantGut:    50,
+			wantHeart:  50,
+			wantHead:   0,
 		},
 		{
 			// 仅单型有分：无副型（second=0）。
@@ -82,11 +131,9 @@ func TestCalcType(t *testing.T) {
 			score:      map[int]int{3: 5},
 			wantType:   3,
 			wantSecond: 0,
-			// primary=3：left=2(0) right=4(0) → 0>=0 是 → 2
-			wantWing:  2,
-			wantGut:   0,
-			wantHeart: 100, // heart=3=5 total=5
-			wantHead:  0,
+			wantGut:    0,
+			wantHeart:  100, // heart=3=5 total=5
+			wantHead:   0,
 		},
 		{
 			// 全零：调整分全相等，id 升序 → best=1；无 raw>0 → second=0；centerTotal 取 1。
@@ -95,11 +142,9 @@ func TestCalcType(t *testing.T) {
 			score:      map[int]int{},
 			wantType:   1,
 			wantSecond: 0,
-			// primary=1：left=9(0) right=2(0) → 0>=0 是 → 9
-			wantWing:  9,
-			wantGut:   0,
-			wantHeart: 0,
-			wantHead:  0,
+			wantGut:    0,
+			wantHeart:  0,
+			wantHead:   0,
 		},
 	}
 
@@ -111,9 +156,6 @@ func TestCalcType(t *testing.T) {
 			}
 			if got.Second != tc.wantSecond {
 				t.Errorf("Second = %d, want %d", got.Second, tc.wantSecond)
-			}
-			if got.Wing != tc.wantWing {
-				t.Errorf("Wing = %d, want %d", got.Wing, tc.wantWing)
 			}
 			if p := centerPct(got.Centers, "gut"); p != tc.wantGut {
 				t.Errorf("gut pct = %d, want %d", p, tc.wantGut)

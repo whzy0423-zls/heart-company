@@ -118,7 +118,6 @@ function baseInsight() {
     sessionCount: 0,
     status: 'active',
     updateTime: '2026/01/01 10:00:00',
-    wingType: 0,
   };
 }
 

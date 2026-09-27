@@ -43,10 +43,12 @@ func (s *Server) appRegisterWithPassword(w http.ResponseWriter, r *http.Request)
 	agentCode := strings.TrimSpace(body.AgentCode)
 	deviceInfo := strings.TrimSpace(body.DeviceInfo)
 
-	if err := appuser.ValidateAccount(account); err != nil {
-		status, message := appPasswordRegistrationErrorResponse(err)
-		httpx.Fail(w, status, message)
-		return
+	if account != "" {
+		if err := appuser.ValidateAccount(account); err != nil {
+			status, message := appPasswordRegistrationErrorResponse(err)
+			httpx.Fail(w, status, message)
+			return
+		}
 	}
 	if err := appuser.ValidatePassword(body.Password); err != nil {
 		status, message := appPasswordRegistrationErrorResponse(err)
@@ -110,6 +112,7 @@ func (s *Server) appRegisterWithPassword(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) appLoginWithPassword(w http.ResponseWriter, r *http.Request) {
 	var body struct {
+		Phone      string `json:"phone"`
 		Account    string `json:"account"`
 		Password   string `json:"password"`
 		DeviceInfo string `json:"deviceInfo"`
@@ -120,7 +123,12 @@ func (s *Server) appLoginWithPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	identifier := strings.TrimSpace(body.Account)
+	identifier := strings.TrimSpace(body.Phone)
+	if identifier == "" {
+		// Legacy clients may still send account; keep the fallback while all
+		// current App clients use the phone field exclusively.
+		identifier = strings.TrimSpace(body.Account)
+	}
 	deviceInfo := strings.TrimSpace(body.DeviceInfo)
 	if identifier == "" || body.Password == "" {
 		httpx.Fail(w, http.StatusBadRequest, "请输入账号和密码")

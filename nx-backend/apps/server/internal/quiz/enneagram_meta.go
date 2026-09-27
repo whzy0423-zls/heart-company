@@ -9,12 +9,6 @@ package quiz
 //   成长(整合)：1→7, 2→4, 3→6, 4→1, 5→8, 6→9, 7→5, 8→2, 9→3
 //   压力(解离)：1→4, 2→8, 3→9, 4→2, 5→7, 6→3, 7→1, 8→5, 9→6
 
-// Wing 侧翼。
-type Wing struct {
-	ID    int    `json:"id"`
-	Label string `json:"label"`
-}
-
 // TypeInfo 九型基础信息。
 type TypeInfo struct {
 	ID       int    `json:"id"`
@@ -25,7 +19,6 @@ type TypeInfo struct {
 	Keywords string `json:"keywords"`
 	Fear     string `json:"fear"`
 	Desire   string `json:"desire"`
-	Wings    []Wing `json:"wings"`
 	Growth   int    `json:"growth"`
 	Stress   int    `json:"stress"`
 }
@@ -54,31 +47,31 @@ type TypeResult struct {
 var TypesInfo = map[int]TypeInfo{
 	1: {ID: 1, Name: "完美型", En: "The Reformer", Center: "gut", Color: "green",
 		Keywords: "原则 · 自律 · 追求正确", Fear: "害怕犯错、变坏、被指责", Desire: "渴望正直、完善与平衡",
-		Wings: []Wing{{ID: 9, Label: "1w9 理想主义者"}, {ID: 2, Label: "1w2 倡导者"}}, Growth: 7, Stress: 4},
+		Growth: 7, Stress: 4},
 	2: {ID: 2, Name: "助人型", En: "The Helper", Center: "heart", Color: "blue",
 		Keywords: "关怀 · 付出 · 渴望被需要", Fear: "害怕不被爱、不被需要", Desire: "渴望被爱与被珍视",
-		Wings: []Wing{{ID: 1, Label: "2w1 公仆"}, {ID: 3, Label: "2w3 主人翁"}}, Growth: 4, Stress: 8},
+		Growth: 4, Stress: 8},
 	3: {ID: 3, Name: "成就型", En: "The Achiever", Center: "heart", Color: "red",
 		Keywords: "目标 · 效率 · 渴望被认可", Fear: "害怕失败、毫无价值", Desire: "渴望感到有价值、被认可",
-		Wings: []Wing{{ID: 2, Label: "3w2 魅力者"}, {ID: 4, Label: "3w4 专家"}}, Growth: 6, Stress: 9},
+		Growth: 6, Stress: 9},
 	4: {ID: 4, Name: "自我型", En: "The Individualist", Center: "heart", Color: "blue",
 		Keywords: "独特 · 感性 · 寻找自我", Fear: "害怕没有身份、没有意义", Desire: "渴望找到自我、活出真实",
-		Wings: []Wing{{ID: 3, Label: "4w3 贵族"}, {ID: 5, Label: "4w5 波西米亚"}}, Growth: 1, Stress: 2},
+		Growth: 1, Stress: 2},
 	5: {ID: 5, Name: "观察型", En: "The Investigator", Center: "head", Color: "green",
 		Keywords: "理性 · 求知 · 保留能量", Fear: "害怕无能、被消耗、被侵入", Desire: "渴望有能力、被理解",
-		Wings: []Wing{{ID: 4, Label: "5w4 异端"}, {ID: 6, Label: "5w6 问题解决者"}}, Growth: 8, Stress: 7},
+		Growth: 8, Stress: 7},
 	6: {ID: 6, Name: "忠诚型", En: "The Loyalist", Center: "head", Color: "green",
 		Keywords: "忠诚 · 警觉 · 寻求安全", Fear: "害怕失去支持与依靠", Desire: "渴望安全感与确定性",
-		Wings: []Wing{{ID: 5, Label: "6w5 捍卫者"}, {ID: 7, Label: "6w7 伙伴"}}, Growth: 9, Stress: 3},
+		Growth: 9, Stress: 3},
 	7: {ID: 7, Name: "活跃型", En: "The Enthusiast", Center: "head", Color: "red",
 		Keywords: "乐观 · 多元 · 追求可能", Fear: "害怕被困、被剥夺、痛苦", Desire: "渴望满足、自由与快乐",
-		Wings: []Wing{{ID: 6, Label: "7w6 娱乐者"}, {ID: 8, Label: "7w8 现实主义者"}}, Growth: 5, Stress: 1},
+		Growth: 5, Stress: 1},
 	8: {ID: 8, Name: "领袖型", En: "The Challenger", Center: "gut", Color: "red",
 		Keywords: "力量 · 掌控 · 保护他人", Fear: "害怕被控制、被伤害", Desire: "渴望掌控自己、不被支配",
-		Wings: []Wing{{ID: 7, Label: "8w7 独行者"}, {ID: 9, Label: "8w9 巨熊"}}, Growth: 2, Stress: 5},
+		Growth: 2, Stress: 5},
 	9: {ID: 9, Name: "和平型", En: "The Peacemaker", Center: "gut", Color: "blue",
 		Keywords: "包容 · 和谐 · 回避冲突", Fear: "害怕冲突、失去联结", Desire: "渴望内在与外在的安宁",
-		Wings: []Wing{{ID: 8, Label: "9w8 仲裁者"}, {ID: 1, Label: "9w1 梦想家"}}, Growth: 3, Stress: 6},
+		Growth: 3, Stress: 6},
 }
 
 // Centers 三中心信息表。

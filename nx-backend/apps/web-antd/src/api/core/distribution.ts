@@ -3,6 +3,9 @@ import { requestClient } from '#/api/request';
 export interface DistributionAgent {
   id: number;
   appUserId: number;
+  appUserAccount?: string;
+  appUserPhone?: string;
+  appUserNickname?: string;
   agentCode: string;
   level: number;
   parentAgentId: number;
@@ -85,6 +88,7 @@ export const createAgentDistributionChildApi = (data: { appUserId: number }) => 
 export const getAgentDistributionAnalyticsApi = (params?: { endDate?: string; startDate?: string }) => requestClient.get<AgentDistributionAnalytics>('/agent/distribution/analytics', { params });
 export const createDistributionAgentApi = (data: { appUserId: number }) => requestClient.post<DistributionAgent>('/admin/distribution/agents', data);
 export const updateDistributionAgentStatusApi = (id: number, status: string) => requestClient.put(`/admin/distribution/agents/${id}`, { status });
+export const updateDistributionAgentApi = (id: number, data: { agentCode?: string; status?: string }) => requestClient.put<{ updated: boolean; agentCode?: string; status?: string }>(`/admin/distribution/agents/${id}`, data);
 export const getDistributionRulesApi = () => requestClient.get<{ items: DistributionRule[]; total: number }>('/admin/distribution/rules');
 export const createDistributionRuleApi = (data: { name: string; rates: Record<number, number> }) => requestClient.post<DistributionRule>('/admin/distribution/rules', data);
 export const activateDistributionRuleApi = (id: number) => requestClient.post(`/admin/distribution/rules/${id}/activate`, {});

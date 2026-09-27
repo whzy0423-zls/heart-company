@@ -32,6 +32,25 @@ func TestResolveBindingRowsKeepsTheoryAndOnlyCurrentType(t *testing.T) {
 	}
 }
 
+func TestResolveBindingRowsKeepsMultipleTheoryLibrariesInConfiguredOrder(t *testing.T) {
+	rows := []bindingRow{
+		{Layer: LayerTheory, LibraryID: 10, LibraryKey: "enneagram-core", LibraryStatus: "enabled", ReleaseID: 100, ReleaseStatus: "active"},
+		{Layer: LayerTheory, LibraryID: 21, LibraryKey: "skill-qinmi-guanxi", LibraryStatus: "enabled", ReleaseID: 201, ReleaseStatus: "active"},
+		{Layer: LayerTheory, LibraryID: 22, LibraryKey: "skill-social-psychology-myers", LibraryStatus: "enabled", ReleaseID: 202, ReleaseStatus: "active"},
+	}
+
+	resolved := resolveBindingRows(3, nil, rows)
+	if got := bindingReleaseIDs(resolved.TheoryBindings); !reflect.DeepEqual(got, []int64{100, 201, 202}) {
+		t.Fatalf("theory releases = %v, want [100 201 202]", got)
+	}
+	if resolved.Theory == nil || resolved.Theory.ReleaseID != 100 {
+		t.Fatalf("legacy primary theory binding = %+v", resolved.Theory)
+	}
+	if len(resolved.Diagnostics) != 0 {
+		t.Fatalf("valid theory bindings produced diagnostics: %+v", resolved.Diagnostics)
+	}
+}
+
 func TestResolveBindingRowsDegradesWithoutValidMainType(t *testing.T) {
 	rows := []bindingRow{{Layer: LayerTheory, LibraryID: 10, LibraryKey: "enneagram-core", LibraryStatus: "enabled", ReleaseID: 100, ReleaseStatus: "active"}}
 	for _, mainType := range []int{0, -1, 10} {
@@ -253,3 +272,13 @@ func (r *resolverTestRows) Next(destination []driver.Value) error {
 }
 
 func intPointer(value int) *int { return &value }
+
+func bindingReleaseIDs(bindings []*Binding) []int64 {
+	ids := make([]int64, 0, len(bindings))
+	for _, binding := range bindings {
+		if binding != nil {
+			ids = append(ids, binding.ReleaseID)
+		}
+	}
+	return ids
+}

@@ -474,6 +474,20 @@ func TestAppAuthCompatibilityAliasRoutes(t *testing.T) {
 			want:   http.StatusBadRequest,
 		},
 		{
+			name:   "email reset code route reaches handler",
+			method: http.MethodPost,
+			path:   "/api/app/auth/send-email-code",
+			body:   `{`,
+			want:   http.StatusBadRequest,
+		},
+		{
+			name:   "email password reset route reaches handler",
+			method: http.MethodPost,
+			path:   "/api/app/auth/reset-password-email",
+			body:   `{`,
+			want:   http.StatusBadRequest,
+		},
+		{
 			name:   "me alias reaches app auth guard",
 			method: http.MethodGet,
 			path:   "/api/app/me",

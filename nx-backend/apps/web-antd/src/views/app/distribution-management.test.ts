@@ -59,17 +59,25 @@ describe('distribution management page', () => {
   it('does not let frontend submit custom agent codes', () => {
     expect(apiSource).toContain('createDistributionAgentApi');
     expect(apiSource).toContain('data: { appUserId: number }');
-    expect(apiSource).not.toContain('agentCode?: string');
+    const createApiSource = apiSource.slice(
+      apiSource.indexOf('export const createDistributionAgentApi'),
+      apiSource.indexOf('export const updateDistributionAgentStatusApi'),
+    );
+    expect(createApiSource).not.toContain('agentCode');
+    expect(apiSource).toContain(
+      'updateDistributionAgentApi = (id: number, data: { agentCode?: string; status?: string })',
+    );
   });
 
-  it('backend generates agent code from App user id', () => {
+  it('backend generates independent six-character agent codes', () => {
     const createHandler = serverSource.slice(
       serverSource.indexOf('func (s *Server) adminDistributionAgentCreate'),
       serverSource.indexOf('func (s *Server) appDistributionOverview'),
     );
-    expect(createHandler).toContain('code := "A" + strconv.FormatInt(in.AppUserID, 10)');
-    expect(createHandler).not.toContain('AgentCode string');
-    expect(createHandler).not.toContain('strings.TrimSpace(in.AgentCode)');
+    expect(createHandler).toContain('generateAvailableDistributionAgentCode');
+    expect(createHandler).not.toContain('"A" + strconv.FormatInt(in.AppUserID, 10)');
+    expect(serverSource).toContain('validateDistributionAgentCodeFormat');
+    expect(serverSource).toContain('agentCode already exists');
   });
 
   it('shows first-level agent development counts and child agent details', () => {
@@ -118,6 +126,22 @@ describe('distribution management page', () => {
       'child.level=3',
     ]) {
       expect(listHandler).toContain(expected);
+    }
+  });
+
+  it('shows the agent user account details instead of only the internal user id', () => {
+    for (const expected of [
+      "{ dataIndex: 'appUserAccount', title: '代理人账号'",
+      'appUserAccount?: string',
+      'appUserPhone?: string',
+      'appUserNickname?: string',
+      'agentOf(record).appUserAccount || agentOf(record).appUserPhone || agentOf(record).appUserNickname',
+      'LEFT JOIN app_users u ON u.id=a.app_user_id',
+      "COALESCE(u.account,'')",
+      "COALESCE(u.phone,'')",
+      "COALESCE(u.nickname,'')",
+    ]) {
+      expect(source + apiSource + serverSource).toContain(expected);
     }
   });
 
@@ -238,6 +262,20 @@ describe('distribution management page', () => {
     ]) {
       expect(source).toContain(expected);
     }
+  });
+
+  it('lets administrators edit a unique code while keeping agent views read-only', () => {
+    for (const expected of [
+      '编辑代理号',
+      'openEditAgentCode',
+      'saveAgentCode',
+      'updateDistributionAgentApi',
+      '仅管理员可以修改代理号',
+      '^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$',
+    ]) {
+      expect(source + apiSource).toContain(expected);
+    }
+    expect(source).toContain('v-if="canWrite"');
   });
 
   it('provides a centrally configured poster composer for agent sharing', () => {

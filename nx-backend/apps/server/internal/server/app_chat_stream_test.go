@@ -414,7 +414,6 @@ func TestAppChatAskStreamPassesCurrentConversationCardToGenerator(t *testing.T) 
 			Name:     "妈妈",
 			Relation: "家人",
 			MainType: 2,
-			WingType: 1,
 			Profile:  `{"primaryMotivation":"希望被需要"}`,
 		}
 	}
@@ -428,7 +427,7 @@ func TestAppChatAskStreamPassesCurrentConversationCardToGenerator(t *testing.T) 
 		t.Fatalf("missing done event: %q", body)
 	}
 	card := captured.ConversationCard
-	if card.CardType != "secondary" || card.Name != "妈妈" || card.Relation != "家人" || card.MainType != 2 || card.WingType != 1 || !strings.Contains(card.Profile, "希望被需要") {
+	if card.CardType != "secondary" || card.Name != "妈妈" || card.Relation != "家人" || card.MainType != 2 || !strings.Contains(card.Profile, "希望被需要") {
 		t.Fatalf("stream generator conversation card = %+v, want current secondary card", card)
 	}
 }

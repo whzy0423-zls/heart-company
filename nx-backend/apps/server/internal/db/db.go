@@ -166,6 +166,9 @@ func seed(ctx context.Context, database *sql.DB, adminUser, adminPassword string
 	if err := seedVoiceBroadcastMenu(ctx, database); err != nil {
 		return fmt.Errorf("seed voice broadcast menu: %w", err)
 	}
+	if err := seedAppEmailMenu(ctx, database); err != nil {
+		return fmt.Errorf("seed app email menu: %w", err)
+	}
 	if err := seedDistributionMenuBindings(ctx, database); err != nil {
 		return fmt.Errorf("seed distribution menu bindings: %w", err)
 	}
@@ -220,6 +223,7 @@ var defaultMenus = []seedMenu{
 	{ID: 1300, PID: 0, Name: "MiniappManage", Path: "/miniapp", Type: "catalog", Sort: 12, Icon: "lucide:smartphone", Title: "小程序管理"},
 	{ID: 1301, PID: 1300, Name: "MiniappHome", Path: "/miniapp/home", Component: "/miniapp/home", AuthCode: "Website:Write", Type: "menu", Sort: 1, Icon: "lucide:images", Title: "首页管理"},
 	{ID: 1302, PID: 1300, Name: "MiniappLearn", Path: "/miniapp/learn", Component: "/miniapp/learn", AuthCode: "Website:Write", Type: "menu", Sort: 2, Icon: "lucide:book-open", Title: "学习页管理"},
+	{ID: 1303, PID: 1300, Name: "MiniappPayment", Path: "/miniapp/payment", Component: "/miniapp/payment", AuthCode: "Website:Write", Type: "menu", Sort: 3, Icon: "lucide:credit-card", Title: "支付设置"},
 	{ID: 1400, PID: 0, Name: "MiniappClassroom", Path: "/miniapp/classroom", Type: "catalog", Sort: 13, Icon: "lucide:graduation-cap", Title: "老师课堂"},
 	{ID: 1401, PID: 1400, Name: "MiniappClassroomContent", Path: "/miniapp/classroom/content", Component: "/classroom/index", AuthCode: "Miniapp:Classroom:List", Type: "menu", Sort: 1, Icon: "lucide:play-square", Title: "课件管理"},
 	{ID: 1402, PID: 1400, Name: "MiniappClassroomSeries", Path: "/miniapp/classroom/series", Component: "/classroom/series", AuthCode: "Miniapp:Classroom:List", Type: "menu", Sort: 2, Icon: "lucide:layers", Title: "老师视频系列"},
@@ -238,6 +242,8 @@ var defaultMenus = []seedMenu{
 	{ID: 1617, PID: 1600, Name: "AppDistributionRules", Path: "/app/distribution-rules", Component: "/app/distribution-rules", AuthCode: "Customer:App:List", Type: "menu", Sort: 15, Icon: "lucide:percent", Title: "佣金规则"},
 	{ID: 1618, PID: 1600, Name: "AppDistributionSettlements", Path: "/app/distribution-settlements", Component: "/app/distribution-settlements", AuthCode: "Customer:App:List", Type: "menu", Sort: 16, Icon: "lucide:wallet-cards", Title: "分销结算"},
 	{ID: 1620, PID: 1600, Name: "AppDistributionPosterManagement", Path: "/app/distribution-poster", Component: "/app/distribution-poster-management", AuthCode: "Customer:App:List", Type: "menu", Sort: 17, Icon: "lucide:image", Title: "海报管理"},
+	{ID: 1623, PID: 1600, Name: "AppEmailConfig", Path: "/app/email-config", Component: "/app/email-config", AuthCode: "App:Email:View", Type: "menu", Sort: 19, Icon: "lucide:mail-cog", Title: "邮箱与 SMTP"},
+	{ID: 1624, PID: 1623, Name: "AppEmailConfigManage", AuthCode: "App:Email:Manage", Type: "button", Sort: 1, Icon: "lucide:save", Title: "保存邮箱配置"},
 	{ID: 1619, PID: 1614, Name: "AppPlanManagementWrite", AuthCode: "App:PlanManagement:Write", Type: "button", Sort: 1, Icon: "lucide:pencil", Title: "编辑套餐"},
 	{ID: 500, PID: 0, Name: "CustomerManage", Path: "/customer", Type: "catalog", Sort: 15, Icon: "lucide:contact-round", Title: "客户管理"},
 	{ID: 501, PID: 500, Name: "CustomerSignupLeads", Path: "/customer/signups", Component: "/site-config/signup-leads", AuthCode: "Customer:Signup:List", Type: "menu", Sort: 1, Icon: "lucide:inbox", Title: "报名信息"},

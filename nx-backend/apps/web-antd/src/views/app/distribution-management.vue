@@ -51,6 +51,7 @@ import {
   getAgentDistributionAnalyticsApi,
   getDistributionAgentsApi,
   getDistributionAnalyticsApi,
+  updateDistributionAgentApi,
   updateDistributionAgentStatusApi,
 } from '#/api/core/distribution';
 
@@ -95,13 +96,16 @@ const analyticsLoading = ref(false);
 const creating = ref(false);
 const actionLoadingId = ref<number | null>(null);
 const createAgentModalOpen = ref(false);
+const editAgentModalOpen = ref(false);
+const editingAgent = ref<DistributionAgent | null>(null);
+const editingAgentCode = ref('');
 const selectedParentAgent = ref<DistributionAgent | null>(null);
 const selectedCustomerId = ref<number>();
 const customerOptions = ref<AppCustomer[]>([]);
 const customerSearching = ref(false);
 const trendChartRef = ref<HTMLDivElement>();
 const fixedTableScroll = { x: 820, y: 320 };
-const fixedWideTableScroll = { x: 1080, y: 360 };
+const fixedWideTableScroll = { x: 1240, y: 360 };
 const userConsumptionColumns = [
   { dataIndex: 'id', title: '用户 ID', width: 100 },
   { dataIndex: 'nickname', title: '昵称', width: 140 },
@@ -123,6 +127,7 @@ let trendChart: echarts.ECharts | undefined;
 
 const columns = [
   { dataIndex: 'id', fixed: 'left' as const, title: '代理 ID', width: 100 },
+  { dataIndex: 'appUserAccount', title: '代理人账号', width: 190 },
   { dataIndex: 'appUserId', title: 'App 用户 ID', width: 120 },
   { dataIndex: 'agentCode', title: '代理号', width: 180 },
   { dataIndex: 'level', title: '代理等级', width: 120 },
@@ -133,6 +138,7 @@ const columns = [
 
 const childAgentColumns = [
   { dataIndex: 'id', title: '代理 ID', width: 100 },
+  { dataIndex: 'appUserAccount', title: '代理人账号', width: 180 },
   { dataIndex: 'appUserId', title: 'App 用户 ID', width: 120 },
   { dataIndex: 'agentCode', title: '代理号', width: 160 },
   { dataIndex: 'level', title: '代理等级', width: 120 },
@@ -397,6 +403,34 @@ async function copyCurrentAgentCode() {
 
 function openChildAgents(agent: DistributionAgent) {
   selectedParentAgent.value = agent;
+}
+
+function openEditAgentCode(agent: DistributionAgent) {
+  editingAgent.value = agent;
+  editingAgentCode.value = agent.agentCode;
+  editAgentModalOpen.value = true;
+}
+
+async function saveAgentCode() {
+  const agent = editingAgent.value;
+  const code = editingAgentCode.value.trim().toUpperCase();
+  if (!agent) return;
+  if (!/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/.test(code)) {
+    message.warning('代理号必须是 6 位大写字母或数字，且不含易混淆字符');
+    return;
+  }
+  actionLoadingId.value = agent.id;
+  try {
+    await updateDistributionAgentApi(agent.id, { agentCode: code });
+    agent.agentCode = code;
+    if (currentAgent.value?.id === agent.id) currentAgent.value.agentCode = code;
+    editAgentModalOpen.value = false;
+    message.success('代理号已更新');
+  } catch {
+    message.error('代理号更新失败，可能已被其他代理使用');
+  } finally {
+    actionLoadingId.value = null;
+  }
 }
 
 function developmentSummary(agent: DistributionAgent) {
@@ -779,7 +813,20 @@ onBeforeUnmount(() => {
           row-key="id"
         >
           <template #bodyCell="{ column, record }">
-            <template v-if="column.dataIndex === 'appUserId'">
+            <template v-if="column.dataIndex === 'appUserAccount'">
+              <Space direction="vertical" size="small">
+                <Typography.Text>
+                  {{ agentOf(record).appUserAccount || agentOf(record).appUserPhone || agentOf(record).appUserNickname || `#${agentOf(record).appUserId}` }}
+                </Typography.Text>
+                <Typography.Text
+                  v-if="agentOf(record).appUserNickname && agentOf(record).appUserNickname !== (agentOf(record).appUserAccount || agentOf(record).appUserPhone)"
+                  type="secondary"
+                >
+                  {{ agentOf(record).appUserNickname }}
+                </Typography.Text>
+              </Space>
+            </template>
+            <template v-else-if="column.dataIndex === 'appUserId'">
               #{{ agentOf(record).appUserId }}
             </template>
             <template v-else-if="column.dataIndex === 'agentCode'">
@@ -820,6 +867,14 @@ onBeforeUnmount(() => {
                   @click="openChildAgents(agentOf(record))"
                 >
                   查看下级
+                  </Button>
+                <Button
+                  v-if="canWrite"
+                  type="link"
+                  :loading="actionLoadingId === agentOf(record).id"
+                  @click="openEditAgentCode(agentOf(record))"
+                >
+                  编辑代理号
                 </Button>
                 <Popconfirm
                   :title="agentOf(record).status === 'active' ? '确认暂停该代理？' : '确认恢复该代理？'"
@@ -866,7 +921,10 @@ onBeforeUnmount(() => {
             size="small"
           >
             <template #bodyCell="{ column, record }">
-              <template v-if="column.dataIndex === 'agentCode'">
+              <template v-if="column.dataIndex === 'appUserAccount'">
+                {{ agentOf(record).appUserAccount || agentOf(record).appUserPhone || agentOf(record).appUserNickname || `#${agentOf(record).appUserId}` }}
+              </template>
+              <template v-else-if="column.dataIndex === 'agentCode'">
                 <Tag color="blue">{{ agentOf(record).agentCode }}</Tag>
               </template>
               <template v-else-if="column.dataIndex === 'level'">
@@ -950,6 +1008,33 @@ onBeforeUnmount(() => {
             </Form.Item>
           </Form>
         </Space>
+      </Modal>
+
+      <Modal
+        v-model:open="editAgentModalOpen"
+        title="修改代理号"
+        ok-text="保存"
+        cancel-text="取消"
+        :confirm-loading="actionLoadingId === editingAgent?.id"
+        @ok="saveAgentCode"
+      >
+        <Alert
+          class="mb-4"
+          show-icon
+          type="info"
+          message="仅管理员可以修改代理号"
+          description="客户端和代理本人只能查看，修改后立即生效；代理号必须唯一。"
+        />
+        <Form layout="vertical">
+          <Form.Item label="代理号" required>
+            <Input
+              v-model:value="editingAgentCode"
+              :maxlength="6"
+              placeholder="请输入 6 位代理号"
+              @input="editingAgentCode = editingAgentCode.toUpperCase()"
+            />
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   </Page>

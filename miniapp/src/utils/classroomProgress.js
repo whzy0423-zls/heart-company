@@ -148,7 +148,7 @@ function orderTerminal(status) {
   );
 }
 
-export function createClassroomPurchaseController(options = {}) {
+export function createWechatPaymentController(options = {}) {
   const maxAttempts = Math.max(
     1,
     Math.min(
@@ -161,6 +161,8 @@ export function createClassroomPurchaseController(options = {}) {
       ? options.wait
       : (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const intervalMs = Math.max(0, Number(options.intervalMs) || 1_200);
+  const isPaid = typeof options.isPaid === "function" ? options.isPaid : orderPaid;
+  const isTerminal = typeof options.isTerminal === "function" ? options.isTerminal : orderTerminal;
   let generation = 0;
   let currentOperation = null;
   let current = { state: "idle", message: "", order: null, status: null };
@@ -191,12 +193,12 @@ export function createClassroomPurchaseController(options = {}) {
           if (!active(run)) return current;
           const status = await options.status(order);
           if (!active(run)) return current;
-          if (orderPaid(status)) {
+          if (isPaid(status, order)) {
             publish("success", "购买成功，正在刷新课件权限", { status });
             await options.onSuccess?.(status);
             return current;
           }
-          if (orderTerminal(status)) {
+          if (isTerminal(status, order)) {
             publish("failure", "订单未完成，可重新发起支付", { status });
             return current;
           }
@@ -238,3 +240,6 @@ export function createClassroomPurchaseController(options = {}) {
     },
   };
 }
+
+// Keep the classroom name as a compatibility alias for existing pages and integrations.
+export const createClassroomPurchaseController = createWechatPaymentController;

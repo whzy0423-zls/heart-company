@@ -28,6 +28,24 @@ func TestAccountSearchIncludesAccountPhoneAndNickname(t *testing.T) {
 	}
 }
 
+func TestUserInsightJSONOmitsLegacyWingData(t *testing.T) {
+	var item UserInsight
+	if err := json.Unmarshal([]byte(`{
+		"primaryType":5,
+		"wingType":4,
+		"profile":{"summary":"保留","wingLabel":"删除","nested":{"wing_type":3}}
+	}`), &item); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.ToLower(string(raw)), "wing") {
+		t.Fatalf("user insight JSON still exposes wing data: %s", raw)
+	}
+}
+
 func TestListInsightsReturnsAggregatedUserData(t *testing.T) {
 	var seenQueries []string
 	var seenArgs [][]driver.NamedValue
@@ -55,7 +73,6 @@ func TestListInsightsReturnsAggregatedUserData(t *testing.T) {
 				"update_time",
 				"primary_type",
 				"second_type",
-				"wing_type",
 				"gender",
 				"latest_quiz_time",
 				"profile",
@@ -84,7 +101,6 @@ func TestListInsightsReturnsAggregatedUserData(t *testing.T) {
 				time.Unix(300, 0),
 				int64(5),
 				int64(6),
-				int64(4),
 				"female",
 				time.Unix(400, 0),
 				[]byte(`{"summary":"理性且敏锐","traits":["观察"]}`),
@@ -117,7 +133,7 @@ func TestListInsightsReturnsAggregatedUserData(t *testing.T) {
 		t.Fatalf("unexpected result page: %+v", result)
 	}
 	item := result.Items[0]
-	if item.ID != 42 || item.Phone != "13800000021" || item.PrimaryType != 5 || item.SecondType != 6 || item.WingType != 4 {
+	if item.ID != 42 || item.Phone != "13800000021" || item.PrimaryType != 5 || item.SecondType != 6 {
 		t.Fatalf("unexpected insight item: %+v", item)
 	}
 	itemJSON, err := json.Marshal(item)
@@ -188,7 +204,6 @@ func TestListInsightsFiltersByUserIDForDirect360Open(t *testing.T) {
 				"update_time",
 				"primary_type",
 				"second_type",
-				"wing_type",
 				"gender",
 				"latest_quiz_time",
 				"profile",
@@ -217,7 +232,6 @@ func TestListInsightsFiltersByUserIDForDirect360Open(t *testing.T) {
 				time.Unix(300, 0),
 				int64(5),
 				int64(6),
-				int64(4),
 				"female",
 				nil,
 				[]byte(`{}`),

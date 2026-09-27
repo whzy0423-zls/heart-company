@@ -138,11 +138,11 @@ func (s *Server) commitAppChatQuota(key string) {
 }
 
 func buildAppChatConversationCard(card quiz.Card) rag.ConversationCard {
-	profile := strings.TrimSpace(string(card.Profile))
+	profile := strings.TrimSpace(string(quiz.SanitizeProfileJSON(card.Profile)))
 	if runes := []rune(profile); len(runes) > 2000 {
 		profile = string(runes[:2000])
 	}
-	return rag.ConversationCard{CardType: card.CardType, Name: card.Name, Relation: card.Relation, MainType: card.MainType, WingType: card.WingType, Profile: profile}
+	return rag.ConversationCard{CardType: card.CardType, Name: card.Name, Relation: card.Relation, MainType: card.MainType, Profile: profile}
 }
 
 func normalizeAppChatProfileForConversationCard(profile rag.UserProfile, card rag.ConversationCard) (rag.UserProfile, rag.ConversationCard) {

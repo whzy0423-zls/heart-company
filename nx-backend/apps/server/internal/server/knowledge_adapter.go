@@ -38,10 +38,6 @@ func (a appKnowledgeRemoteAdapter) Retrieve(ctx context.Context, input appknowle
 		mainType := input.MainType
 		profile.MainType = &mainType
 	}
-	if input.WingType >= 1 && input.WingType <= 9 {
-		wingType := input.WingType
-		profile.WingType = &wingType
-	}
 	response, err := a.client.Retrieve(ctx, knowledgeclient.RetrievalRequest{
 		RequestID: input.RequestID,
 		Query:     input.Query,
@@ -67,6 +63,9 @@ func (a appKnowledgeRemoteAdapter) Retrieve(ctx context.Context, input appknowle
 	for _, document := range response.Documents {
 		if !remoteDocumentInScope(document, input) {
 			return appknowledge.RemoteResult{}, &appknowledge.RemoteError{StatusCode: 502, Err: errors.New("knowledge service returned document outside requested scope")}
+		}
+		if rag.ContainsRetiredWingContent(document.ID + " " + document.Source + " " + document.Content) {
+			continue
 		}
 		title := strings.TrimSpace(document.Source)
 		if title == "" {

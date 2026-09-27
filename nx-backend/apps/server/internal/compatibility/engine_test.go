@@ -3,10 +3,39 @@ package compatibility
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"nine-xing/nx-backend/apps/server/internal/quiz"
 )
+
+func TestAnalyzeIgnoresLegacyWingValues(t *testing.T) {
+	withLegacyWings := Analyze(
+		card("甲", 2, 5, `{"summary":"关注关系"}`),
+		card("乙", 5, 2, `{"summary":"关注思考"}`),
+	)
+	withoutLegacyWings := Analyze(
+		card("甲", 2, 0, `{"summary":"关注关系"}`),
+		card("乙", 5, 0, `{"summary":"关注思考"}`),
+	)
+
+	if !reflect.DeepEqual(withLegacyWings, withoutLegacyWings) {
+		t.Fatalf("legacy wing values changed compatibility result:\nwith=%+v\nwithout=%+v", withLegacyWings, withoutLegacyWings)
+	}
+	if withLegacyWings.AlgorithmVersion != "v2" {
+		t.Fatalf("algorithm version = %q, want v2", withLegacyWings.AlgorithmVersion)
+	}
+	raw, err := json.Marshal(withLegacyWings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower := strings.ToLower(string(raw))
+	for _, retired := range []string{"wing", "侧翼", "翼型"} {
+		if strings.Contains(lower, retired) {
+			t.Fatalf("compatibility result contains retired wing content %q: %s", retired, raw)
+		}
+	}
+}
 
 func TestAnalyzeSameTypeProducesStableBond(t *testing.T) {
 	result := Analyze(card("阿九", 6, 5, `{"summary":"谨慎可靠"}`), card("小满", 6, 7, `{"summary":"认真守护"}`))
@@ -92,11 +121,10 @@ func TestAnalyzeSameInputIsDeterministic(t *testing.T) {
 	}
 }
 
-func card(name string, mainType, wingType int, profile string) quiz.Card {
+func card(name string, mainType, _ int, profile string) quiz.Card {
 	return quiz.Card{
 		Name:     name,
 		MainType: mainType,
-		WingType: wingType,
 		Profile:  json.RawMessage(profile),
 	}
 }

@@ -96,6 +96,16 @@ const routes: RouteRecordRaw[] = [
         path: 'voice-broadcast-config',
       },
       {
+        component: () => import('#/views/app/email-config.vue'),
+        meta: {
+          authority: ['App:Email:View', 'App:Email:Manage'],
+          icon: 'lucide:mail-cog',
+          title: '邮箱与 SMTP',
+        },
+        name: 'AppEmailConfig',
+        path: 'email-config',
+      },
+      {
         component: () => import('#/views/app/plan-management.vue'),
         meta: {
           authority: ['App:PlanManagement:View'],

@@ -1,10 +1,10 @@
 // 九型人格小游戏数据
 // 解析资料来源：The Enneagram Institute（enneagraminstitute.com，九型权威来源）
-//   每型的「基本恐惧 / 核心欲望 / 侧翼 / 整合(成长)方向 / 解离(压力)方向」均依据其官方体系。
+//   每型的「基本恐惧 / 核心欲望 / 整合(成长)方向 / 解离(压力)方向」均依据其官方体系。
 // 设计：12 道情境单选题。每个选项锚定「一个清晰的核心动机」(2分)，
-//   仅在真实侧翼/关联关系时加 1 分；9 型最高分已拉平到 10–13，避免结果系统性偏向某型。
+//   少量关联动机加 1 分；9 型最高分已拉平到 10–13，避免结果系统性偏向某型。
 
-// 九型基础信息（id, 名称, 英文, 关键词, 三中心, 基本恐惧, 核心欲望, 侧翼, 压力/成长方向）
+// 九型基础信息（id, 名称, 英文, 关键词, 三中心, 基本恐惧, 核心欲望, 压力/成长方向）
 // 中心：gut 本能(8,9,1) / heart 情感(2,3,4) / head 思维(5,6,7)
 // 方向（Enneagram Institute 箭头）：
 //   成长(整合)：1→7, 2→4, 3→6, 4→1, 5→8, 6→9, 7→5, 8→2, 9→3
@@ -15,7 +15,6 @@ export const TYPES_INFO = {
     keywords: '理想主义 · 责任感 · 自我要求',
     fear: '害怕自己变坏、堕落或有缺陷',
     desire: '渴望成为正直、善良、平衡的人',
-    wings: [{ id: 9, label: '1w9 学者型 · 更冷静理想' }, { id: 2, label: '1w2 倡导型 · 更热心助人' }],
     growth: 7, stress: 4,
   },
   2: {
@@ -23,7 +22,6 @@ export const TYPES_INFO = {
     keywords: '利他 · 关怀 · 被需要',
     fear: '害怕不被爱、不被需要',
     desire: '渴望被爱、被需要、被感激',
-    wings: [{ id: 1, label: '2w1 服务型 · 更尽责克己' }, { id: 3, label: '2w3 主人型 · 更外向有魅力' }],
     growth: 4, stress: 8,
   },
   3: {
@@ -31,7 +29,6 @@ export const TYPES_INFO = {
     keywords: '目标 · 形象 · 高效',
     fear: '害怕没有价值、一无是处',
     desire: '渴望感到有价值、被肯定与赞赏',
-    wings: [{ id: 2, label: '3w2 魅力型 · 更温暖会来事' }, { id: 4, label: '3w4 专业型 · 更内敛重质感' }],
     growth: 6, stress: 9,
   },
   4: {
@@ -39,7 +36,6 @@ export const TYPES_INFO = {
     keywords: '独特 · 感受 · 深度',
     fear: '害怕没有身份认同、不够独特、平庸',
     desire: '渴望找到真实的自己、活出独特意义',
-    wings: [{ id: 3, label: '4w3 贵族型 · 更有抱负重形象' }, { id: 5, label: '4w5 波西米亚型 · 更内省孤高' }],
     growth: 1, stress: 2,
   },
   5: {
@@ -47,7 +43,6 @@ export const TYPES_INFO = {
     keywords: '理性 · 求知 · 边界',
     fear: '害怕无能、匮乏、被掏空',
     desire: '渴望有能力、看懂世界、掌握知识',
-    wings: [{ id: 4, label: '5w4 创新型 · 更感性有审美' }, { id: 6, label: '5w6 问题解决型 · 更务实有韧性' }],
     growth: 8, stress: 7,
   },
   6: {
@@ -55,7 +50,6 @@ export const TYPES_INFO = {
     keywords: '忠诚 · 责任 · 安全感',
     fear: '害怕失去支持与依靠、孤立无援',
     desire: '渴望安全感、稳定的支持与归属',
-    wings: [{ id: 5, label: '6w5 防御型 · 更独立谨慎' }, { id: 7, label: '6w7 伙伴型 · 更外向活泼' }],
     growth: 9, stress: 3,
   },
   7: {
@@ -63,7 +57,6 @@ export const TYPES_INFO = {
     keywords: '乐观 · 可能性 · 体验',
     fear: '害怕被剥夺、被困在痛苦与匮乏里',
     desire: '渴望满足、自由、丰富的人生体验',
-    wings: [{ id: 6, label: '7w6 娱乐型 · 更顾及他人' }, { id: 8, label: '7w8 现实型 · 更果敢有行动力' }],
     growth: 5, stress: 1,
   },
   8: {
@@ -71,7 +64,6 @@ export const TYPES_INFO = {
     keywords: '力量 · 掌控 · 保护',
     fear: '害怕被伤害、被控制、被人左右',
     desire: '渴望掌控自己的人生、自给自足',
-    wings: [{ id: 7, label: '8w7 独立型 · 更冲劲外放' }, { id: 9, label: '8w9 稳重型 · 更沉静有耐性' }],
     growth: 2, stress: 5,
   },
   9: {
@@ -79,7 +71,6 @@ export const TYPES_INFO = {
     keywords: '包容 · 稳定 · 调和',
     fear: '害怕失去连接、内心世界被撕裂',
     desire: '渴望内在与外在的平和、和谐',
-    wings: [{ id: 8, label: '9w8 仲裁型 · 更有力量底气' }, { id: 1, label: '9w1 梦想型 · 更有原则条理' }],
     growth: 3, stress: 6,
   },
 }
@@ -97,7 +88,7 @@ export const GENDER_WEIGHT = {
   female: { 2: 1.4, 4: 1.4, 6: 1.2, 9: 1.1, 7: 1.0, 3: 1.0, 1: 0.9, 5: 0.9, 8: 0.8 },
 }
 
-// 12 道情境题。每个选项锚定一个清晰动机(2分)，少量真实侧翼加 1 分。
+// 12 道情境题。每个选项锚定一个清晰动机(2分)，少量关联动机加 1 分。
 export const QUESTIONS = [
   {
     q: '周末突然空出一整天，你最想做的是？',

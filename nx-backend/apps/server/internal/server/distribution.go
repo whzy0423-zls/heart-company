@@ -11,12 +11,16 @@ import (
 	"strings"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/auditlog"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 )
 
 type distributionAgentResponse struct {
 	ID                    int64  `json:"id"`
 	AppUserID             int64  `json:"appUserId"`
+	AppUserAccount        string `json:"appUserAccount,omitempty"`
+	AppUserPhone          string `json:"appUserPhone,omitempty"`
+	AppUserNickname       string `json:"appUserNickname,omitempty"`
 	AgentCode             string `json:"agentCode"`
 	Level                 int    `json:"level"`
 	ParentAgentID         int64  `json:"parentAgentId"`
@@ -401,11 +405,12 @@ func (s *Server) agentDistributionAgents(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	rows, err := s.db.QueryContext(r.Context(), `
-		SELECT agent.id,agent.app_user_id,agent.agent_code,agent.level,COALESCE(agent.parent_agent_id,0),agent.root_agent_id,agent.agent_path,agent.status,
+		SELECT agent.id,agent.app_user_id,COALESCE(u.account,''),COALESCE(u.phone,''),COALESCE(u.nickname,''),agent.agent_code,agent.level,COALESCE(agent.parent_agent_id,0),agent.root_agent_id,agent.agent_path,agent.status,
 		       (SELECT COUNT(*) FROM distribution_user_relations rel WHERE rel.direct_agent_id=agent.id) AS direct_user_count,
 		       (SELECT COUNT(*) FROM distribution_agents child WHERE child.parent_agent_id=agent.id AND child.level=agent.level+1) AS second_level_agent_count,
 		       0 AS third_level_agent_count
 		FROM distribution_agents agent
+		LEFT JOIN app_users u ON u.id=agent.app_user_id
 		WHERE agent.parent_agent_id=$1
 		ORDER BY agent.id DESC`, current.ID)
 	if err != nil {
@@ -416,7 +421,7 @@ func (s *Server) agentDistributionAgents(w http.ResponseWriter, r *http.Request)
 	items := []distributionAgentResponse{}
 	for rows.Next() {
 		var item distributionAgentResponse
-		if err := rows.Scan(&item.ID, &item.AppUserID, &item.AgentCode, &item.Level, &item.ParentAgentID, &item.RootAgentID, &item.Path, &item.Status, &item.DirectUserCount, &item.SecondLevelAgentCount, &item.ThirdLevelAgentCount); err != nil {
+		if err := rows.Scan(&item.ID, &item.AppUserID, &item.AppUserAccount, &item.AppUserPhone, &item.AppUserNickname, &item.AgentCode, &item.Level, &item.ParentAgentID, &item.RootAgentID, &item.Path, &item.Status, &item.DirectUserCount, &item.SecondLevelAgentCount, &item.ThirdLevelAgentCount); err != nil {
 			httpx.Fail(w, 500, err.Error())
 			return
 		}
@@ -473,7 +478,6 @@ func (s *Server) adminDistributionAgentCreate(w http.ResponseWriter, r *http.Req
 		httpx.Fail(w, http.StatusBadRequest, "invalid appUserId")
 		return
 	}
-	code := "A" + strconv.FormatInt(in.AppUserID, 10)
 	var appUserExists bool
 	if err := s.db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM app_users WHERE id=$1)`, in.AppUserID).Scan(&appUserExists); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
@@ -484,7 +488,7 @@ func (s *Server) adminDistributionAgentCreate(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var existingAgentID int64
-	err := s.db.QueryRowContext(r.Context(), `SELECT id FROM distribution_agents WHERE app_user_id=$1 OR lower(agent_code)=lower($2) LIMIT 1`, in.AppUserID, code).Scan(&existingAgentID)
+	err := s.db.QueryRowContext(r.Context(), `SELECT id FROM distribution_agents WHERE app_user_id=$1 LIMIT 1`, in.AppUserID).Scan(&existingAgentID)
 	if err == nil {
 		httpx.Fail(w, http.StatusConflict, "user is already an agent or agentCode already exists")
 		return
@@ -500,6 +504,11 @@ func (s *Server) adminDistributionAgentCreate(w http.ResponseWriter, r *http.Req
 	}
 	defer tx.Rollback()
 	createdBy := sql.NullInt64{Int64: userFromRequest(r).ID, Valid: userFromRequest(r).ID > 0}
+	code, err := generateAvailableDistributionAgentCode(r.Context(), s.db)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	var out distributionAgentResponse
 	err = tx.QueryRowContext(r.Context(), `INSERT INTO distribution_agents(id,app_user_id,agent_code,level,root_agent_id,agent_path,status,created_by) VALUES(nextval('distribution_agents_id_seq'),$1,$2,1,currval('distribution_agents_id_seq'),'/'||currval('distribution_agents_id_seq')||'/','active',$3) RETURNING id,app_user_id,agent_code,level,COALESCE(parent_agent_id,0),root_agent_id,agent_path,status`, in.AppUserID, code, createdBy).Scan(&out.ID, &out.AppUserID, &out.AgentCode, &out.Level, &out.ParentAgentID, &out.RootAgentID, &out.Path, &out.Status)
 	if err != nil {
@@ -642,8 +651,13 @@ func (s *Server) appDistributionCreateChild(w http.ResponseWriter, r *http.Reque
 		httpx.Fail(w, 403, "user was not directly invited by this agent")
 		return
 	}
+	code, err := generateAvailableDistributionAgentCode(r.Context(), s.db)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	var out distributionAgentResponse
-	err = s.db.QueryRowContext(r.Context(), `INSERT INTO distribution_agents(id,app_user_id,agent_code,level,parent_agent_id,root_agent_id,agent_path,status) VALUES(nextval('distribution_agents_id_seq'),$1::bigint,'A'||$1::text||'-'||currval('distribution_agents_id_seq'),$2,$3,$4,$5||currval('distribution_agents_id_seq')||'/','active') RETURNING id,app_user_id,agent_code,level,COALESCE(parent_agent_id,0),root_agent_id,agent_path,status`, in.AppUserID, parent.Level+1, parent.ID, parent.RootAgentID, parent.Path).Scan(&out.ID, &out.AppUserID, &out.AgentCode, &out.Level, &out.ParentAgentID, &out.RootAgentID, &out.Path, &out.Status)
+	err = s.db.QueryRowContext(r.Context(), `INSERT INTO distribution_agents(id,app_user_id,agent_code,level,parent_agent_id,root_agent_id,agent_path,status) VALUES(nextval('distribution_agents_id_seq'),$1::bigint,$2,$3,$4,$5,$6||currval('distribution_agents_id_seq')||'/','active') RETURNING id,app_user_id,agent_code,level,COALESCE(parent_agent_id,0),root_agent_id,agent_path,status`, in.AppUserID, code, parent.Level+1, parent.ID, parent.RootAgentID, parent.Path).Scan(&out.ID, &out.AppUserID, &out.AgentCode, &out.Level, &out.ParentAgentID, &out.RootAgentID, &out.Path, &out.Status)
 	if err != nil {
 		httpx.Fail(w, http.StatusConflict, err.Error())
 		return
@@ -653,11 +667,12 @@ func (s *Server) appDistributionCreateChild(w http.ResponseWriter, r *http.Reque
 
 func (s *Server) adminDistributionAgents(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.QueryContext(r.Context(), `
-		SELECT a.id,a.app_user_id,a.agent_code,a.level,COALESCE(a.parent_agent_id,0),a.root_agent_id,a.agent_path,a.status,
+		SELECT a.id,a.app_user_id,COALESCE(u.account,''),COALESCE(u.phone,''),COALESCE(u.nickname,''),a.agent_code,a.level,COALESCE(a.parent_agent_id,0),a.root_agent_id,a.agent_path,a.status,
 		       (SELECT COUNT(*) FROM distribution_user_relations rel WHERE rel.direct_agent_id=a.id) AS direct_user_count,
 		       (SELECT COUNT(*) FROM distribution_agents child WHERE child.root_agent_id=a.id AND child.level=2) AS second_level_agent_count,
 		       (SELECT COUNT(*) FROM distribution_agents child WHERE child.root_agent_id=a.id AND child.level=3) AS third_level_agent_count
 		FROM distribution_agents a
+		LEFT JOIN app_users u ON u.id=a.app_user_id
 		ORDER BY a.id DESC LIMIT 200`)
 	if err != nil {
 		httpx.Fail(w, 500, err.Error())
@@ -667,7 +682,7 @@ func (s *Server) adminDistributionAgents(w http.ResponseWriter, r *http.Request)
 	items := []distributionAgentResponse{}
 	for rows.Next() {
 		var a distributionAgentResponse
-		if err := rows.Scan(&a.ID, &a.AppUserID, &a.AgentCode, &a.Level, &a.ParentAgentID, &a.RootAgentID, &a.Path, &a.Status, &a.DirectUserCount, &a.SecondLevelAgentCount, &a.ThirdLevelAgentCount); err != nil {
+		if err := rows.Scan(&a.ID, &a.AppUserID, &a.AppUserAccount, &a.AppUserPhone, &a.AppUserNickname, &a.AgentCode, &a.Level, &a.ParentAgentID, &a.RootAgentID, &a.Path, &a.Status, &a.DirectUserCount, &a.SecondLevelAgentCount, &a.ThirdLevelAgentCount); err != nil {
 			httpx.Fail(w, 500, err.Error())
 			return
 		}
@@ -683,13 +698,40 @@ func (s *Server) adminDistributionAgentStatus(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var in struct {
-		Status string `json:"status"`
+		Status    string `json:"status"`
+		AgentCode string `json:"agentCode"`
 	}
-	if json.NewDecoder(r.Body).Decode(&in) != nil || (in.Status != "active" && in.Status != "paused") {
+	if json.NewDecoder(r.Body).Decode(&in) != nil {
+		httpx.Fail(w, 400, "invalid request")
+		return
+	}
+	status := strings.TrimSpace(in.Status)
+	code := strings.ToUpper(strings.TrimSpace(in.AgentCode))
+	if status == "" && code == "" {
+		httpx.Fail(w, 400, "status or agentCode is required")
+		return
+	}
+	if status != "" && status != "active" && status != "paused" {
 		httpx.Fail(w, 400, "invalid status")
 		return
 	}
-	res, err := s.db.ExecContext(r.Context(), `UPDATE distribution_agents SET status=$2,updated_at=now() WHERE id=$1`, id, in.Status)
+	if code != "" {
+		if !validateDistributionAgentCodeFormat(code) {
+			httpx.Fail(w, 400, "invalid agentCode format")
+			return
+		}
+		var existingID int64
+		err := s.db.QueryRowContext(r.Context(), `SELECT id FROM distribution_agents WHERE lower(agent_code)=lower($1) AND id<>$2`, code, id).Scan(&existingID)
+		if err == nil {
+			httpx.Fail(w, http.StatusConflict, "agentCode already exists")
+			return
+		}
+		if err != sql.ErrNoRows {
+			httpx.Fail(w, 500, err.Error())
+			return
+		}
+	}
+	res, err := s.db.ExecContext(r.Context(), `UPDATE distribution_agents SET status=COALESCE(NULLIF($2,''),status),agent_code=COALESCE(NULLIF($3,''),agent_code),updated_at=now() WHERE id=$1`, id, status, code)
 	if err != nil {
 		httpx.Fail(w, 500, err.Error())
 		return
@@ -699,7 +741,14 @@ func (s *Server) adminDistributionAgentStatus(w http.ResponseWriter, r *http.Req
 		httpx.Fail(w, 404, "agent not found")
 		return
 	}
-	httpx.OK(w, map[string]any{"updated": true})
+	s.recordAdminAudit(r, auditlog.Entry{
+		Action:     "distribution.agent.update",
+		TargetType: "distribution_agent",
+		TargetID:   strconv.FormatInt(id, 10),
+		After:      map[string]any{"agentCode": code, "status": status},
+		Summary:    "更新分销代理信息",
+	})
+	httpx.OK(w, map[string]any{"updated": true, "agentCode": code, "status": status})
 }
 
 func (s *Server) appDistributionCommissions(w http.ResponseWriter, r *http.Request) {
@@ -936,7 +985,7 @@ func (s *Server) appDistributionAgents(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, 401, "unauthorized")
 		return
 	}
-	rows, err := s.db.QueryContext(r.Context(), `SELECT child.id,child.app_user_id,child.agent_code,child.level,COALESCE(child.parent_agent_id,0),child.root_agent_id,child.agent_path,child.status FROM distribution_agents parent JOIN distribution_agents child ON child.parent_agent_id=parent.id WHERE parent.app_user_id=$1 ORDER BY child.id DESC`, u.ID)
+	rows, err := s.db.QueryContext(r.Context(), `SELECT child.id,child.app_user_id,COALESCE(app_user.account,''),COALESCE(app_user.phone,''),COALESCE(app_user.nickname,''),child.agent_code,child.level,COALESCE(child.parent_agent_id,0),child.root_agent_id,child.agent_path,child.status FROM distribution_agents parent JOIN distribution_agents child ON child.parent_agent_id=parent.id LEFT JOIN app_users app_user ON app_user.id=child.app_user_id WHERE parent.app_user_id=$1 ORDER BY child.id DESC`, u.ID)
 	if err != nil {
 		httpx.Fail(w, 500, err.Error())
 		return
@@ -945,7 +994,7 @@ func (s *Server) appDistributionAgents(w http.ResponseWriter, r *http.Request) {
 	out := []distributionAgentResponse{}
 	for rows.Next() {
 		var a distributionAgentResponse
-		if err := rows.Scan(&a.ID, &a.AppUserID, &a.AgentCode, &a.Level, &a.ParentAgentID, &a.RootAgentID, &a.Path, &a.Status); err != nil {
+		if err := rows.Scan(&a.ID, &a.AppUserID, &a.AppUserAccount, &a.AppUserPhone, &a.AppUserNickname, &a.AgentCode, &a.Level, &a.ParentAgentID, &a.RootAgentID, &a.Path, &a.Status); err != nil {
 			httpx.Fail(w, 500, err.Error())
 			return
 		}

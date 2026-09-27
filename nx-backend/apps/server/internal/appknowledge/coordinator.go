@@ -35,7 +35,6 @@ type RemoteRequest struct {
 	TheoryReleaseIDs    []int64
 	EnneagramReleaseIDs []int64
 	MainType            int
-	WingType            int
 }
 
 type RemoteResult struct {
@@ -93,6 +92,10 @@ type ReleaseSearcher interface {
 	SearchReleaseChunks(ctx context.Context, releaseID int64, query string, topK int, minScore float64) ([]rag.Document, error)
 }
 
+type ReleaseSetSearcher interface {
+	SearchReleaseSetChunks(ctx context.Context, releaseIDs []int64, query string, topK int, minScore float64) ([]rag.Document, error)
+}
+
 type Limits struct {
 	Public        int
 	Theory        int
@@ -111,6 +114,9 @@ type LayerHit struct {
 	LibraryID   int64        `json:"library_id,omitempty"`
 	LibraryKey  string       `json:"library_key,omitempty"`
 	ReleaseID   int64        `json:"release_id,omitempty"`
+	LibraryIDs  []int64      `json:"library_ids,omitempty"`
+	LibraryKeys []string     `json:"library_keys,omitempty"`
+	ReleaseIDs  []int64      `json:"release_ids,omitempty"`
 	ChunkIDs    []string     `json:"chunk_ids"`
 	Diagnostics []Diagnostic `json:"diagnostics,omitempty"`
 }
@@ -269,7 +275,7 @@ func (c *Coordinator) retrieveLocal(ctx context.Context, input Input, resolved C
 	}
 
 	publicDocs := c.searchPublic(ctx, input.Query, limits.Public, &trace)
-	theoryDocs := c.searchBinding(ctx, input.Query, resolved.Theory, limits.Theory, LayerTheory, &trace)
+	theoryDocs := c.searchTheoryBindings(ctx, input.Query, resolved.Resolution, limits.Theory, &trace)
 
 	documentsByLayer := map[string][]rag.Document{
 		LayerPublic: publicDocs, LayerTheory: theoryDocs,
@@ -318,8 +324,8 @@ func remoteRequestFromResolution(input Input, resolved ConversationResolution) R
 		scene = "app_chat"
 	}
 	request := RemoteRequest{RequestID: requestID, Query: input.Query, Scene: scene, Public: true, MainType: resolved.MainType}
-	if resolved.Theory != nil {
-		request.TheoryReleaseIDs = []int64{resolved.Theory.ReleaseID}
+	for _, binding := range configuredTheoryBindings(resolved.Resolution) {
+		request.TheoryReleaseIDs = append(request.TheoryReleaseIDs, binding.ReleaseID)
 	}
 	if len(input.RequestedTypes) > 0 {
 		for _, binding := range resolved.RequestedTypeBindings {
@@ -412,6 +418,71 @@ func (c *Coordinator) searchBinding(ctx context.Context, query string, binding *
 		return nil
 	}
 	return documents
+}
+
+func (c *Coordinator) searchTheoryBindings(ctx context.Context, query string, resolution Resolution, limit int, trace *Trace) []rag.Document {
+	bindings := configuredTheoryBindings(resolution)
+	if len(bindings) == 0 || limit == 0 {
+		return nil
+	}
+	if len(bindings) == 1 {
+		return c.searchBinding(ctx, query, bindings[0], limit, LayerTheory, trace)
+	}
+
+	hit := trace.LayerHits[LayerTheory]
+	hit.LibraryID = bindings[0].LibraryID
+	hit.LibraryKey = bindings[0].LibraryKey
+	hit.ReleaseID = bindings[0].ReleaseID
+	for _, binding := range bindings {
+		hit.LibraryIDs = append(hit.LibraryIDs, binding.LibraryID)
+		hit.LibraryKeys = append(hit.LibraryKeys, binding.LibraryKey)
+		hit.ReleaseIDs = append(hit.ReleaseIDs, binding.ReleaseID)
+	}
+	trace.LayerHits[LayerTheory] = hit
+	if c.releases == nil {
+		addLayerDiagnostic(trace.LayerHits, Diagnostic{Layer: LayerTheory, Code: "search_unavailable"})
+		return nil
+	}
+
+	if setSearcher, ok := c.releases.(ReleaseSetSearcher); ok {
+		documents, err := setSearcher.SearchReleaseSetChunks(ctx, hit.ReleaseIDs, query, searchCandidateLimit(limit), 0.2)
+		if err != nil {
+			addLayerDiagnostic(trace.LayerHits, Diagnostic{Layer: LayerTheory, Code: "search_failed"})
+			return nil
+		}
+		return documents
+	}
+
+	documents := make([]rag.Document, 0, len(bindings)*limit)
+	for _, binding := range bindings {
+		matches, err := c.releases.SearchReleaseChunks(ctx, binding.ReleaseID, query, searchCandidateLimit(limit), 0.2)
+		if err != nil {
+			addLayerDiagnostic(trace.LayerHits, Diagnostic{Layer: LayerTheory, Code: "search_failed"})
+			continue
+		}
+		documents = append(documents, matches...)
+	}
+	return documents
+}
+
+func configuredTheoryBindings(resolution Resolution) []*Binding {
+	source := resolution.TheoryBindings
+	if len(source) == 0 && resolution.Theory != nil {
+		source = []*Binding{resolution.Theory}
+	}
+	bindings := make([]*Binding, 0, len(source))
+	seen := make(map[int64]struct{}, len(source))
+	for _, binding := range source {
+		if binding == nil || binding.ReleaseID <= 0 {
+			continue
+		}
+		if _, duplicate := seen[binding.ReleaseID]; duplicate {
+			continue
+		}
+		seen[binding.ReleaseID] = struct{}{}
+		bindings = append(bindings, binding)
+	}
+	return bindings
 }
 
 func (c *Coordinator) searchType(ctx context.Context, query string, resolved ConversationResolution, limit int, trace *Trace) []rag.Document {

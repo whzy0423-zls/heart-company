@@ -11,7 +11,6 @@ type Scope struct {
 
 type Profile struct {
 	MainType *int `json:"mainType,omitempty"`
-	WingType *int `json:"wingType,omitempty"`
 }
 
 type RetrievalOptions struct {

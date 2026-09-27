@@ -131,8 +131,9 @@ func (s *Server) appCompatibilityAsk(w http.ResponseWriter, r *http.Request, rep
 		       summary, highlights, conflict_points, suggestions, is_full,
 		       algorithm_version, relation_level, scores, explain_tags, evidence,
 		       create_time, update_time
-		FROM app_compatibility_reports WHERE id = $1 AND app_user_id = $2
-	`, id, userInfo.ID))
+		FROM app_compatibility_reports
+		WHERE id = $1 AND app_user_id = $2 AND algorithm_version = $3
+	`, id, userInfo.ID, compatibility.AlgorithmVersion))
 	if errors.Is(err, sql.ErrNoRows) {
 		httpx.Fail(w, http.StatusNotFound, "not found")
 		return
@@ -324,9 +325,9 @@ func (s *Server) appCompatibilityList(w http.ResponseWriter, r *http.Request) {
 		       algorithm_version, relation_level, scores, explain_tags, evidence,
 		       create_time, update_time
 		FROM app_compatibility_reports
-		WHERE app_user_id = $1
+		WHERE app_user_id = $1 AND algorithm_version = $2
 		ORDER BY create_time DESC, id DESC
-	`, userInfo.ID)
+	`, userInfo.ID, compatibility.AlgorithmVersion)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "query failed")
 		return
@@ -379,8 +380,8 @@ func (s *Server) appCompatibilityDetail(w http.ResponseWriter, r *http.Request, 
 		       algorithm_version, relation_level, scores, explain_tags, evidence,
 		       create_time, update_time
 		FROM app_compatibility_reports
-		WHERE id = $1 AND app_user_id = $2
-	`, id, userInfo.ID))
+		WHERE id = $1 AND app_user_id = $2 AND algorithm_version = $3
+	`, id, userInfo.ID, compatibility.AlgorithmVersion))
 	if errors.Is(err, sql.ErrNoRows) {
 		httpx.Fail(w, http.StatusNotFound, "not found")
 		return
@@ -616,7 +617,7 @@ func (r *appCompatibilityReport) setAliases() {
 	r.ConflictPointsSnake = r.ConflictPoints
 	r.IsFullSnake = r.IsFull
 	if r.AlgorithmVersion == "" {
-		r.AlgorithmVersion = "v1"
+		r.AlgorithmVersion = compatibility.AlgorithmVersion
 	}
 	r.AlgorithmVersionSnake = r.AlgorithmVersion
 	r.RelationLevelSnake = r.RelationLevel
