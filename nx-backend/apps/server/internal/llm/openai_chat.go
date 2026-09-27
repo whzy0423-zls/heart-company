@@ -170,6 +170,9 @@ func (g *OpenAIChatGenerator) GenerateStream(ctx context.Context, input rag.Gene
 				}
 				answer.WriteString(delta)
 			}
+			if choice.FinishReason != nil && openAIResponseTruncated(*choice.FinishReason) {
+				return fmt.Errorf("OpenAI 回答达到输出上限，已截断")
+			}
 			if choice.FinishReason != nil && strings.TrimSpace(*choice.FinishReason) != "" {
 				terminal = true
 			}
@@ -340,6 +343,9 @@ func (g *OpenAIChatGenerator) completeWithTimeout(ctx context.Context, body open
 		if isContentFilterCode(choice.FinishReason) {
 			return "", newContentFilterError("openai", choice.FinishReason)
 		}
+		if openAIResponseTruncated(choice.FinishReason) {
+			return "", fmt.Errorf("OpenAI 回答达到输出上限，已截断")
+		}
 	}
 	for _, choice := range result.Choices {
 		if content := strings.TrimSpace(choice.Message.Content); content != "" {
@@ -347,6 +353,15 @@ func (g *OpenAIChatGenerator) completeWithTimeout(ctx context.Context, body open
 		}
 	}
 	return "", fmt.Errorf("OpenAI 未返回文本回答")
+}
+
+func openAIResponseTruncated(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "length", "max_tokens", "max_output_tokens":
+		return true
+	default:
+		return false
+	}
 }
 
 func (g *OpenAIChatGenerator) newRequest(ctx context.Context, payload []byte) (*http.Request, error) {

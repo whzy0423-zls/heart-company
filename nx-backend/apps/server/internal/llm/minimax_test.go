@@ -652,6 +652,15 @@ func TestChatTokenBudgetUsesConversationTier(t *testing.T) {
 	}
 }
 
+func TestChatTokenBudgetExpandsForLongMultiPartSituationalQuestion(t *testing.T) {
+	question := "当我担心合作项目出问题时，你会建议我怎么准备？请结合6号型在压力下的关注点。"
+	for _, tier := range []string{"", "basic"} {
+		if got := chatTokenBudgetForTier(question, tier); got != 420 {
+			t.Fatalf("chatTokenBudgetForTier(%q) = %d, want 420", tier, got)
+		}
+	}
+}
+
 func TestRequestsEnneagramOverview(t *testing.T) {
 	tests := []struct {
 		question string

@@ -144,8 +144,9 @@ func (g *AnthropicChatGenerator) GenerateStream(ctx context.Context, input rag.G
 		var payload struct {
 			Type  string `json:"type"`
 			Delta struct {
-				Type string `json:"type"`
-				Text string `json:"text,omitempty"`
+				Type       string `json:"type"`
+				Text       string `json:"text,omitempty"`
+				StopReason string `json:"stop_reason,omitempty"`
 			} `json:"delta"`
 			Error *anthropicError `json:"error,omitempty"`
 		}
@@ -175,7 +176,12 @@ func (g *AnthropicChatGenerator) GenerateStream(ctx context.Context, input rag.G
 		case "message_stop":
 			terminal = true
 			return errAnthropicStreamTerminal
-		case "message_start", "content_block_start", "content_block_stop", "message_delta", "ping":
+		case "message_delta":
+			if anthropicResponseTruncated(payload.Delta.StopReason) {
+				return fmt.Errorf("Anthropic 回答达到输出上限，已截断")
+			}
+			return nil
+		case "message_start", "content_block_start", "content_block_stop", "ping":
 			return nil
 		default:
 			// Ignore unknown event types for forward compatibility. Only native
@@ -343,6 +349,9 @@ func (g *AnthropicChatGenerator) completeWithTimeout(ctx context.Context, body a
 	if isContentFilterCode(result.StopReason) {
 		return "", newContentFilterError("anthropic", result.StopReason)
 	}
+	if anthropicResponseTruncated(result.StopReason) {
+		return "", fmt.Errorf("Anthropic 回答达到输出上限，已截断")
+	}
 	var answer strings.Builder
 	for _, block := range result.Content {
 		if isContentFilterCode(block.Type) {
@@ -357,6 +366,10 @@ func (g *AnthropicChatGenerator) completeWithTimeout(ctx context.Context, body a
 		return "", fmt.Errorf("Anthropic 未返回文本回答")
 	}
 	return content, nil
+}
+
+func anthropicResponseTruncated(reason string) bool {
+	return strings.EqualFold(strings.TrimSpace(reason), "max_tokens")
 }
 
 func (g *AnthropicChatGenerator) newRequest(ctx context.Context, payload []byte) (*http.Request, error) {

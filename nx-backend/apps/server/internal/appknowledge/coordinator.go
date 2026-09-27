@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -214,12 +215,12 @@ func (c *Coordinator) Retrieve(ctx context.Context, input Input) (Result, error)
 		if !c.userInRollout(input.UserID) {
 			return c.retrieveLocal(ctx, input, resolved), nil
 		}
-		return c.retrieveRemote(ctx, resolved, remoteRequest)
+		return c.retrieveRemote(ctx, resolved, remoteRequest, requestedTypes)
 	case "fallback":
 		if !c.userInRollout(input.UserID) {
 			return c.retrieveLocal(ctx, input, resolved), nil
 		}
-		result, remoteErr := c.retrieveRemote(ctx, resolved, remoteRequest)
+		result, remoteErr := c.retrieveRemote(ctx, resolved, remoteRequest, requestedTypes)
 		if remoteErr == nil && len(result.Documents) > 0 {
 			return result, nil
 		}
@@ -273,10 +274,7 @@ func (c *Coordinator) retrieveLocal(ctx context.Context, input Input, resolved C
 	} else {
 		trace.LayerHits[LayerEnneagramType] = LayerHit{ChunkIDs: []string{}}
 	}
-	if resolved.MainType >= 1 && resolved.MainType <= 9 {
-		mainType := resolved.MainType
-		trace.EnneagramType = &mainType
-	}
+	trace.EnneagramType = tracedEnneagramType(resolved.MainType, requestedTypes)
 	for _, diagnostic := range resolved.Diagnostics {
 		addLayerDiagnostic(trace.LayerHits, diagnostic)
 	}
@@ -368,7 +366,7 @@ func isSkillLibraryBinding(binding *Binding) bool {
 	return strings.HasPrefix(key, "skill-") || strings.HasPrefix(key, "story-skill-")
 }
 
-func (c *Coordinator) retrieveRemote(ctx context.Context, resolved ConversationResolution, request RemoteRequest) (Result, error) {
+func (c *Coordinator) retrieveRemote(ctx context.Context, resolved ConversationResolution, request RemoteRequest, requestedTypes []int) (Result, error) {
 	if c.remote == nil {
 		return Result{}, errors.New("remote knowledge retriever unavailable")
 	}
@@ -376,17 +374,113 @@ func (c *Coordinator) retrieveRemote(ctx context.Context, resolved ConversationR
 	if err != nil {
 		return Result{}, err
 	}
+	requestedTypes = normalizeRequestedTypes(requestedTypes)
 	trace := Trace{CardID: resolved.CardID, CardRevision: resolved.CardRevision, LayerHits: map[string]LayerHit{
-		LayerPublic: {LibraryKey: LayerPublic, ChunkIDs: remoteDocumentIDs(remote.Documents), Diagnostics: []Diagnostic{{Layer: LayerPublic, Code: "remote_" + remote.RetrievalMethod}}},
-		LayerTheory: {ChunkIDs: []string{}}, LayerEnneagramType: {ChunkIDs: []string{}},
+		LayerPublic: {LibraryKey: LayerPublic, ChunkIDs: []string{}, Diagnostics: []Diagnostic{{Layer: LayerPublic, Code: "remote_" + remote.RetrievalMethod}}},
+		LayerTheory: {ChunkIDs: []string{}},
 	}}
-	if resolved.MainType >= 1 && resolved.MainType <= 9 {
-		value := resolved.MainType
-		trace.EnneagramType = &value
+	if len(requestedTypes) == 0 {
+		trace.LayerHits[LayerEnneagramType] = LayerHit{ChunkIDs: []string{}}
+	} else {
+		for _, typeNumber := range requestedTypes {
+			trace.LayerHits[typeTraceKey(typeNumber)] = LayerHit{ChunkIDs: []string{}}
+		}
 	}
+	for _, binding := range resolved.TheoryBindings {
+		appendBindingMetadata(&trace, LayerTheory, binding)
+	}
+	if len(resolved.TheoryBindings) == 0 {
+		appendBindingMetadata(&trace, LayerTheory, resolved.Theory)
+	}
+	for _, binding := range resolved.RequestedTypeBindings {
+		if binding != nil && binding.EnneagramType != nil {
+			appendBindingMetadata(&trace, typeTraceKey(*binding.EnneagramType), binding)
+		}
+	}
+	if len(requestedTypes) == 0 {
+		appendBindingMetadata(&trace, LayerEnneagramType, resolved.EnneagramType)
+	}
+	for _, document := range remote.Documents {
+		library, releaseID := remoteDocumentScope(document)
+		layer := LayerPublic
+		switch library {
+		case "theory", "skill":
+			layer = LayerTheory
+		case "enneagram":
+			layer = remoteEnneagramTraceLayer(resolved, requestedTypes, releaseID)
+		}
+		hit := trace.LayerHits[layer]
+		hit.ChunkIDs = append(hit.ChunkIDs, document.ID)
+		trace.LayerHits[layer] = hit
+	}
+	trace.EnneagramType = tracedEnneagramType(resolved.MainType, requestedTypes)
 	trace.TraceID = remote.TraceID
 	trace.RetrievalMethod = remote.RetrievalMethod
 	return Result{Documents: remote.Documents, Citations: remote.Citations, Trace: trace}, nil
+}
+
+func tracedEnneagramType(mainType int, requestedTypes []int) *int {
+	requestedTypes = normalizeRequestedTypes(requestedTypes)
+	if len(requestedTypes) == 1 {
+		value := requestedTypes[0]
+		return &value
+	}
+	if len(requestedTypes) > 1 || mainType < 1 || mainType > 9 {
+		return nil
+	}
+	value := mainType
+	return &value
+}
+
+func appendBindingMetadata(trace *Trace, layer string, binding *Binding) {
+	if trace == nil || binding == nil {
+		return
+	}
+	hit := trace.LayerHits[layer]
+	if hit.LibraryID == 0 {
+		hit.LibraryID, hit.LibraryKey, hit.ReleaseID = binding.LibraryID, binding.LibraryKey, binding.ReleaseID
+	}
+	if !containsBindingID(hit.LibraryIDs, binding.LibraryID) {
+		hit.LibraryIDs = append(hit.LibraryIDs, binding.LibraryID)
+		hit.LibraryKeys = append(hit.LibraryKeys, binding.LibraryKey)
+		hit.ReleaseIDs = append(hit.ReleaseIDs, binding.ReleaseID)
+	}
+	trace.LayerHits[layer] = hit
+}
+
+func containsBindingID(values []int64, target int64) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func remoteDocumentScope(document rag.Document) (string, int64) {
+	var library string
+	var releaseID int64
+	for _, tag := range document.Tags {
+		if value, ok := strings.CutPrefix(tag, "library:"); ok {
+			library = strings.TrimSpace(value)
+		}
+		if value, ok := strings.CutPrefix(tag, "release:"); ok {
+			releaseID, _ = strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		}
+	}
+	return library, releaseID
+}
+
+func remoteEnneagramTraceLayer(resolved ConversationResolution, requestedTypes []int, releaseID int64) string {
+	for _, binding := range resolved.RequestedTypeBindings {
+		if binding != nil && binding.EnneagramType != nil && binding.ReleaseID == releaseID {
+			return typeTraceKey(*binding.EnneagramType)
+		}
+	}
+	if len(requestedTypes) == 1 {
+		return typeTraceKey(requestedTypes[0])
+	}
+	return LayerEnneagramType
 }
 
 func (c *Coordinator) compareShadow(ctx context.Context, request RemoteRequest, local Result) {

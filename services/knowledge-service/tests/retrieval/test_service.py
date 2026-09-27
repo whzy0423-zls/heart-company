@@ -26,6 +26,22 @@ class EmbeddingStub:
         return [[0.1, 0.2]]
 
 
+class WeakVectorOnlyRepositoryStub:
+    def lexical_search(self, *_args, **_kwargs):
+        return []
+
+    def vector_search(self, *_args, **_kwargs):
+        return [doc("weather-word-overlap", 0.5723), doc("weak-semantic", 0.5316)]
+
+
+class StrongVectorRepositoryStub:
+    def lexical_search(self, *_args, **_kwargs):
+        return []
+
+    def vector_search(self, *_args, **_kwargs):
+        return [doc("strong-semantic", 0.7347), doc("supporting-semantic", 0.5316)]
+
+
 @pytest.mark.asyncio
 async def test_postgres_hybrid_retriever_runs_both_channels_and_rrf() -> None:
     retriever = PostgresHybridRetriever(RepositoryStub(), EmbeddingStub())
@@ -38,3 +54,31 @@ async def test_postgres_hybrid_retriever_runs_both_channels_and_rrf() -> None:
     result = await retriever(query)
 
     assert [item.id for item in result] == ["both", "lexical", "vector"]
+
+
+@pytest.mark.asyncio
+async def test_postgres_hybrid_retriever_drops_weak_vector_only_matches() -> None:
+    retriever = PostgresHybridRetriever(WeakVectorOnlyRepositoryStub(), EmbeddingStub())
+    query = RetrievalQuery(
+        requestId="req", query="问题", scene="app_chat",
+        scope=KnowledgeScope(public=True), profile={},
+        retrieval={"topK": 3, "lexicalK": 20, "vectorK": 20, "rerankK": 3},
+    )
+
+    result = await retriever(query)
+
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_postgres_hybrid_retriever_keeps_ranked_vector_set_when_best_match_is_strong() -> None:
+    retriever = PostgresHybridRetriever(StrongVectorRepositoryStub(), EmbeddingStub())
+    query = RetrievalQuery(
+        requestId="req", query="问题", scene="app_chat",
+        scope=KnowledgeScope(public=True), profile={},
+        retrieval={"topK": 3, "lexicalK": 20, "vectorK": 20, "rerankK": 3},
+    )
+
+    result = await retriever(query)
+
+    assert [item.id for item in result] == ["strong-semantic", "supporting-semantic"]

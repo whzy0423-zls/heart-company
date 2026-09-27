@@ -326,6 +326,11 @@ func shouldSkipAppChatKnowledge(query string) bool {
 	if strings.Contains(normalized, "刚才") && containsAnyString(normalized, "改成", "换成", "缩成", "总结", "重写", "一句话", "简短") {
 		return true
 	}
+	if containsAnyString(normalized, "今天", "今日", "现在", "实时", "明天", "当前") {
+		if containsAnyString(normalized, "天气", "气温", "降雨", "空气质量", "黄金价格", "股票", "股价", "行情", "汇率") {
+			return true
+		}
+	}
 	return strings.HasPrefix(normalized, "把第一个方法") && containsAnyString(normalized, "改成", "换成", "缩成", "一句话", "简短")
 }
 

@@ -184,6 +184,8 @@ func TestCompatibleChatDefaultResponseContract(t *testing.T) {
 		"不要固定总结",
 		"不要固定给建议",
 		"最多追问一个真正有用的问题",
+		"必须以完整句子结束",
+		"接近输出上限时提前收束",
 	}
 	for _, fragment := range required {
 		if !strings.Contains(defaultCompatibleChatSystemPrompt, fragment) {

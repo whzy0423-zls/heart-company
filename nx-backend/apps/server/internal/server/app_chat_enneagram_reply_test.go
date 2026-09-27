@@ -53,6 +53,7 @@ func TestBuildAppChatEnneagramReplyPlanClassifiesKnowledgeRequests(t *testing.T)
 		{name: "ambiguous numbered comparison", question: "1号和2号有什么区别", wantTypes: nil},
 		{name: "canonical names inside translation request", question: "文案里出现完美型和助人型，帮我翻译", wantTypes: nil},
 		{name: "emotional support", question: "我是1号，最近关系压力很大", wantTypes: nil},
+		{name: "situational advice with selected type", question: "当我担心合作项目出问题时，你会建议我怎么准备？请结合6号型在压力下的关注点。", wantTypes: nil},
 		{name: "ordinary domain", question: "3号房间怎么走", wantTypes: nil},
 		{name: "weak words only", question: "最近关系和成长怎么样", wantTypes: nil},
 	}

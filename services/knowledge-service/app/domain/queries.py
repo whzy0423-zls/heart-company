@@ -32,6 +32,7 @@ class RetrievalOptions(APIModel):
     vector_k: int = Field(default=20, ge=1, le=100, alias="vectorK")
     lexical_k: int = Field(default=20, ge=1, le=100, alias="lexicalK")
     rerank_k: int = Field(default=8, ge=1, le=100, alias="rerankK")
+    min_vector_score: float = Field(default=0.62, ge=-1, le=1, alias="minVectorScore")
     max_context_runes: int = Field(default=8000, ge=1, le=100_000, alias="maxContextRunes")
 
 

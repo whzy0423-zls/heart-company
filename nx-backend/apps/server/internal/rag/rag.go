@@ -879,6 +879,10 @@ func conciseSuggestionTopic(text string, mainType int) string {
 	if index := strings.IndexAny(firstClause, "?？"); index >= 0 {
 		firstClause = strings.TrimSpace(firstClause[:index])
 	}
+	if containsAny(firstClause, "伴侣", "亲密关系") &&
+		containsAny(firstClause, "冲突", "辩解", "解释", "不被理解", "沟通") {
+		return "伴侣冲突中被理解的需要"
+	}
 	if enneagramTypeFromText(firstClause) == mainType && strings.Contains(firstClause, "拖延") {
 		return "拖延"
 	}

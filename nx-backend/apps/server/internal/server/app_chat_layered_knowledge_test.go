@@ -461,6 +461,21 @@ func TestAppChatModelIdentitySkipsLayeredKnowledge(t *testing.T) {
 	}
 }
 
+func TestAppChatRealtimeExternalQuestionsSkipLayeredKnowledge(t *testing.T) {
+	for _, question := range []string{
+		"今天上海天气怎么样？",
+		"现在北京气温多少？",
+		"今天黄金价格是多少？",
+		"帮我查一下今天的股票行情。",
+	} {
+		t.Run(question, func(t *testing.T) {
+			if !shouldSkipAppChatKnowledge(question) {
+				t.Fatalf("realtime external question should skip psychological knowledge: %q", question)
+			}
+		})
+	}
+}
+
 func TestEnneagramDialogueRetrievesSelectedRoleKnowledgeInsteadOfCardType(t *testing.T) {
 	store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
 	store.cardID = 77

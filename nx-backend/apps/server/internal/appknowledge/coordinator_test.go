@@ -378,6 +378,49 @@ func TestCoordinatorRolloutDoesNotLimitShadowComparison(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRemoteTracePreservesScopedLayersAndSelectedType(t *testing.T) {
+	typeSix := 6
+	resolver := &coordinatorResolverStub{resolution: ConversationResolution{
+		CardID: 9, CardRevision: 4, MainType: 4,
+		Resolution: Resolution{
+			TheoryBindings:        []*Binding{{Layer: LayerTheory, LibraryID: 20, LibraryKey: "skill-qinmi-guanxi", ReleaseID: 8}},
+			RequestedTypeBindings: []*Binding{{Layer: LayerEnneagramType, EnneagramType: &typeSix, LibraryID: 26, LibraryKey: "enneagram-type-06", ReleaseID: 86}},
+		},
+	}}
+	remote := &remoteRetrieverStub{result: RemoteResult{
+		RetrievalMethod: "hybrid", TraceID: "trace-6",
+		Documents: []rag.Document{
+			{ID: "public-1", Tags: []string{"library:public"}},
+			{ID: "skill-1", Tags: []string{"library:skill", "release:8"}},
+			{ID: "type-6", Tags: []string{"library:enneagram", "release:86"}},
+		},
+	}}
+	coordinator := NewCoordinator(resolver, &publicSearchStub{}, &releaseSearchStub{}, WithRemote("langchain", remote, nil))
+
+	result, err := coordinator.Retrieve(context.Background(), Input{
+		UserID: 7, SessionID: 8, CardID: 9, Query: "六号在压力下怎么准备", RequestedTypes: []int{6},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Trace.EnneagramType == nil || *result.Trace.EnneagramType != 6 {
+		t.Fatalf("trace selected type = %v, want 6", result.Trace.EnneagramType)
+	}
+	if got := result.Trace.LayerHits[LayerPublic].ChunkIDs; !reflect.DeepEqual(got, []string{"public-1"}) {
+		t.Fatalf("public trace = %v", got)
+	}
+	if got := result.Trace.LayerHits[LayerTheory].ChunkIDs; !reflect.DeepEqual(got, []string{"skill-1"}) {
+		t.Fatalf("theory trace = %v", got)
+	}
+	typeHit, ok := result.Trace.LayerHits[typeTraceKey(6)]
+	if !ok || !reflect.DeepEqual(typeHit.ChunkIDs, []string{"type-6"}) || typeHit.ReleaseID != 86 {
+		t.Fatalf("type trace = %+v, present=%v", typeHit, ok)
+	}
+	if _, leaked := result.Trace.LayerHits[LayerEnneagramType]; leaked {
+		t.Fatalf("generic type layer leaked into explicit trace: %+v", result.Trace.LayerHits)
+	}
+}
+
 func TestCoordinatorRolloutSupportsPromotionStages(t *testing.T) {
 	for _, percent := range []int{5, 20, 50, 100} {
 		t.Run(fmt.Sprintf("%d_percent", percent), func(t *testing.T) {

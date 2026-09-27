@@ -44,6 +44,8 @@ class PostgresHybridRetriever:
             limit=query.retrieval.vector_k,
         )
         lexical, semantic = await asyncio.gather(lexical_task, vector_task)
+        if not semantic or semantic[0].score < query.retrieval.min_vector_score:
+            semantic = []
         fused = reciprocal_rank_fusion(lexical, semantic)
         filtered = filter_documents(
             fused,

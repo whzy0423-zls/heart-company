@@ -199,10 +199,34 @@ func (r *Runtime) Generate(ctx context.Context, appUserID, sessionID int64, ques
 		ChunkIDs:           skillChunkIDs(documents),
 	}
 	return Result{
-		Answer: answer, Sources: publicSources, Suggestions: []string{},
+		Answer: answer, Sources: publicSources, Suggestions: skillSuggestions(question),
 		Citations: retrieval.Citations, TraceID: retrieval.TraceID, RetrievalMethod: retrieval.RetrievalMethod,
 		GenerationRevision: session.GenerationRevision, Trace: trace,
 	}, nil
+}
+
+func skillSuggestions(question string) []string {
+	if containsAnyTerm(question, "伴侣", "关系", "冲突", "沟通", "感受", "边界") {
+		return []string{
+			"我可以先说哪一句，让对方更容易听进去？",
+			"如果对方继续辩解或指责，我该怎么回应？",
+			"怎样判断这次沟通需要先暂停一下？",
+		}
+	}
+	return []string{
+		"这个方法最关键的一步是什么？",
+		"我今天可以先做哪一个最小行动？",
+		"遇到卡点时，我该怎么调整？",
+	}
+}
+
+func containsAnyTerm(value string, terms ...string) bool {
+	for _, term := range terms {
+		if strings.Contains(value, term) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runtime) retrieveKnowledge(ctx context.Context, appUserID int64, session Session, question string) (appknowledge.RemoteResult, error) {

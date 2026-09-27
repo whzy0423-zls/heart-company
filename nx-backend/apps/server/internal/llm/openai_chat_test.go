@@ -493,6 +493,34 @@ func TestOpenAIChatGenerateStreamRejectsProtocolFailures(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatRejectsTokenLimitTruncation(t *testing.T) {
+	t.Run("sync", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"未完成的回答"},"finish_reason":"length"}]}`)
+		}))
+		defer server.Close()
+
+		_, err := newTestOpenAIChatGenerator(server).Generate(context.Background(), rag.GenerateInput{Question: "hi"})
+		if err == nil || !strings.Contains(err.Error(), "截断") {
+			t.Fatalf("err = %v, want truncation error", err)
+		}
+	})
+
+	t.Run("stream", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"未完成的回答\"}}]}\n\n")
+			_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n")
+		}))
+		defer server.Close()
+
+		_, err := newTestOpenAIChatGenerator(server).GenerateStream(context.Background(), rag.GenerateInput{Question: "hi"}, nil)
+		if err == nil || !strings.Contains(err.Error(), "截断") {
+			t.Fatalf("err = %v, want truncation error", err)
+		}
+	})
+}
+
 func TestOpenAIChatGenerateStreamPropagatesCancellationAndEmitterErrors(t *testing.T) {
 	t.Run("cancellation", func(t *testing.T) {
 		firstDelta := make(chan struct{})

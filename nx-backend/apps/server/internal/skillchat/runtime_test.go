@@ -153,6 +153,9 @@ func TestRuntimeFallbackUsesPinnedLocalReleaseWhenRemoteReturnsNoDocuments(t *te
 	if len(result.Sources) != 1 || result.Sources[0].Title != "学习之道" {
 		t.Fatalf("local fallback sources=%+v", result.Sources)
 	}
+	if len(result.Suggestions) != 3 {
+		t.Fatalf("skill suggestions=%+v, want 3", result.Suggestions)
+	}
 }
 
 func TestRuntimePinnedSkillUsesConversationContextInsteadOfZeroScoreFallback(t *testing.T) {

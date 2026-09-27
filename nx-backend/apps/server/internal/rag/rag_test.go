@@ -468,6 +468,24 @@ func TestSuggestionsReplaceOlderFocusWhenCurrentQuestionChangesTopic(t *testing.
 	}
 }
 
+func TestSuggestionsUseConciseRelationshipFocusForLongQuestion(t *testing.T) {
+	input := AskInput{
+		Question:         "根据心理学和亲密关系知识，为什么伴侣在冲突中越解释，我反而越觉得不被理解？先说核心原因，再给两个当场能说出口的句子。",
+		ConversationCard: ConversationCard{MainType: 4},
+	}
+
+	suggestions := buildSuggestions(input)
+	if len(suggestions) != 3 {
+		t.Fatalf("suggestions = %+v, want 3", suggestions)
+	}
+	if !containsSuggestionText(suggestions, "伴侣冲突中被理解的需要") {
+		t.Fatalf("suggestions did not use a concise relationship focus: %+v", suggestions)
+	}
+	if containsSuggestionText(suggestions, "根据心理学和亲密关系知识") {
+		t.Fatalf("suggestions copied the long question instead of naming its focus: %+v", suggestions)
+	}
+}
+
 func TestSuggestionsSkipRecentHistoryExplicitlyAboutAnotherType(t *testing.T) {
 	input := AskInput{
 		Question: "那我该怎么办？",

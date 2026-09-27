@@ -456,6 +456,35 @@ func TestAnthropicChatGenerateStreamRejectsProtocolFailures(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatRejectsTokenLimitTruncation(t *testing.T) {
+	t.Run("sync", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, `{"type":"message","stop_reason":"max_tokens","content":[{"type":"text","text":"未完成的回答"}]}`)
+		}))
+		defer server.Close()
+
+		_, err := newTestAnthropicChatGenerator(server).Generate(context.Background(), rag.GenerateInput{Question: "hi"})
+		if err == nil || !strings.Contains(err.Error(), "截断") {
+			t.Fatalf("err = %v, want truncation error", err)
+		}
+	})
+
+	t.Run("stream", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			writeAnthropicEvent(w, "content_block_delta", `{"type":"content_block_delta","delta":{"type":"text_delta","text":"未完成的回答"}}`)
+			writeAnthropicEvent(w, "message_delta", `{"type":"message_delta","delta":{"stop_reason":"max_tokens"}}`)
+			writeAnthropicEvent(w, "message_stop", `{"type":"message_stop"}`)
+		}))
+		defer server.Close()
+
+		_, err := newTestAnthropicChatGenerator(server).GenerateStream(context.Background(), rag.GenerateInput{Question: "hi"}, nil)
+		if err == nil || !strings.Contains(err.Error(), "截断") {
+			t.Fatalf("err = %v, want truncation error", err)
+		}
+	})
+}
+
 func TestAnthropicChatGenerateStreamPropagatesCancellationAndEmitterErrors(t *testing.T) {
 	t.Run("cancellation", func(t *testing.T) {
 		firstDelta := make(chan struct{})

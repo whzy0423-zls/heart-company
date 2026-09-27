@@ -1378,7 +1378,33 @@ func chatTokenBudget(question string) int {
 			return 420
 		}
 	}
+	if needsExpandedSituationalBudget(question) {
+		return 420
+	}
 	return 220
+}
+
+func needsExpandedSituationalBudget(question string) bool {
+	question = strings.TrimSpace(question)
+	if len([]rune(question)) < 32 {
+		return false
+	}
+	hasQuestion := false
+	for _, marker := range []string{"为什么", "怎么", "如何", "建议", "怎么办", "做什么", "准备"} {
+		if strings.Contains(question, marker) {
+			hasQuestion = true
+			break
+		}
+	}
+	if !hasQuestion {
+		return false
+	}
+	for _, marker := range []string{"结合", "并且", "同时", "先", "再", "然后", "还需要", "并给"} {
+		if strings.Contains(question, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func chatTokenBudgetForTier(question, tier string) int {
@@ -1390,7 +1416,7 @@ func chatTokenBudgetForTier(question, tier string) int {
 	}
 	switch strings.ToLower(strings.TrimSpace(tier)) {
 	case "basic":
-		return 220
+		return chatTokenBudget(question)
 	case "companion":
 		return 500
 	case "deep":
