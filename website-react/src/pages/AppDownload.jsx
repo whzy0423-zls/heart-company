@@ -1,7 +1,8 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import AppConversationPreview from '../components/AppConversationPreview'
 import AppDownloadSection from '../components/AppDownloadSection'
 import Reveal from '../components/Reveal'
+import { buildLatestAppReleaseDownloadURL } from '../api/appRelease'
 import siteConfig from '../data/siteConfig'
 import {
   APP_HERO_PREVIEW,
@@ -12,6 +13,9 @@ import {
   APP_RELEASE_DISCLAIMER,
   APP_RELEASE_HISTORY,
 } from '../data/appDownloadPage'
+
+const latestAppDownloadURL = buildLatestAppReleaseDownloadURL()
+const DOWNLOAD_LOADING_TIMEOUT_MS = 3200
 
 const ICONS = {
   chat: 'M5 17.5 3.5 21l4.4-1.9c1.2.6 2.6.9 4.1.9 5 0 9-3.6 9-8s-4-8-9-8-9 3.6-9 8c0 2.1.9 4 2.5 5.5Z M8 11h.01M12 11h.01M16 11h.01',
@@ -32,12 +36,32 @@ function FeatureIcon({ name }) {
 }
 
 export default function AppDownload() {
+  const [downloadStarting, setDownloadStarting] = useState(false)
+  const downloadStartingRef = useRef(false)
+  const downloadLoadingTimerRef = useRef(0)
   const releaseNoteCount = APP_RELEASE_HISTORY.reduce(
     (total, release) => total + release.notes.length,
     0,
   )
   const releaseTimeline = [...APP_RELEASE_HISTORY].slice(0, 3).reverse()
   const latestHistoricalRelease = APP_RELEASE_HISTORY[0]
+
+  const beginDownload = useCallback(() => {
+    if (downloadStartingRef.current) return false
+
+    downloadStartingRef.current = true
+    setDownloadStarting(true)
+    window.clearTimeout(downloadLoadingTimerRef.current)
+    downloadLoadingTimerRef.current = window.setTimeout(() => {
+      downloadStartingRef.current = false
+      setDownloadStarting(false)
+    }, DOWNLOAD_LOADING_TIMEOUT_MS)
+    return true
+  }, [])
+
+  const handleDirectDownloadClick = (event) => {
+    if (!beginDownload()) event.preventDefault()
+  }
 
   useEffect(() => {
     const previousTitle = document.title
@@ -57,6 +81,7 @@ export default function AppDownload() {
     document.title = APP_PAGE_META.title
 
     return () => {
+      window.clearTimeout(downloadLoadingTimerRef.current)
       document.title = previousTitle
       previousMetadata.forEach(([element, content]) => element?.setAttribute('content', content))
     }
@@ -76,7 +101,11 @@ export default function AppDownload() {
           </h1>
           <p className="lead">从九型测评、智能对话到关系洞察与人生故事，把每一次觉察沉淀为看得见的成长轨迹。</p>
           <nav className="app-page__quick-links" aria-label="本页导航">
-            <a href="#download-app">立即下载</a>
+            <a
+              href={latestAppDownloadURL}
+              download="nine-xing-android.apk"
+              onClick={handleDirectDownloadClick}
+            >立即下载</a>
             <a href="#app-features">功能介绍</a>
             <a href="#install-guide">安装说明</a>
             <a href="#release-notes">更新记录</a>
@@ -89,7 +118,10 @@ export default function AppDownload() {
         </figure>
       </section>
 
-      <AppDownloadSection showInstallSummary={false} />
+      <AppDownloadSection
+        showInstallSummary={false}
+        onDownloadStart={beginDownload}
+      />
 
       <section className="wrap block app-page__features" id="app-features" aria-labelledby="app-features-title" tabIndex="-1">
         <Reveal className="section-head app-page__section-head">
@@ -281,6 +313,14 @@ export default function AppDownload() {
         </div>
         <a className="btn btn--red" href="#download-app">前往下载</a>
       </section>
+
+      {downloadStarting && (
+        <div className="app-download-loading" role="status" aria-live="assertive" aria-atomic="true">
+          <span className="app-download-loading__spinner" aria-hidden="true" />
+          <strong>正在开始下载</strong>
+          <p>请在浏览器提示中确认下载</p>
+        </div>
+      )}
     </div>
   )
 }

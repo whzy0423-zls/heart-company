@@ -52,7 +52,7 @@ test('registers a lazy /app route and points every primary App entry to it', () 
 })
 
 test('builds the dedicated page around download, features, install guidance, and release history', () => {
-  assert.match(pageSource, /<AppDownloadSection\s+showInstallSummary=\{false\}\s*\/>/)
+  assert.match(pageSource, /<AppDownloadSection[\s\S]*showInstallSummary=\{false\}[\s\S]*onDownloadStart=\{beginDownload\}[\s\S]*\/>/)
   assert.match(pageSource, /id="app-features"/)
   assert.match(pageSource, /id="install-guide"/)
   assert.match(pageSource, /id="release-notes"/)
@@ -67,6 +67,30 @@ test('builds the dedicated page around download, features, install guidance, and
       < pageSource.indexOf('className="app-page__video-column"'),
     '移动端视觉顺序必须与 DOM 和键盘顺序一致：先步骤，后视频',
   )
+})
+
+test('downloads the latest Android package directly from the hero action', () => {
+  assert.match(pageSource, /buildLatestAppReleaseDownloadURL/)
+  assert.match(
+    pageSource,
+    /<a[\s\S]*href=\{latestAppDownloadURL\}[\s\S]*download="nine-xing-android\.apk"[\s\S]*onClick=\{handleDirectDownloadClick\}[\s\S]*>立即下载<\/a>/,
+  )
+  assert.doesNotMatch(pageSource, /<a\s+href="#download-app"\s*>立即下载<\/a>/)
+})
+
+test('shows a global loading guard while the browser takes over the download', () => {
+  assert.match(pageSource, /const downloadStartingRef = useRef\(false\)/)
+  assert.match(pageSource, /const beginDownload = useCallback/)
+  assert.match(pageSource, /downloadStartingRef\.current\) return false/)
+  assert.match(pageSource, /window\.setTimeout\([\s\S]*DOWNLOAD_LOADING_TIMEOUT_MS/)
+  assert.match(pageSource, /<AppDownloadSection[\s\S]*onDownloadStart=\{beginDownload\}/)
+  assert.match(pageSource, /downloadStarting && \([\s\S]*className="app-download-loading"/)
+  assert.match(pageSource, /role="status"/)
+  assert.match(pageSource, /正在开始下载/)
+  assert.match(pageSource, /请在浏览器提示中确认下载/)
+  assert.match(stylesheetSource, /\.app-download-loading\s*\{[^}]*position:\s*fixed;[^}]*inset:\s*0;[^}]*z-index:/s)
+  assert.match(stylesheetSource, /\.app-download-loading__spinner\s*\{[^}]*animation:/s)
+  assert.match(stylesheetSource, /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*\.app-download-loading__spinner[^}]*\{[^}]*animation:\s*none;/s)
 })
 
 test('uses a realistic anonymous conversation and page-specific search metadata', () => {

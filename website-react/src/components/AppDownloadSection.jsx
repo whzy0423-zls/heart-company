@@ -12,6 +12,7 @@ import { createAppDownloadViewModel } from '../utils/appDownloadViewModel'
 export default function AppDownloadSection({
   showDetailsLink = false,
   showInstallSummary = true,
+  onDownloadStart,
 }) {
   const inviteCode = typeof window === 'undefined'
     ? ''
@@ -97,7 +98,7 @@ export default function AppDownloadSection({
       ? event.target.closest('.app-download__action')
       : null
     if (!target || target.tagName !== 'A') return
-    if (downloadStarted) {
+    if (downloadStarted || onDownloadStart?.() === false) {
       event.preventDefault()
       return
     }

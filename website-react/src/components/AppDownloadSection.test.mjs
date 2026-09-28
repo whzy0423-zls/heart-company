@@ -77,6 +77,8 @@ test('renders accessible device actions, 503 feedback, and retry controls', () =
 })
 
 test('starts the Android package download on the first touch activation', () => {
+  assert.match(componentSource, /onDownloadStart/)
+  assert.match(componentSource, /onDownloadStart\?\.\(\) === false/)
   assert.match(
     componentSource,
     /<a\s+className="app-download__action"\s+href=\{viewModel\.actionHref\}\s+download="nine-xing-android\.apk"\s*>/,
