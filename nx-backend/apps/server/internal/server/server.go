@@ -172,6 +172,13 @@ type Server struct {
 	classroomMaintenance       classroomUploadMaintenance
 	maintenanceCancel          context.CancelFunc
 
+	conversationSuggestionInit     sync.Once
+	conversationSuggestionReader   conversationSuggestionTurnReader
+	conversationSuggestionComplete func(context.Context, string, string, int) (string, error)
+	conversationSuggestionSlots    chan struct{}
+	conversationSuggestionLimiter  *strRateLimiter
+	conversationSuggestionTimeout  time.Duration
+
 	appUsers                       *appuser.Store
 	teachers                       *teacher.Store
 	friends                        *friends.Store
@@ -1093,6 +1100,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/reassessment/latest", s.method(http.MethodGet, s.requireAppAuth(s.appReassessmentLatest)))
 	s.mux.HandleFunc("/api/app/reassessment/", s.requireAppAuth(s.appReassessmentRouter))
 	s.mux.HandleFunc("/api/app/chat/sessions", s.requireAppAuth(s.appChatRouter))
+	s.mux.HandleFunc("/api/app/conversation-suggestions", s.method(http.MethodPost, s.requireAppAuth(s.appConversationSuggestions)))
 	s.mux.HandleFunc("/api/app/enneagram/", s.requireAppAuth(s.appEnneagramDialogueRouter))
 	s.mux.HandleFunc("/api/app/chat/sessions/", s.requireAppAuth(s.appChatRouter))
 	s.mux.HandleFunc("/api/app/chat/messages/", s.requireAppAuth(s.appChatMessageRouter))
@@ -1137,6 +1145,7 @@ func (s *Server) routes() {
 	// 语音识别
 	s.mux.HandleFunc("/api/app/voice/recognize", s.method(http.MethodPost, s.requireAppAuth(s.appVoiceRecognize)))
 	s.mux.HandleFunc("/api/app/xinzhili/turns/stream", s.method(http.MethodPost, s.requireAppAuth(s.appXinzhiliVoiceTurnStream)))
+	s.mux.HandleFunc("/api/app/xinzhili/text/stream", s.method(http.MethodPost, s.requireAppAuth(s.appXinzhiliTextTurnStream)))
 	s.mux.HandleFunc("/api/app/xinzhili/realtime/capabilities", s.method(http.MethodGet, s.requireAppAuth(s.appXinzhiliRealtimeCapabilities)))
 	s.mux.HandleFunc("/api/app/xinzhili/mode", s.method(http.MethodGet, s.requireAppAuth(s.appXinzhiliModeSnapshot)))
 	s.mux.HandleFunc("/api/app/xinzhili/realtime", s.requireAppAuth(s.xinzhiliRealtime))

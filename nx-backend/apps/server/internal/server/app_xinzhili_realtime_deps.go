@@ -107,6 +107,10 @@ func (a serverXinzhiliConversations) CreateAssistant(ctx context.Context, conver
 	return a.store.CreateSceneAssistant(ctx, conversation.ID, content, string(mode))
 }
 
+func (a serverXinzhiliConversations) CreateAssistantForUser(ctx context.Context, conversation xinzhili.Conversation, userMessageID int64, content string, mode xinzhili.Mode) (int64, error) {
+	return a.store.CreateSceneAssistantForUser(ctx, conversation.ID, userMessageID, content, string(mode))
+}
+
 func (a serverXinzhiliConversations) AcknowledgeAssistant(ctx context.Context, messageID int64, deliveredText string, complete bool) error {
 	return a.store.AcknowledgeSceneAssistant(ctx, messageID, deliveredText, complete)
 }

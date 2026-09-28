@@ -3531,6 +3531,7 @@ ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS transcript TEXT NOT NULL 
 ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS delivery_status TEXT;
 ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS delivered_text TEXT;
 ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS xinzhili_mode TEXT;
+ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS reply_to_message_id BIGINT REFERENCES app_chat_messages(id) ON DELETE SET NULL;
 
 DO $$
 BEGIN
@@ -3550,6 +3551,7 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS idx_app_chat_messages_session ON app_chat_messages(session_id, create_time);
 CREATE INDEX IF NOT EXISTS idx_app_chat_messages_favorite ON app_chat_messages(favorite) WHERE favorite = true;
+CREATE INDEX IF NOT EXISTS idx_app_chat_messages_reply_to ON app_chat_messages(reply_to_message_id) WHERE reply_to_message_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS app_chat_knowledge_traces (
   id BIGSERIAL PRIMARY KEY,

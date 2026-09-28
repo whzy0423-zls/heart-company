@@ -1179,6 +1179,82 @@ func TestDeliverySignalsAssistantDoneAfterFinalAudioSegment(t *testing.T) {
 	if done.TurnID == nil || *done.TurnID != "turn-assistant-done" {
 		t.Fatalf("assistant.done turnId = %v", done.TurnID)
 	}
+	var payload struct {
+		MessageID      int64  `json:"messageId"`
+		ConversationID int64  `json:"conversationId"`
+		Transcript     string `json:"transcript"`
+		Answer         string `json:"answer"`
+	}
+	if err := json.Unmarshal(done.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.MessageID <= 0 || payload.ConversationID != fixture.input("x").ConversationID || payload.Transcript != "请回答我" || payload.Answer == "" {
+		t.Fatalf("assistant.done missing owned recommendation source: %+v", payload)
+	}
+}
+
+func TestAssistantDoneRejectsIncompleteFailedAndProactiveRecommendationSources(t *testing.T) {
+	for _, scenario := range []string{"partial", "failed", "proactive", "terminal", "empty"} {
+		t.Run(scenario, func(t *testing.T) {
+			sink := newFakeSessionSink()
+			s := &session{deps: SessionDependencies{Sink: sink}}
+			turn := &activeTurn{ctx: context.Background(), input: StartTurnInput{TurnID: "x"}, assistantID: 3, answer: "完整回答", recommendationReady: true, conversation: Conversation{ID: 4}}
+			switch scenario {
+			case "partial":
+				turn.recommendationReady = false
+			case "failed":
+				turn.generationErr = errors.New("failed")
+			case "proactive":
+				turn.proactivePrompt = true
+			case "terminal":
+				turn.terminalPrompt = true
+			case "empty":
+				turn.answer = " "
+			}
+			if err := s.sendAssistantDone(turn); err != nil {
+				t.Fatal(err)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(sink.waitControl(t, EventAssistantDone).Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["completed"] == true || payload["messageId"] != nil {
+				t.Fatalf("invalid source metadata=%+v", payload)
+			}
+		})
+	}
+}
+
+func TestRealtimeAssistantIsBoundToExactSavedUserTurn(t *testing.T) {
+	fixture := newSessionFixture(t)
+	fixture.session.Close()
+	paired := &pairedConversationStore{fakeConversationStore: fixture.store}
+	fixture.deps.Conversations = paired
+	fixture.session = NewSession(fixture.deps)
+	input := fixture.input("turn-paired")
+	input.DisableTTS = true
+	if err := fixture.session.StartTurn(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	fixture.asr.emit(ASREvent{Kind: ASREventFinal, Final: "怎样放慢呼吸", Stable: true})
+	fixture.sink.waitControl(t, EventAssistantDone)
+	paired.mu.Lock()
+	defer paired.mu.Unlock()
+	if paired.replyTo != 1 {
+		t.Fatalf("assistant replyTo=%d want saved userID=1", paired.replyTo)
+	}
+}
+
+type pairedConversationStore struct {
+	*fakeConversationStore
+	replyTo int64
+}
+
+func (s *pairedConversationStore) CreateAssistantForUser(ctx context.Context, conversation Conversation, userMessageID int64, content string, mode Mode) (int64, error) {
+	s.mu.Lock()
+	s.replyTo = userMessageID
+	s.mu.Unlock()
+	return s.CreateAssistant(ctx, conversation, content, mode)
 }
 
 func TestDeliveryOrdersMultipleAudioSegmentsBeforeAssistantDone(t *testing.T) {

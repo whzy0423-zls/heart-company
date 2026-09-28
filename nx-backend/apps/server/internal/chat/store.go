@@ -311,7 +311,8 @@ func (s *Store) AcknowledgeSceneAssistant(ctx context.Context, messageID int64, 
 		`UPDATE app_chat_messages
 		 SET content=CASE WHEN length($2) > length(content) THEN $2 ELSE content END,
 		     delivered_text=$2,
-		     delivery_status=CASE WHEN delivery_status='played' THEN 'played' ELSE $3 END
+		     delivery_status=CASE WHEN delivery_status='played' OR $3='played' THEN 'played'
+		       WHEN delivery_status='generated' THEN 'generated' ELSE $3 END
 		 WHERE id=$1`,
 		messageID, deliveredText, status,
 	); err != nil {
@@ -346,7 +347,8 @@ func (s *Store) completeSceneAssistant(ctx context.Context, messageID int64, con
 	defer tx.Rollback()
 	var sessionID int64
 	err = tx.QueryRowContext(ctx,
-		`UPDATE app_chat_messages m SET content=$2, sources=$3
+		`UPDATE app_chat_messages m SET content=$2, sources=$3,
+		 delivery_status=CASE WHEN m.delivery_status='played' THEN 'played' ELSE 'generated' END
 		 FROM app_chat_sessions s
 		 WHERE m.id=$1 AND m.session_id=s.id AND m.role='assistant' AND s.scene='xinzhili_voice'
 		 RETURNING m.session_id`,
