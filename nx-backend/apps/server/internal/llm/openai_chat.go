@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/netguard"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
@@ -117,10 +118,7 @@ func (g *OpenAIChatGenerator) GenerateStream(ctx context.Context, input rag.Gene
 
 	resp, err := chatRequestClient(g.client, input.CompletionTimeout, true).Do(req)
 	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", ctxErr
-		}
-		return "", err
+		return "", netguard.NormalizeHTTPError(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
@@ -319,10 +317,7 @@ func (g *OpenAIChatGenerator) completeWithTimeout(ctx context.Context, body open
 	}
 	resp, err := chatRequestClient(g.client, completionTimeout, false).Do(req)
 	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", ctxErr
-		}
-		return "", err
+		return "", netguard.NormalizeHTTPError(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {

@@ -17,6 +17,22 @@ import (
 // 返回的文档会交给 rag.NewService 再做一轮打分/截断，因此向量检索这里
 // 取稍宽的候选集（topK 命中），既享受语义召回，又保留原有兜底逻辑。
 func (s *Server) retrieveAppDocsForQuery(ctx context.Context, question string, topK int) ([]rag.Document, error) {
+	base, err := s.retrieveLegacyAppDocsForQuery(ctx, question, topK)
+	if err != nil {
+		return nil, err
+	}
+	if s.publicKnowledge == nil {
+		return base, nil
+	}
+	// Managed sources are queried live outside the legacy candidate cache on every fallback path.
+	managed, err := s.publicKnowledge.Search(ctx, question, topK)
+	if err != nil {
+		return base, nil
+	}
+	return append(managed, base...), nil
+}
+
+func (s *Server) retrieveLegacyAppDocsForQuery(ctx context.Context, question string, topK int) ([]rag.Document, error) {
 	base, err := s.appRAGDocuments(ctx)
 	if err != nil {
 		return nil, err

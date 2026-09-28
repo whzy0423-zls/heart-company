@@ -327,7 +327,7 @@ func (s *Store) applyCatalogVersionState(ctx context.Context, catalog BuiltinCat
 			if isCurrent {
 				_ = tx.QueryRowContext(ctx, `SELECT id FROM app_skill_versions WHERE skill_id=$1 AND status='published' AND id<>$2 ORDER BY published_at DESC NULLS LAST,id DESC LIMIT 1`, pair[0], pair[1]).Scan(&replacement)
 			}
-			if _, err := tx.ExecContext(ctx, `UPDATE theory_library_releases SET status='retired',update_time=now() WHERE id=(SELECT theory_release_id FROM app_skill_versions WHERE id=$1)`, pair[1]); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE theory_library_releases SET status='retired',update_time=now() WHERE id=(SELECT theory_release_id FROM app_skill_versions WHERE id=$1) AND status<>'retired'`, pair[1]); err != nil {
 				return ImportResult{}, err
 			}
 			if _, err := tx.ExecContext(ctx, `UPDATE app_skill_versions SET status='retired',update_time=now() WHERE id=$1`, pair[1]); err != nil {
@@ -337,7 +337,11 @@ func (s *Store) applyCatalogVersionState(ctx context.Context, catalog BuiltinCat
 				continue
 			}
 			if replacement.Valid {
-				if _, err := tx.ExecContext(ctx, `UPDATE theory_library_releases SET status='active',activated_at=COALESCE(activated_at,now()),update_time=now() WHERE id=(SELECT theory_release_id FROM app_skill_versions WHERE id=$1)`, replacement.Int64); err != nil {
+				// Falling back to an older published version is a snapshot rollback.
+				if _, err := tx.ExecContext(ctx, `SET LOCAL nine_xing.allow_theory_rollback='on'`); err != nil {
+					return ImportResult{}, err
+				}
+				if _, err := tx.ExecContext(ctx, `UPDATE theory_library_releases SET status='active',update_time=now() WHERE id=(SELECT theory_release_id FROM app_skill_versions WHERE id=$1)`, replacement.Int64); err != nil {
 					return ImportResult{}, err
 				}
 				if _, err := tx.ExecContext(ctx, `UPDATE theory_libraries SET current_version=release.version,status='enabled',update_time=now() FROM theory_library_releases release JOIN app_skill_versions version ON version.theory_release_id=release.id WHERE version.id=$1 AND theory_libraries.id=release.library_id`, replacement.Int64); err != nil {

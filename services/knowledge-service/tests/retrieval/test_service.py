@@ -82,3 +82,15 @@ async def test_postgres_hybrid_retriever_keeps_ranked_vector_set_when_best_match
     result = await retriever(query)
 
     assert [item.id for item in result] == ["strong-semantic", "supporting-semantic"]
+
+
+@pytest.mark.asyncio
+async def test_retriever_without_embedding_and_failed_embedding_keep_lexical_results() -> None:
+    class BrokenEmbedding:
+        def embed(self, _texts):
+            raise RuntimeError("embedding endpoint unavailable")
+
+    query = RetrievalQuery(requestId="req",query="问题",scene="app_chat",scope=KnowledgeScope(public=True))
+    for embedding in (None, BrokenEmbedding()):
+        result = await PostgresHybridRetriever(RepositoryStub(), embedding)(query)
+        assert [item.id for item in result] == ["both", "lexical"]

@@ -972,6 +972,35 @@ CREATE TABLE IF NOT EXISTS rag_documents (
 
 -- ============ LangChain 知识服务文档 ============
 -- release_id 由 Go 网关解析并作为不可变检索范围传入；public 文档必须为 NULL。
+CREATE TABLE IF NOT EXISTS public_knowledge_sources (
+  id               TEXT PRIMARY KEY,
+  dataset_id       TEXT NOT NULL,
+  source_kind      TEXT NOT NULL CHECK (source_kind IN ('book','story')),
+  source_record_id BIGINT NOT NULL,
+  title            TEXT NOT NULL,
+  category         TEXT NOT NULL DEFAULT '',
+  file_format      TEXT NOT NULL DEFAULT '',
+  extract_status   TEXT NOT NULL DEFAULT '',
+  source_chunks    INT NOT NULL DEFAULT 0 CHECK (source_chunks >= 0),
+  text_chars       BIGINT NOT NULL DEFAULT 0 CHECK (text_chars >= 0),
+  enabled          BOOLEAN NOT NULL DEFAULT false,
+  quality_status   TEXT NOT NULL DEFAULT 'pending' CHECK (quality_status IN ('pending','ready','needs_review')),
+  imported_chunks  INT NOT NULL DEFAULT 0 CHECK (imported_chunks >= 0),
+  metadata         JSONB NOT NULL DEFAULT '{}'::jsonb,
+  create_time      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  update_time      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (dataset_id, source_kind, source_record_id)
+);
+CREATE INDEX IF NOT EXISTS idx_public_knowledge_sources_filters
+  ON public_knowledge_sources(dataset_id, category, enabled, quality_status, id);
+
+CREATE TABLE IF NOT EXISTS public_knowledge_import_batches (
+  batch_id    TEXT PRIMARY KEY,
+  file_hash   TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'completed' CHECK (status IN ('completed','rolled_back')),
+  create_time TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS knowledge_documents (
   id              TEXT PRIMARY KEY,
   library_kind    TEXT NOT NULL CHECK (library_kind IN ('public','theory','enneagram','skill')),
@@ -992,12 +1021,44 @@ CREATE TABLE IF NOT EXISTS knowledge_documents (
          (library_kind <> 'public' AND release_id IS NOT NULL))
 );
 
+ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS public_source_id TEXT REFERENCES public_knowledge_sources(id);
+ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS import_batch_id TEXT;
+ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS search_text TEXT NOT NULL DEFAULT '';
+ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS public_search_vector TSVECTOR;
+
+-- Replace the historical global dedup index once; independent sources retain their own passages.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_index i
+             WHERE i.indexrelid = to_regclass('uq_knowledge_documents_embedding_identity') AND i.indpred IS NULL) THEN
+    DROP INDEX uq_knowledge_documents_embedding_identity;
+  END IF;
+END;
+$$;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_documents_embedding_identity
-  ON knowledge_documents(content_hash, embedding_model, index_version, library_kind, COALESCE(release_id, 0));
+  ON knowledge_documents(content_hash, embedding_model, index_version, library_kind, COALESCE(release_id, 0))
+  WHERE public_source_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_documents_managed_identity
+  ON knowledge_documents(public_source_id, content_hash, index_version) WHERE public_source_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_public_source
+  ON knowledge_documents(public_source_id, id) WHERE public_source_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_import_batch
+  ON knowledge_documents(import_batch_id) WHERE import_batch_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_knowledge_documents_managed_search_cache
+  ON knowledge_documents USING gin (COALESCE(public_search_vector, to_tsvector('simple', search_text))) WHERE public_source_id IS NOT NULL;
+DROP INDEX IF EXISTS idx_knowledge_documents_managed_lexical;
 CREATE INDEX IF NOT EXISTS idx_knowledge_documents_scope
   ON knowledge_documents(library_kind, release_id, enneagram_type, safety_level);
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_index i
+             WHERE i.indexrelid = to_regclass('idx_knowledge_documents_lexical') AND i.indpred IS NULL) THEN
+    DROP INDEX idx_knowledge_documents_lexical;
+  END IF;
+END;
+$$;
 CREATE INDEX IF NOT EXISTS idx_knowledge_documents_lexical
-  ON knowledge_documents USING gin (to_tsvector('simple', title || ' ' || content));
+  ON knowledge_documents USING gin (to_tsvector('simple', title || ' ' || content)) WHERE public_source_id IS NULL;
 
 -- ============ 阅读管理（H5 文章）============
 -- 后台维护、H5 读书页展示的文章。正文为 Markdown 文本。
@@ -2815,6 +2876,18 @@ BEGIN
   WHERE extension.extname = 'pg_trgm';
 
   IF pg_trgm_schema IS NOT NULL THEN
+    BEGIN
+      EXECUTE format($trgm$
+        CREATE INDEX IF NOT EXISTS idx_knowledge_documents_legacy_title_substring
+          ON knowledge_documents USING gin (title %I.gin_trgm_ops) WHERE public_source_id IS NULL
+      $trgm$, pg_trgm_schema);
+      EXECUTE format($trgm$
+        CREATE INDEX IF NOT EXISTS idx_knowledge_documents_legacy_content_substring
+          ON knowledge_documents USING gin (content %I.gin_trgm_ops) WHERE public_source_id IS NULL
+      $trgm$, pg_trgm_schema);
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'Legacy knowledge substring indexes unavailable: %', SQLERRM;
+    END;
     BEGIN
       EXECUTE format($trgm$
         CREATE INDEX IF NOT EXISTS idx_theory_chunks_lexical_trgm

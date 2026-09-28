@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const homeSource = readFileSync(resolve(__dirname, './Home.jsx'), 'utf8')
+const appSource = readFileSync(resolve(__dirname, '../App.jsx'), 'utf8')
 const siteConfig = JSON.parse(readFileSync(resolve(__dirname, '../../../shared/site-config.json'), 'utf8'))
 
 test('places the App download section immediately after Hero and before the teacher teaser', () => {
@@ -24,16 +25,24 @@ test('adds App download entry points to both navigation menus and Hero', () => {
   for (const collection of [siteConfig.navigation.main, siteConfig.navigation.drawer]) {
     assert.ok(collection.some((item) => (
       item.label === '下载 App'
-      && item.to === '/#download-app'
-      && item.type === 'hash'
+      && item.to === '/app'
+      && item.type === 'route'
     )))
   }
 
   assert.ok(siteConfig.home.hero.actions.some((action) => (
     action.label === '下载 App'
-    && action.to === '#download-app'
-    && action.type === 'anchor'
+    && action.to === '/app'
+    && action.type === 'route'
   )))
+})
+
+test('routes App download navigation to a dedicated lazy-loaded page', () => {
+  assert.match(appSource, /const AppDownload = lazy\(\(\) => import\('\.\/pages\/AppDownload'\)\)/)
+  assert.match(appSource, /<Route path="app" element=\{lazyRoute\(<AppDownload \/>\)\} \/>/)
+  const pageSource = readFileSync(resolve(__dirname, './AppDownload.jsx'), 'utf8')
+  assert.match(pageSource, /import AppDownloadSection from '\.\.\/components\/AppDownloadSection'/)
+  assert.match(pageSource, /<AppDownloadSection \/>/)
 })
 
 test('defines complete editable App download copy without release metadata', () => {

@@ -56,6 +56,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/netguard"
 	"nine-xing/nx-backend/apps/server/internal/observability"
 	"nine-xing/nx-backend/apps/server/internal/profilecalibration"
+	"nine-xing/nx-backend/apps/server/internal/publicknowledge"
 	"nine-xing/nx-backend/apps/server/internal/push"
 	"nine-xing/nx-backend/apps/server/internal/quiz"
 	"nine-xing/nx-backend/apps/server/internal/rag"
@@ -128,6 +129,7 @@ type Server struct {
 	storyConfig                modelconfig.StoryGenerationConfig
 	analysisGen                *llm.MiniMaxGenerator
 	ragDocs                    ragDocumentStore
+	publicKnowledge            publicKnowledgeStore
 	ragVec                     *ragstore.Store
 	embedder                   *embedding.Client
 	ragCache                   *miniappRAGCache
@@ -444,6 +446,9 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	s.ragGen = nil
 	s.analysisGen = llm.NewMiniMaxGenerator(modelconfig.Config{}.ApplyAnalysis(env.MiniMax))
 	s.ragDocs = ragstore.NewStore(database)
+	if database != nil {
+		s.publicKnowledge = publicknowledge.NewStore(database)
+	}
 	s.articles = articlestore.NewStore(database)
 	s.mindquotes = mindquote.NewStore(database)
 	// 听书：复用 voice 的 MiniMax 客户端与 upload-assets 存储生成并缓存音频。
@@ -1264,6 +1269,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/video/projects-compose-status/", s.method(http.MethodGet, s.requirePermission("Video:Project:Manage", s.composeStatus)))
 	s.mux.HandleFunc("/api/rag/documents", s.requirePermission("RAG:Knowledge:Manage", s.ragDocuments))
 	s.mux.HandleFunc("/api/rag/documents/", s.requirePermission("RAG:Knowledge:Manage", s.ragDocumentByID))
+	registerPublicKnowledgeAdminRoutes(s.mux, s.requirePermission, s)
 	s.mux.HandleFunc("/api/articles", s.requirePermission("Reading:Article:Manage", s.adminArticles))
 	s.mux.HandleFunc("/api/articles/", s.requirePermission("Reading:Article:Manage", s.adminArticleByID))
 	// 测评题库管理 + 命运卡片查看（后台）

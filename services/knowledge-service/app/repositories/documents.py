@@ -9,6 +9,7 @@ from psycopg.types.json import Jsonb
 
 from app.domain.documents import RetrievedDocument
 from app.domain.queries import KnowledgeScope
+from app.retrieval.tokenization import search_tokens
 
 
 @dataclass(frozen=True)
@@ -60,7 +61,7 @@ class PostgresDocumentRepository:
             cursor.execute(
                 """SELECT id,content_hash,embedding_model,index_version
                    FROM knowledge_documents
-                   WHERE id = ANY(%s::text[]) AND embedding IS NOT NULL""",
+                   WHERE id = ANY(%s::text[]) AND embedding IS NOT NULL AND public_source_id IS NULL""",
                 (ids,),
             )
             existing = {row[0]: row[1:] for row in cursor.fetchall()}
@@ -72,7 +73,7 @@ class PostgresDocumentRepository:
             cursor.execute(
                 """SELECT content_hash,embedding_model,index_version,library_kind,COALESCE(release_id,0)
                    FROM knowledge_documents
-                   WHERE content_hash = ANY(%s::text[]) AND embedding IS NOT NULL""",
+                   WHERE content_hash = ANY(%s::text[]) AND embedding IS NOT NULL AND public_source_id IS NULL""",
                 ([record.content_hash for record in candidates],),
             )
             known_identities = set(cursor.fetchall())
@@ -100,7 +101,8 @@ class PostgresDocumentRepository:
                      title=EXCLUDED.title,content=EXCLUDED.content,source=EXCLUDED.source,
                      locator=EXCLUDED.locator,metadata=EXCLUDED.metadata,content_hash=EXCLUDED.content_hash,
                      embedding_model=EXCLUDED.embedding_model,index_version=EXCLUDED.index_version,
-                     embedding=EXCLUDED.embedding,update_time=now()""",
+                     embedding=EXCLUDED.embedding,update_time=now()
+                   WHERE knowledge_documents.public_source_id IS NULL""",
                 [
                     (
                         record.id,
@@ -130,7 +132,7 @@ class PostgresDocumentRepository:
             cursor.execute(
                 """SELECT id,content_hash,embedding_model,index_version
                    FROM knowledge_documents
-                   WHERE id = ANY(%s::text[]) AND embedding IS NOT NULL""",
+                   WHERE id = ANY(%s::text[]) AND embedding IS NOT NULL AND public_source_id IS NULL""",
                 (ids,),
             )
             return {row[0]: (row[1], row[2], row[3]) for row in cursor.fetchall()}
@@ -142,7 +144,7 @@ class PostgresDocumentRepository:
             cursor.execute(
                 """SELECT content_hash,embedding_model,index_version,library_kind,COALESCE(release_id,0)
                    FROM knowledge_documents
-                   WHERE content_hash = ANY(%s::text[]) AND embedding IS NOT NULL""",
+                   WHERE content_hash = ANY(%s::text[]) AND embedding IS NOT NULL AND public_source_id IS NULL""",
                 (content_hashes,),
             )
             return set(cursor.fetchall())
@@ -152,7 +154,7 @@ class PostgresDocumentRepository:
             cursor.execute("DELETE FROM knowledge_documents WHERE index_version=%s", (index_version,))
 
     def count_missing_embeddings(self, *, library: str | None = None) -> int:
-        where = "embedding IS NULL"
+        where = "embedding IS NULL AND " + _SOURCE_GATE_SQL
         params: tuple[Any, ...] = ()
         if library:
             where += " AND library_kind=%s"
@@ -163,7 +165,7 @@ class PostgresDocumentRepository:
         return int(row[0]) if row else 0
 
     def load_missing_embeddings(self, *, library: str | None = None, limit: int) -> list[PendingEmbeddingDocument]:
-        where = "embedding IS NULL"
+        where = "embedding IS NULL AND " + _SOURCE_GATE_SQL
         params: list[Any] = []
         if library:
             where += " AND library_kind=%s"
@@ -193,7 +195,9 @@ class PostgresDocumentRepository:
         with psycopg.connect(self.database_url) as connection, connection.cursor() as cursor:
             cursor.executemany(
                 """UPDATE knowledge_documents
-                   SET embedding_model=%s,index_version=%s,embedding=%s::vector,update_time=now()
+                   SET embedding_model=%s,
+                       index_version=CASE WHEN public_source_id IS NULL THEN %s ELSE index_version END,
+                       embedding=%s::vector,update_time=now()
                    WHERE id=%s AND embedding IS NULL""",
                 [
                     (model, index_version, _vector_literal(vector), document.id)
@@ -212,15 +216,25 @@ class PostgresDocumentRepository:
         limit: int,
     ) -> list[RetrievedDocument]:
         params = _scope_params(scope, enneagram_types, max_safety_level)
-        params.update({"query": query, "limit": limit})
+        params.update({"query": query, "managed_query": " | ".join(search_tokens(query).split()[:64]), "limit": limit})
+        params["enabled_source_ids"] = None if scope.public else []
         return self._query(
-            """SELECT id,content,library_kind,release_id,source,locator,metadata,
+            """SELECT * FROM ((SELECT id,content,library_kind,release_id,source,locator,metadata,
                       CASE WHEN title ILIKE '%%' || %(query)s || '%%' THEN 1.0 ELSE 0.7 END AS score
                FROM knowledge_documents
-               WHERE """
+               WHERE public_source_id IS NULL AND """
             + _SCOPE_SQL
             + """ AND (title ILIKE '%%' || %(query)s || '%%' OR content ILIKE '%%' || %(query)s || '%%')
-               ORDER BY score DESC, id LIMIT %(limit)s""",
+               ORDER BY score DESC,id LIMIT %(limit)s)
+               UNION ALL
+               (SELECT id,content,library_kind,release_id,source,locator,metadata,
+                   ts_rank_cd(COALESCE(public_search_vector,to_tsvector('simple',search_text)),to_tsquery('simple',%(managed_query)s)) AS score
+                FROM knowledge_documents WHERE public_source_id IS NOT NULL
+                AND public_source_id = ANY(%(enabled_source_ids)s::text[]) AND """
+            + _MANAGED_SCOPE_SQL
+            + """ AND COALESCE(public_search_vector,to_tsvector('simple',search_text)) @@ to_tsquery('simple',%(managed_query)s)
+                ORDER BY score DESC,id LIMIT %(limit)s)) matches
+                ORDER BY score DESC,id LIMIT %(limit)s""",
             params,
         )
 
@@ -249,6 +263,13 @@ class PostgresDocumentRepository:
 
     def _query(self, sql: str, params: dict[str, Any]) -> list[RetrievedDocument]:
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection, connection.cursor() as cursor:
+            if "enabled_source_ids" in params and params["enabled_source_ids"] is None:
+                # A constant source set permits indexed filtering; the live gate still applies.
+                cursor.execute("SELECT id FROM public_knowledge_sources WHERE enabled ORDER BY id")
+                params = {**params, "enabled_source_ids": [row["id"] for row in cursor.fetchall()]}
+            if "enabled_source_ids" in params:
+                # Exact GIN bitmaps avoid expensive TOAST rechecks on the full corpus.
+                cursor.execute("SET LOCAL work_mem='64MB'")
             cursor.execute(sql, params)
             rows = cursor.fetchall()
         return [
@@ -266,7 +287,13 @@ class PostgresDocumentRepository:
         ]
 
 
-_SCOPE_SQL = """safety_level <= %(max_safety_level)s AND (
+_SOURCE_EXISTS_SQL = """EXISTS (
+    SELECT 1 FROM public_knowledge_sources s WHERE s.id=knowledge_documents.public_source_id AND s.enabled
+)"""
+
+_SOURCE_GATE_SQL = "(public_source_id IS NULL OR " + _SOURCE_EXISTS_SQL + ")"
+
+_LIBRARY_SCOPE_SQL = """ AND safety_level <= %(max_safety_level)s AND (
     (%(public)s AND library_kind='public' AND release_id IS NULL) OR
     (library_kind='theory' AND release_id = ANY(%(theory_release_ids)s::bigint[])) OR
     (library_kind='enneagram' AND release_id = ANY(%(enneagram_release_ids)s::bigint[]) AND
@@ -274,6 +301,10 @@ _SCOPE_SQL = """safety_level <= %(max_safety_level)s AND (
     (library_kind='skill' AND
       (release_id = ANY(%(skill_release_ids)s::bigint[]) OR release_id=%(skill_release_id)s))
 )"""
+
+_SCOPE_SQL = _SOURCE_GATE_SQL + _LIBRARY_SCOPE_SQL
+# Managed rows need no nullable branch; direct EXISTS permits an indexed semi-join.
+_MANAGED_SCOPE_SQL = _SOURCE_EXISTS_SQL + _LIBRARY_SCOPE_SQL
 
 
 def _scope_params(scope: KnowledgeScope, enneagram_types: set[int], max_safety_level: int) -> dict[str, Any]:

@@ -24,18 +24,18 @@ async def fixture_retriever(_query: RetrievalQuery) -> list[RetrievedDocument]:
 def get_retriever() -> Retriever:
     settings = get_settings()
     api_key = settings.embedding_api_key.get_secret_value()
-    if settings.database_url and settings.embedding_api_base and api_key and settings.embedding_model:
+    if settings.database_url:
         repository = PostgresDocumentRepository(settings.database_url)
-        if repository.vector_dimension() != settings.embedding_dimension:
-            raise RuntimeError("configured embedding dimension does not match knowledge_documents vector dimension")
-        return PostgresHybridRetriever(
-            repository,
-            OpenAICompatibleEmbeddingClient(
+        embedding = None
+        if settings.embedding_api_base and api_key and settings.embedding_model:
+            if repository.vector_dimension() != settings.embedding_dimension:
+                raise RuntimeError("configured embedding dimension does not match knowledge_documents vector dimension")
+            embedding = OpenAICompatibleEmbeddingClient(
                 settings.embedding_api_base,
                 api_key,
                 settings.embedding_model,
-            ),
-        )
+            )
+        return PostgresHybridRetriever(repository, embedding)
     return fixture_retriever
 
 

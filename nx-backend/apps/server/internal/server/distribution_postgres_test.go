@@ -67,6 +67,7 @@ func TestDistributionPostgresAdminAgentListIncludesAppUserIdentity(t *testing.T)
 	var body struct {
 		Data struct {
 			Items []struct {
+				AppUserID       int64  `json:"appUserId"`
 				AppUserAccount  string `json:"appUserAccount"`
 				AppUserPhone    string `json:"appUserPhone"`
 				AppUserNickname string `json:"appUserNickname"`
@@ -79,10 +80,16 @@ func TestDistributionPostgresAdminAgentListIncludesAppUserIdentity(t *testing.T)
 	if len(body.Data.Items) == 0 {
 		t.Fatal("expected at least one agent")
 	}
-	got := body.Data.Items[0]
-	if got.AppUserAccount != "agent-account" || got.AppUserPhone != "13800138000" || got.AppUserNickname != "代理昵称" {
-		t.Fatalf("identity=%+v", got)
+	for _, got := range body.Data.Items {
+		if got.AppUserID != 100 {
+			continue
+		}
+		if got.AppUserAccount != "agent-account" || got.AppUserPhone != "13800138000" || got.AppUserNickname != "代理昵称" {
+			t.Fatalf("identity=%+v", got)
+		}
+		return
 	}
+	t.Fatal("target app user missing from agent list")
 }
 
 func TestDistributionPostgresCommissionSnapshotAndReplay(t *testing.T) {
@@ -545,7 +552,11 @@ func TestDistributionPostgresPostRegistrationBindIsDisabled(t *testing.T) {
 
 func TestDistributionPostgresSMSInviteOnlyBindsNewAccounts(t *testing.T) {
 	db := distributionDatabase(t)
-	if _, err := db.Exec(`ALTER TABLE app_users ADD COLUMN phone text UNIQUE; CREATE SEQUENCE sms_fixture_user_id START 1000; ALTER TABLE app_users ALTER COLUMN id SET DEFAULT nextval('sms_fixture_user_id'); UPDATE app_users SET phone='existing' WHERE id=100`); err != nil {
+	if _, err := db.Exec(`UPDATE app_users SET phone='fixture-' || id::text;
+		ALTER TABLE app_users ADD CONSTRAINT sms_fixture_phone_unique UNIQUE(phone);
+		CREATE SEQUENCE sms_fixture_user_id START 1000;
+		ALTER TABLE app_users ALTER COLUMN id SET DEFAULT nextval('sms_fixture_user_id');
+		UPDATE app_users SET phone='existing' WHERE id=100`); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()

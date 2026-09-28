@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from typing import Protocol
 
 from app.domain.documents import RetrievedDocument
@@ -20,13 +21,13 @@ class EmbeddingProvider(Protocol):
 class PostgresHybridRetriever:
     method = "hybrid"
 
-    def __init__(self, repository: SearchRepository, embedding: EmbeddingProvider) -> None:
+    def __init__(self, repository: SearchRepository, embedding: EmbeddingProvider | None = None) -> None:
         self.repository = repository
         self.embedding = embedding
+        self.method = "hybrid" if embedding else "lexical"
 
     async def __call__(self, query: RetrievalQuery) -> list[RetrievedDocument]:
         types = {query.profile.main_type} if query.profile.main_type else set()
-        vector = (await asyncio.to_thread(self.embedding.embed, [query.query]))[0]
         lexical_task = asyncio.to_thread(
             self.repository.lexical_search,
             query.query,
@@ -35,15 +36,20 @@ class PostgresHybridRetriever:
             max_safety_level=0,
             limit=query.retrieval.lexical_k,
         )
-        vector_task = asyncio.to_thread(
-            self.repository.vector_search,
-            vector,
-            query.scope,
-            enneagram_types=types,
-            max_safety_level=0,
-            limit=query.retrieval.vector_k,
-        )
-        lexical, semantic = await asyncio.gather(lexical_task, vector_task)
+        async def semantic_search():
+            if self.embedding is None:
+                return []
+            try:
+                vector = (await asyncio.to_thread(self.embedding.embed, [query.query]))[0]
+                return await asyncio.to_thread(
+                    self.repository.vector_search, vector, query.scope,
+                    enneagram_types=types, max_safety_level=0, limit=query.retrieval.vector_k,
+                )
+            except Exception:
+                logging.getLogger(__name__).warning("semantic retrieval failed; continuing with lexical search", exc_info=True)
+                return []
+
+        lexical, semantic = await asyncio.gather(lexical_task, semantic_search())
         if not semantic or semantic[0].score < query.retrieval.min_vector_score:
             semantic = []
         fused = reciprocal_rank_fusion(lexical, semantic)

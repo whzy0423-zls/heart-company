@@ -684,6 +684,7 @@ func (p *openAICompatibleTTS) Synthesize(ctx context.Context, cfg TTSConfig, tex
 
 	resp, err := p.client.Do(req)
 	if err != nil {
+		err = netguard.NormalizeHTTPError(ctx, err)
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, "", ErrTTSTimeout
 		}
@@ -703,6 +704,7 @@ func (p *openAICompatibleTTS) Synthesize(ctx context.Context, cfg TTSConfig, tex
 	}
 	audio, err := io.ReadAll(io.LimitReader(resp.Body, maxTTSSegmentBytes+1))
 	if err != nil {
+		err = netguard.NormalizeHTTPError(ctx, err)
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, "", ErrTTSTimeout
 		}

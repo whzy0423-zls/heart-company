@@ -79,6 +79,104 @@ def test_upsert_repairs_matching_rows_with_null_embeddings(monkeypatch) -> None:
     assert all("embedding IS NOT NULL" in query for query in select_queries)
 
 
+def test_lexical_and_vector_have_live_source_gate_and_indexed_managed_search(monkeypatch):
+    repository = PostgresDocumentRepository("postgres://fixture")
+    queries = []
+    monkeypatch.setattr(repository,"_query",lambda sql,params: queries.append((sql,params)) or [])
+    monkeypatch.setattr(repository,"vector_dimension",lambda:2)
+    scope = KnowledgeScope(public=True)
+    repository.lexical_search("情绪管理 RAG",scope,enneagram_types=set(),max_safety_level=0,limit=10)
+    repository.vector_search([0,1],scope,enneagram_types=set(),max_safety_level=0,limit=10)
+    assert all("public_source_id IS NULL OR EXISTS" in sql and "s.enabled" in sql for sql,_ in queries)
+    assert "to_tsvector('simple',search_text)" in queries[0][0]
+    assert "AND COALESCE(public_search_vector,to_tsvector('simple',search_text)) @@" in queries[0][0]
+    assert "public_source_id IS NULL AND" in queries[0][0]
+    assert "UNION ALL" in queries[0][0] and "ts_rank_cd" in queries[0][0]
+    assert "public_source_id = ANY(%(enabled_source_ids)s::text[])" in queries[0][0]
+    assert queries[0][1]["managed_query"] == "情绪 | 绪管 | 管理 | rag"
+    repository.lexical_search(" ".join(str(index) for index in range(100)),scope,enneagram_types=set(),max_safety_level=0,limit=10)
+    assert len(queries[-1][1]["managed_query"].split(" | ")) == 64
+
+
+def test_lexical_source_ids_are_refreshed_on_each_query_connection(monkeypatch):
+    class SourceCursor(RecordingCursor):
+        def __init__(self, source_id):
+            super().__init__()
+            self.source_id = source_id
+            self.params = []
+
+        def execute(self, query, params=None):
+            super().execute(query, params)
+            self.params.append(params)
+
+        def fetchall(self):
+            if "SELECT id FROM public_knowledge_sources" in self.queries[-1]:
+                return [{"id": self.source_id}]
+            return []
+
+    cursors = [SourceCursor("enabled-a"), SourceCursor("enabled-b")]
+    connections = iter(RecordingConnection(cursor) for cursor in cursors)
+    monkeypatch.setattr(documents_module.psycopg, "connect", lambda *_args, **_kwargs: next(connections))
+    repository = PostgresDocumentRepository("postgres://fixture")
+    for _ in cursors:
+        repository.lexical_search("情绪", KnowledgeScope(public=True), enneagram_types=set(), max_safety_level=0, limit=10)
+    for cursor in cursors:
+        assert "WHERE enabled ORDER BY id" in cursor.queries[0]
+        assert cursor.params[-1]["enabled_source_ids"] == [cursor.source_id]
+        assert "s.enabled" in cursor.queries[-1]
+
+
+def test_managed_lexical_gate_can_be_planned_as_a_semi_join(monkeypatch):
+    repository = PostgresDocumentRepository("postgres://fixture")
+    queries = []
+    monkeypatch.setattr(repository, "_query", lambda sql, params: queries.append(sql) or [])
+    repository.lexical_search(
+        "growth", KnowledgeScope(public=True),
+        enneagram_types=set(), max_safety_level=0, limit=10,
+    )
+
+    legacy, managed = queries[0].split("UNION ALL", 1)
+    assert "public_source_id IS NULL OR EXISTS" in legacy
+    assert "public_source_id IS NULL OR EXISTS" not in managed
+    assert "EXISTS (" in managed and "s.enabled" in managed
+    assert "public_source_id = ANY(%(enabled_source_ids)s::text[])" in managed
+
+
+def test_lexical_bitmap_budget_is_local_to_its_query_connection(monkeypatch):
+    lexical_cursor, vector_cursor = RecordingCursor(), RecordingCursor()
+    connections = iter(RecordingConnection(cursor) for cursor in (lexical_cursor, vector_cursor))
+    monkeypatch.setattr(documents_module.psycopg, "connect", lambda *_args, **_kwargs: next(connections))
+    repository = PostgresDocumentRepository("postgres://fixture")
+    monkeypatch.setattr(repository, "vector_dimension", lambda: 2)
+    scope = KnowledgeScope(public=True)
+
+    repository.lexical_search("growth", scope, enneagram_types=set(), max_safety_level=0, limit=10)
+    repository.vector_search([0, 1], scope, enneagram_types=set(), max_safety_level=0, limit=10)
+
+    assert lexical_cursor.queries[-2] == "SET LOCAL work_mem='64MB'"
+    assert all("work_mem" not in query for query in vector_cursor.queries)
+
+
+def test_embedding_backfill_preserves_managed_cleaning_version(monkeypatch):
+    from app.repositories.documents import PendingEmbeddingDocument
+    cursor = RecordingCursor()
+    cursor.rowcount = 1
+    monkeypatch.setattr(documents_module.psycopg,"connect",lambda *_args,**_kwargs:RecordingConnection(cursor))
+    repository = PostgresDocumentRepository("postgres://fixture")
+    repository.update_embeddings([PendingEmbeddingDocument("managed","title","content")],[[0,1]],model="model",index_version="embedding-v2")
+    assert "CASE WHEN public_source_id IS NULL" in cursor.queries[-1]
+
+
+def test_embedding_backfill_does_not_load_disabled_managed_sources(monkeypatch):
+    cursor = RecordingCursor()
+    cursor.fetchone = lambda:(0,)
+    monkeypatch.setattr(documents_module.psycopg,"connect",lambda *_args,**_kwargs:RecordingConnection(cursor))
+    repository = PostgresDocumentRepository("postgres://fixture")
+    assert repository.count_missing_embeddings(library="public") == 0
+    assert repository.load_missing_embeddings(library="public",limit=20) == []
+    assert all("public_source_id IS NULL OR EXISTS" in sql and "s.enabled" in sql for sql in cursor.queries)
+
+
 @pytest.mark.skipif(not DATABASE_URL, reason="TEST_DATABASE_URL is not configured")
 def test_postgres_repository_upserts_idempotently_and_filters_scope() -> None:
     repository = PostgresDocumentRepository(DATABASE_URL)

@@ -229,7 +229,7 @@ func TestTheoryVerticalSliceSeedExecutesTwice(t *testing.T) {
 		UPDATE theory_library_releases release
 		SET status='retired', update_time=now()
 		FROM theory_libraries library
-		WHERE release.library_id=library.id AND library.key='xinzhili' AND release.version=1;
+		WHERE release.library_id=library.id AND library.key='xinzhili' AND release.version=1 AND release.status='active';
 		INSERT INTO theory_library_releases (
 			library_id, version, status, embedding_model, embedding_dimensions, retrieval_mode,
 			index_version, card_count, chunk_count, build_error, activated_at

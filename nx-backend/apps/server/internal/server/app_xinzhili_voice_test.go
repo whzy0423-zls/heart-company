@@ -525,6 +525,7 @@ func TestAppXinzhiliVoiceTurnUsesLayeredKnowledgeForPrimaryCard(t *testing.T) {
 func TestAppXinzhiliVoiceTurnFiltersRestrictedTermsBeforeTextAudioAndPersistence(t *testing.T) {
 	var savedAnswer string
 	var synthesized []string
+	var synthesizedMu sync.Mutex
 	s := newSuccessfulXinzhiliVoiceServer(t)
 	s.ragGen = xinzhiliStreamingGeneratorFunc(func(_ context.Context, _ rag.GenerateInput, emit rag.StreamEmitter) (string, error) {
 		chunks := []string{"当前通过 C o d e x C L I 运行。", "你可以继续描述困扰。", "再慢慢说清楚。"}
@@ -536,7 +537,9 @@ func TestAppXinzhiliVoiceTurnFiltersRestrictedTermsBeforeTextAudioAndPersistence
 		return strings.Join(chunks, ""), nil
 	})
 	s.xinzhiliSynthesize = func(_ context.Context, text string) ([]byte, string, error) {
+		synthesizedMu.Lock()
 		synthesized = append(synthesized, text)
+		synthesizedMu.Unlock()
 		return []byte("audio:" + text), "audio/mpeg", nil
 	}
 	s.xinzhiliSavePair = func(_ context.Context, _ int64, _, answer string, _ json.RawMessage) (int64, error) {

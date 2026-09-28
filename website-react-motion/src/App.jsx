@@ -20,6 +20,7 @@ const MindQuotes = lazy(() => import('./pages/MindQuotes'))
 const MindQuoteDetail = lazy(() => import('./pages/MindQuoteDetail'))
 const Types = lazy(() => import('./pages/Types'))
 const Signup = lazy(() => import('./pages/Signup'))
+const AppDownload = lazy(() => import('./pages/AppDownload'))
 
 const routeFallback = <div className="route-loading" role="status" aria-live="polite">加载中…</div>
 
@@ -53,6 +54,7 @@ export default function App() {
         <Route path="mind-quotes/:id" element={lazyRoute(<MindQuoteDetail />)} />
         <Route path="types" element={lazyRoute(<Types />)} />
         <Route path="signup" element={lazyRoute(<Signup />)} />
+        <Route path="app" element={lazyRoute(<AppDownload />)} />
         <Route path="*" element={<Home />} />
       </Route>
     </Routes>

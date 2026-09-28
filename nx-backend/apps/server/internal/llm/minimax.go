@@ -152,7 +152,7 @@ func (g *MiniMaxGenerator) Generate(ctx context.Context, input rag.GenerateInput
 
 	resp, err := chatRequestClient(g.client, input.CompletionTimeout, false).Do(req)
 	if err != nil {
-		return "", err
+		return "", netguard.NormalizeHTTPError(ctx, err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
@@ -208,10 +208,7 @@ func (g *MiniMaxGenerator) GenerateStream(ctx context.Context, input rag.Generat
 
 	resp, err := chatRequestClient(g.client, input.CompletionTimeout, true).Do(req)
 	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", ctxErr
-		}
-		return "", err
+		return "", netguard.NormalizeHTTPError(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

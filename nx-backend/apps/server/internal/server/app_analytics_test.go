@@ -345,6 +345,8 @@ func (c *appAnalyticsTestConn) ExecContext(ctx context.Context, query string, ar
 }
 
 func (c *appAnalyticsTestConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	appAnalyticsCaptureMu.Lock()
+	defer appAnalyticsCaptureMu.Unlock()
 	appAnalyticsLastQuery = strings.Join(strings.Fields(query), " ")
 	if c.mode == "overview_error" {
 		return nil, errors.New("query failed")
@@ -489,8 +491,11 @@ var appAnalyticsRecentUsersLimit int
 var appAnalyticsRecentExtractedLimit int
 var appAnalyticsLastQuery string
 var appAnalyticsOverviewUserCountQuery string
+var appAnalyticsCaptureMu sync.Mutex
 
 func resetAppAnalyticsOverviewCaptures() {
+	appAnalyticsCaptureMu.Lock()
+	defer appAnalyticsCaptureMu.Unlock()
 	appAnalyticsLastActiveWindowDays = 0
 	appAnalyticsRecentUsersLimit = 0
 	appAnalyticsRecentExtractedLimit = 0

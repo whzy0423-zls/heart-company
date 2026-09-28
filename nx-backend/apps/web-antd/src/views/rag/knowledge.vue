@@ -17,6 +17,7 @@ import {
   Select,
   Space,
   Table,
+  Tabs,
   Tag,
 } from 'ant-design-vue';
 
@@ -29,6 +30,8 @@ import {
 } from '#/api';
 import EllipsisTooltip from '#/components/ellipsis-tooltip/ellipsis-tooltip.vue';
 import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
+
+import PublicSources from './public-sources.vue';
 
 const loading = ref(false);
 const saving = ref(false);
@@ -180,7 +183,6 @@ function removeDocument(record: RAGDocument) {
   });
 }
 
-
 async function handleReindex() {
   reindexing.value = true;
   try {
@@ -225,95 +227,105 @@ onMounted(load);
     description="维护 App AI 对话会检索的补充知识。启用后的文档会进入 RAG 检索。"
     title="知识库管理"
   >
-    <Card :bordered="false" class="knowledge-card">
-      <div class="table-head">
-        <div>
-          <div class="card-title">RAG 知识文档</div>
-          <div class="card-desc">
-            共 {{ total }} 条资料。建议每条聚焦一个主题，方便 App 问答命中。
+    <Tabs default-active-key="manual">
+      <Tabs.TabPane key="manual" tab="手工知识">
+        <Card :bordered="false" class="knowledge-card">
+          <div class="table-head">
+            <div>
+              <div class="card-title">RAG 知识文档</div>
+              <div class="card-desc">
+                共 {{ total }} 条资料。建议每条聚焦一个主题，方便 App 问答命中。
+              </div>
+            </div>
+            <Space wrap>
+              <Select
+                v-model:value="query.status"
+                :options="statusOptions"
+                class="status-select"
+                placeholder="请选择状态"
+              />
+              <Input
+                v-model:value="query.keyword"
+                allow-clear
+                class="keyword-input"
+                placeholder="搜索标题 / 内容"
+                @press-enter="search"
+              />
+              <Button type="primary" @click="search">查询</Button>
+              <Button :loading="loading" @click="load">刷新</Button>
+              <Button :loading="reindexing" @click="handleReindex"
+                >重建索引</Button
+              >
+              <Button type="primary" @click="openCreate">新增知识</Button>
+            </Space>
           </div>
-        </div>
-        <Space wrap>
-          <Select
-            v-model:value="query.status"
-            :options="statusOptions"
-            class="status-select"
-           placeholder="请选择状态"/>
-          <Input
-            v-model:value="query.keyword"
-            allow-clear
-            class="keyword-input"
-            placeholder="搜索标题 / 内容"
-            @press-enter="search"
-          />
-          <Button type="primary" @click="search">查询</Button>
-          <Button :loading="loading" @click="load">刷新</Button>
-          <Button :loading="reindexing" @click="handleReindex">重建索引</Button>
-          <Button type="primary" @click="openCreate">新增知识</Button>
-        </Space>
-      </div>
 
-      <Table
-        :columns="columns"
-        :data-source="documents"
-        :loading="loading"
-        :pagination="{
-          current: query.page,
-          pageSize: query.pageSize,
-          showSizeChanger: true,
-          total,
-        }"
-        :scroll="{ x: 1280 }"
-        row-key="id"
-        table-layout="fixed"
-        @change="handleTableChange"
-      >
-        <template #bodyCell="{ column, record }">
-          <template v-if="column.dataIndex === 'status'">
-            <Tag :color="statusColor(record.status)">
-              {{ statusLabel(record.status) }}
-            </Tag>
-          </template>
-          <template v-else-if="column.dataIndex === 'tags'">
-            <Space :size="4" wrap>
-              <Tag v-for="tag in record.tags" :key="tag" color="blue">
-                <EllipsisTooltip class="tag-tooltip" :text="tag" />
-              </Tag>
-              <span v-if="!record.tags?.length">-</span>
-            </Space>
-          </template>
-          <template v-else-if="column.dataIndex === 'content'">
-            <EllipsisTooltip :lines="2" :text="record.content" />
-          </template>
-          <template v-else-if="column.key === 'action'">
-            <Space :size="4">
-              <Button
-                size="small"
-                type="link"
-                @click="openEdit(asRAGDocument(record))"
-              >
-                编辑
-              </Button>
-              <Button
-                size="small"
-                type="link"
-                @click="toggleStatus(asRAGDocument(record))"
-              >
-                {{ record.status === 'enabled' ? '停用' : '启用' }}
-              </Button>
-              <Button
-                danger
-                size="small"
-                type="link"
-                @click="removeDocument(asRAGDocument(record))"
-              >
-                删除
-              </Button>
-            </Space>
-          </template>
-        </template>
-      </Table>
-    </Card>
+          <Table
+            :columns="columns"
+            :data-source="documents"
+            :loading="loading"
+            :pagination="{
+              current: query.page,
+              pageSize: query.pageSize,
+              showSizeChanger: true,
+              total,
+            }"
+            :scroll="{ x: 1280 }"
+            row-key="id"
+            table-layout="fixed"
+            @change="handleTableChange"
+          >
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.dataIndex === 'status'">
+                <Tag :color="statusColor(record.status)">
+                  {{ statusLabel(record.status) }}
+                </Tag>
+              </template>
+              <template v-else-if="column.dataIndex === 'tags'">
+                <Space :size="4" wrap>
+                  <Tag v-for="tag in record.tags" :key="tag" color="blue">
+                    <EllipsisTooltip class="tag-tooltip" :text="tag" />
+                  </Tag>
+                  <span v-if="!record.tags?.length">-</span>
+                </Space>
+              </template>
+              <template v-else-if="column.dataIndex === 'content'">
+                <EllipsisTooltip :lines="2" :text="record.content" />
+              </template>
+              <template v-else-if="column.key === 'action'">
+                <Space :size="4">
+                  <Button
+                    size="small"
+                    type="link"
+                    @click="openEdit(asRAGDocument(record))"
+                  >
+                    编辑
+                  </Button>
+                  <Button
+                    size="small"
+                    type="link"
+                    @click="toggleStatus(asRAGDocument(record))"
+                  >
+                    {{ record.status === 'enabled' ? '停用' : '启用' }}
+                  </Button>
+                  <Button
+                    danger
+                    size="small"
+                    type="link"
+                    @click="removeDocument(asRAGDocument(record))"
+                  >
+                    删除
+                  </Button>
+                </Space>
+              </template>
+            </template>
+          </Table>
+        </Card>
+      </Tabs.TabPane>
+      <Tabs.TabPane key="sources" tab="书籍目录">
+        <PublicSources />
+      </Tabs.TabPane>
+    </Tabs>
 
     <Drawer
       v-model:open="drawerOpen"
@@ -348,14 +360,16 @@ onMounted(load);
               v-model:value="form.status"
               :options="editStatusOptions"
               class="drawer-select"
-             placeholder="请选择状态"/>
+              placeholder="请选择状态"
+            />
           </Form.Item>
           <Form.Item label="排序">
             <InputNumber
               v-model:value="form.sort"
               :min="0"
               class="sort-input"
-             placeholder="请输入排序"/>
+              placeholder="请输入排序"
+            />
           </Form.Item>
         </Space>
       </Form>
