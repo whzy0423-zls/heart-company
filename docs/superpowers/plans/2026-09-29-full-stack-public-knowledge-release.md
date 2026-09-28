@@ -12,7 +12,7 @@
 
 - [x] Fetch both remotes, inspect `main` and dirty working trees.
 - [x] Verify all App feature branches are merged; compare historical backend branches with `git cherry` before considering any merge.
-- [x] Run knowledge-service suite against isolated PostgreSQL: 72 passed.
+- [x] Run knowledge-service suite against isolated PostgreSQL: final 76 passed.
 - [x] Run Go full suite, isolated PostgreSQL suite serially, race, and vet. Correct actual failures without weakening production invariants.
 - [x] Run full admin/canvas unit suites, typechecks, and production build; website, motion website, reading-H5, and miniapp native tests/builds.
 - [x] Run App format check, analyze, full tests including golden, and CI non-golden suite. Refresh only visual baselines proven stale by intended committed changes.
@@ -26,15 +26,15 @@
 - [x] Create pre-release rollback refs for both repositories.
 - [x] Set a new App version above the live `1.1.25+187` and any current device/test builds; update its version contract test first.
 - [x] Restore the protected self-hosted manual signing workflow with `main`/SHA validation, all quality gates, production Dart defines, manifest/signature checks, draft artifact, and unconditional signing-file cleanup.
-- [ ] Re-run gates after version/workflow edits, then commit verified changes to `main` and push without rewriting history. Do not add SQLite exports, operational secrets, APKs, caches, or output screenshots. Record the exact final `main` SHA that includes both version and signing workflow.
+- [x] Re-run gates after version/workflow edits, then commit verified changes to `main` and push without rewriting history. Do not add SQLite exports, operational secrets, APKs, caches, or output screenshots. Record the exact final `main` SHA that includes both version and signing workflow.
 - [x] Register a temporary local GitHub runner using the registration API without logging tokens. Execute only the trusted `main` revision.
 
 ## Task 3: Deploy Services
 
 - [x] Record image IDs, mounts, safe configuration fingerprints, live App release metadata, and source diff.
 - [x] Back up production application tables, live schema/catalog/activation/ledger, source overlays, and current images. For knowledge正文, retain the verified pre-import legacy archive plus all 455 hashed wire archives/manifest; check current legacy counts and incremental changes before excluding managed rows from a new dump. Document selective restore and immutable replay, not a whole-database overwrite of live activity. Validate archives.
-- [ ] Build tested server/admin/website artifacts and knowledge-service image; preserve runtime utilities, environment, volumes, certificates, website verification files, and unrelated containers.
-- [ ] Recreate only affected services with existing production configuration plus versioned image overrides. Do not rebuild against a dirty untested checkout.
+- [x] Build tested server/admin/website artifacts and knowledge-service image; preserve runtime utilities, environment, volumes, certificates, website verification files, and unrelated containers. Initial deployment completed; final query-budget server/knowledge refresh follows.
+- [x] Recreate only affected services with existing production configuration plus versioned image overrides. Do not rebuild against a dirty untested checkout.
 - [ ] Verify migration completion, gateway health, knowledge readiness, admin authentication/catalog, public routes, existing follow-up contracts, and a real retrieval with new managed documents.
 - [ ] Require 4,756 registered sources, 30 categories, 455 committed batches, 3,645,921 catalog document total, and a valid managed GIN. Retain 711 currently enabled growth sources unless administrators changed them; do not reset choices to satisfy a count assertion.
 
@@ -86,3 +86,12 @@ All 455 server-local wire archive hashes match the immutable manifest SHA-256
 Production follow-up/voice/chat overlays match tested local source; remaining
 differences are newer local regression tests and the already-tested final
 knowledge retrieval optimization.
+
+Final query-budget regression: Python 76 passed; Go full PostgreSQL/race
+5,490 passed, one live-provider baseline skipped, zero failures or data races.
+Vet and native/Linux builds passed. The exact-vector non-null partial index
+is valid and ready; an App-shaped top-8 request improved from a 30-second
+timeout to 1.679 seconds, with four managed documents. The read-only fallback
+SQL returned six rows in 0.338 seconds. Final code adds bounded online HTTP
+phases and SQL statements, while retaining batch retry policy, exact ranking,
+live source choices and library isolation. Independent review found no blocker.

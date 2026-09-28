@@ -3,9 +3,11 @@ package publicknowledge
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"reflect"
@@ -52,6 +54,103 @@ func TestLexicalTokensMatchCJKAndLatinExportFormat(t *testing.T) {
 	if tokens := LexicalTokens("心，growth"); !reflect.DeepEqual(tokens, []string{"心", "growth"}) {
 		t.Fatalf("singleton CJK tokens=%v", tokens)
 	}
+}
+
+func TestSearchPassesBoundedDeadlineToDatabase(t *testing.T) {
+	for _, callerTimeout := range []time.Duration{0, 10 * time.Second, 500 * time.Millisecond} {
+		t.Run(callerTimeout.String(), func(t *testing.T) {
+			ctx := context.Background()
+			if callerTimeout > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, callerTimeout)
+				defer cancel()
+			}
+			callerDeadline, _ := ctx.Deadline()
+			start := time.Now()
+			var queryContext context.Context
+			database := sql.OpenDB(searchTestConnector{query: func(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+				queryContext = ctx
+				deadline, ok := ctx.Deadline()
+				if !ok {
+					t.Fatal("database query has no deadline")
+				}
+				if callerTimeout > 0 && callerTimeout < 5*time.Second {
+					if !deadline.Equal(callerDeadline) {
+						t.Fatalf("database deadline=%v, want caller deadline=%v", deadline, callerDeadline)
+					}
+				} else if deadline.Before(start.Add(4*time.Second)) || deadline.After(start.Add(5*time.Second+250*time.Millisecond)) {
+					t.Fatalf("database deadline budget=%v, want 5 seconds", deadline.Sub(start))
+				}
+				for _, filter := range []string{"d.library_kind='public'", "d.release_id IS NULL", "d.public_source_id IS NOT NULL", "d.safety_level <= 0", "s.id=d.public_source_id AND s.enabled", "DESC,d.id LIMIT $2"} {
+					if !strings.Contains(query, filter) {
+						t.Fatalf("search lost filter or ordering %q", filter)
+					}
+				}
+				if len(args) != 2 || args[1].Value != int64(10) {
+					t.Fatalf("search args=%v", args)
+				}
+				return &searchTestRows{}, nil
+			}})
+			defer database.Close()
+			hits, err := NewStore(database).Search(ctx, "情绪管理", 10)
+			if err != nil || len(hits) != 1 || hits[0].ID != "fixture" || hits[0].Title != "title" || hits[0].Content != "content" {
+				t.Fatalf("search hits=%+v err=%v", hits, err)
+			}
+			if queryContext.Err() != context.Canceled {
+				t.Fatal("search did not release its context budget")
+			}
+		})
+	}
+}
+
+func TestSearchHonorsCallerDeadlineDuringDatabaseQuery(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	database := sql.OpenDB(searchTestConnector{query: func(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Rows, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}})
+	defer database.Close()
+	if _, err := NewStore(database).Search(ctx, "growth", 10); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("search err=%v, want caller deadline", err)
+	}
+}
+
+type searchTestConnector struct {
+	query func(context.Context, string, []driver.NamedValue) (driver.Rows, error)
+}
+
+func (c searchTestConnector) Connect(context.Context) (driver.Conn, error) {
+	return searchTestConn{query: c.query}, nil
+}
+func (c searchTestConnector) Driver() driver.Driver { return searchTestDriver{} }
+
+type searchTestDriver struct{}
+
+func (searchTestDriver) Open(string) (driver.Conn, error) { return nil, driver.ErrSkip }
+
+type searchTestConn struct {
+	query func(context.Context, string, []driver.NamedValue) (driver.Rows, error)
+}
+
+func (searchTestConn) Prepare(string) (driver.Stmt, error) { return nil, driver.ErrSkip }
+func (searchTestConn) Close() error                        { return nil }
+func (searchTestConn) Begin() (driver.Tx, error)           { return nil, driver.ErrSkip }
+func (c searchTestConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	return c.query(ctx, query, args)
+}
+
+type searchTestRows struct{ read bool }
+
+func (*searchTestRows) Columns() []string { return []string{"id", "title", "content"} }
+func (*searchTestRows) Close() error      { return nil }
+func (r *searchTestRows) Next(values []driver.Value) error {
+	if r.read {
+		return io.EOF
+	}
+	r.read = true
+	values[0], values[1], values[2] = "fixture", "title", "content"
+	return nil
 }
 
 func TestCatalogJSONDoesNotExposePrivateMetadata(t *testing.T) {

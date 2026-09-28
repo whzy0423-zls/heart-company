@@ -44,6 +44,20 @@ class RecordingConnection:
         return self._cursor
 
 
+def test_vector_statement_budget_is_local_and_preserves_exact_scope(monkeypatch):
+    cursor = RecordingCursor()
+    monkeypatch.setattr(documents_module.psycopg, "connect",
+                        lambda *_args, **_kwargs: RecordingConnection(cursor))
+    repository = PostgresDocumentRepository("postgres://fixture")
+    monkeypatch.setattr(repository, "vector_dimension", lambda: 2)
+    repository.vector_search([0, 1], KnowledgeScope(public=True),
+                             enneagram_types=set(), max_safety_level=0, limit=20)
+    assert cursor.queries[0] == "SET LOCAL statement_timeout='5s'"
+    assert "s.enabled" in cursor.queries[-1]
+    assert "ORDER BY embedding <=>" in cursor.queries[-1]
+    assert ", id LIMIT" in cursor.queries[-1]
+
+
 def test_identity_checks_do_not_treat_null_embeddings_as_indexed(monkeypatch) -> None:
     cursor = RecordingCursor()
     monkeypatch.setattr(
@@ -152,6 +166,8 @@ def test_lexical_bitmap_budget_is_local_to_its_query_connection(monkeypatch):
 
     repository.lexical_search("growth", scope, enneagram_types=set(), max_safety_level=0, limit=10)
     repository.vector_search([0, 1], scope, enneagram_types=set(), max_safety_level=0, limit=10)
+
+    assert "SET LOCAL statement_timeout='8s'" in lexical_cursor.queries
 
     assert lexical_cursor.queries[-2] == "SET LOCAL work_mem='64MB'"
     assert all("work_mem" not in query for query in vector_cursor.queries)

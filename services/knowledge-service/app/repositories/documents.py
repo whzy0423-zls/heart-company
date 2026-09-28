@@ -263,11 +263,15 @@ class PostgresDocumentRepository:
 
     def _query(self, sql: str, params: dict[str, Any]) -> list[RetrievedDocument]:
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection, connection.cursor() as cursor:
+            if "embedding" in params:
+                # Online vector failures fall back to lexical results, not batch retry budgets.
+                cursor.execute("SET LOCAL statement_timeout='5s'")
             if "enabled_source_ids" in params and params["enabled_source_ids"] is None:
                 # A constant source set permits indexed filtering; the live gate still applies.
                 cursor.execute("SELECT id FROM public_knowledge_sources WHERE enabled ORDER BY id")
                 params = {**params, "enabled_source_ids": [row["id"] for row in cursor.fetchall()]}
             if "enabled_source_ids" in params:
+                cursor.execute("SET LOCAL statement_timeout='8s'")
                 # Exact GIN bitmaps avoid expensive TOAST rechecks on the full corpus.
                 cursor.execute("SET LOCAL work_mem='64MB'")
             cursor.execute(sql, params)

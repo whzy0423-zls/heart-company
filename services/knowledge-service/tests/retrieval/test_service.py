@@ -1,4 +1,6 @@
 import pytest
+import httpx
+import psycopg
 
 from app.domain.documents import RetrievedDocument
 from app.domain.queries import KnowledgeScope, RetrievalQuery
@@ -94,3 +96,37 @@ async def test_retriever_without_embedding_and_failed_embedding_keep_lexical_res
     for embedding in (None, BrokenEmbedding()):
         result = await PostgresHybridRetriever(RepositoryStub(), embedding)(query)
         assert [item.id for item in result] == ["both", "lexical"]
+
+
+@pytest.mark.asyncio
+async def test_vector_sql_timeout_retains_lexical_results() -> None:
+    class TimedOutVectorRepository(RepositoryStub):
+        def vector_search(self, *_args, **_kwargs):
+            raise psycopg.errors.QueryCanceled("statement timeout")
+
+    query = RetrievalQuery(requestId="req", query="问题", scene="app_chat", scope=KnowledgeScope(public=True))
+    result = await PostgresHybridRetriever(TimedOutVectorRepository(), EmbeddingStub())(query)
+    assert [item.id for item in result] == ["both", "lexical"]
+
+
+@pytest.mark.asyncio
+async def test_online_provider_unavailable_does_not_enter_batch_backoff() -> None:
+    from app.embeddings.client import OpenAICompatibleEmbeddingClient
+
+    attempts = []
+    delays = []
+
+    def unavailable(request):
+        attempts.append(request)
+        return httpx.Response(503, json={"error": "unavailable"})
+
+    with httpx.Client(transport=httpx.MockTransport(unavailable)) as http:
+        embedding = OpenAICompatibleEmbeddingClient(
+            "https://embedding.test", "TOKEN", "model", http_client=http,
+            retries=0, timeout_seconds=2.0, sleep_fn=delays.append,
+        )
+        query = RetrievalQuery(requestId="req", query="问题", scene="app_chat", scope=KnowledgeScope(public=True))
+        result = await PostgresHybridRetriever(RepositoryStub(), embedding)(query)
+    assert [item.id for item in result] == ["both", "lexical"]
+    assert len(attempts) == 1
+    assert delays == []

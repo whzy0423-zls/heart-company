@@ -34,6 +34,8 @@ def get_retriever() -> Retriever:
                 settings.embedding_api_base,
                 api_key,
                 settings.embedding_model,
+                retries=0,
+                timeout_seconds=2.0,
             )
         return PostgresHybridRetriever(repository, embedding)
     return fixture_retriever

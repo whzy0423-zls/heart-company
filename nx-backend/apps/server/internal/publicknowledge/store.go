@@ -386,6 +386,8 @@ func (s *Store) Search(ctx context.Context, question string, topK int) ([]rag.Do
 	for i, token := range tokens {
 		tokens[i] = "'" + token + "'"
 	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	rows, err := s.db.QueryContext(ctx, `SELECT d.id,d.title,d.content FROM knowledge_documents d
 		WHERE d.library_kind='public' AND d.release_id IS NULL AND d.public_source_id IS NOT NULL AND d.safety_level <= 0
 		AND EXISTS(SELECT 1 FROM public_knowledge_sources s WHERE s.id=d.public_source_id AND s.enabled)

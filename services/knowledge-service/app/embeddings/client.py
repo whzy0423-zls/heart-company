@@ -15,12 +15,13 @@ class OpenAICompatibleEmbeddingClient:
         *,
         http_client: httpx.Client | None = None,
         retries: int = 7,
+        timeout_seconds: float = 30.0,
         sleep_fn: Callable[[float], None] = time.sleep,
     ) -> None:
         self.api_base = api_base.rstrip("/")
         self.api_key = api_key
         self.model = model
-        self.http = http_client or httpx.Client(timeout=30)
+        self.http = http_client or httpx.Client(timeout=timeout_seconds)
         self.retries = retries
         self.sleep = sleep_fn
 
