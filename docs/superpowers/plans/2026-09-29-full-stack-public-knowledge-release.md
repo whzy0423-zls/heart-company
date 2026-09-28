@@ -33,19 +33,19 @@
 
 - [x] Record image IDs, mounts, safe configuration fingerprints, live App release metadata, and source diff.
 - [x] Back up production application tables, live schema/catalog/activation/ledger, source overlays, and current images. For knowledge正文, retain the verified pre-import legacy archive plus all 455 hashed wire archives/manifest; check current legacy counts and incremental changes before excluding managed rows from a new dump. Document selective restore and immutable replay, not a whole-database overwrite of live activity. Validate archives.
-- [x] Build tested server/admin/website artifacts and knowledge-service image; preserve runtime utilities, environment, volumes, certificates, website verification files, and unrelated containers. Initial deployment completed; final query-budget server/knowledge refresh follows.
+- [x] Build tested server/admin/website artifacts and knowledge-service image; preserve runtime utilities, environment, volumes, certificates, website verification files, and unrelated containers. Initial and final query-budget deployments completed.
 - [x] Recreate only affected services with existing production configuration plus versioned image overrides. Do not rebuild against a dirty untested checkout.
-- [ ] Verify migration completion, gateway health, knowledge readiness, admin authentication/catalog, public routes, existing follow-up contracts, and a real retrieval with new managed documents.
-- [ ] Require 4,756 registered sources, 30 categories, 455 committed batches, 3,645,921 catalog document total, and a valid managed GIN. Retain 711 currently enabled growth sources unless administrators changed them; do not reset choices to satisfy a count assertion.
+- [x] Verify migration completion, gateway health, knowledge readiness, admin authentication/catalog, public routes, existing follow-up contracts, and a real retrieval with new managed documents.
+- [x] Require 4,756 registered sources, 30 categories, 455 committed batches, 3,645,921 catalog document total, and a valid managed GIN. Retain 711 currently enabled growth sources unless administrators changed them; do not reset choices to satisfy a count assertion.
 
 ## Task 4: Publish And Verify APK
 
-- [ ] After online service verification, build the new APK using protected production signing secrets. Verify package/version/certificate, manifest permissions, production origin, size, and SHA-256.
-- [ ] Install and launch on the available Android device without clearing user data; verify a non-destructive basic navigation smoke.
-- [ ] Upload a new unpublished release via authenticated App release API; compare server-inspected metadata and file hash before publication.
-- [ ] Publish with the current non-forced update policy; preserve the previous release for rollback.
-- [ ] Verify public latest API, full downloaded APK SHA-256, byte-range response, website download route, and old release availability.
-- [ ] Record exact commits/images/APK metadata/tests/rollback details in the deployment report. Close temporary SSH/runner sessions and remove runner registration/signing files.
+- [x] After online service verification, build the new APK using protected production signing secrets. Verify package/version/certificate, manifest permissions, production origin, size, and SHA-256.
+- [ ] Install and launch on the available Android device without clearing user data; verify a non-destructive basic navigation smoke. **Not executed: no connected Android device or emulator system image; do not count as passed.**
+- [x] Upload a new unpublished release via authenticated App release API; compare server-inspected metadata and file hash before publication.
+- [x] Publish with the current non-forced update policy; preserve the previous release for rollback.
+- [x] Verify public latest API, full downloaded APK SHA-256, byte-range response, website download route, and archived release/file retention. Existing public archived links return HTTP 410; backend rollback remains available.
+- [x] Record exact commits/images/APK metadata/tests/rollback details in the deployment report. Close temporary SSH/runner sessions and remove runner registration/signing files.
 
 **Release Gates:** No publication on failing required tests. Do not substitute stale artifacts or identify skipped infrastructure tests as passed. Hosting/billing failures must be distinguished from executed test failures.
 
@@ -95,3 +95,18 @@ timeout to 1.679 seconds, with four managed documents. The read-only fallback
 SQL returned six rows in 0.338 seconds. Final code adds bounded online HTTP
 phases and SQL statements, while retaining batch retry policy, exact ranking,
 live source choices and library isolation. Independent review found no blocker.
+
+Production server/knowledge revision: `e6b78b1fc1e78248e9074a3019ad9b4088fc564e`;
+static frontend revision remains the tested initial `0e1cd12`. Post-deployment
+App-shaped retrieval: 3.742 s, eight results/four managed; fallback SQL: 0.342 s.
+All source activations match the pre-deploy backup, with exact catalog/batch/body
+and legacy counts reverified. Final browser smoke asserts the new version/link.
+
+Protected run `36488082941` succeeded and reran all App quality gates.
+Official APK release 38: `1.1.26+192`, 208,245,675 bytes, SHA-256
+`2085e16c1fe6a49c400e0fc327c1567aa4a327797cfe1acdf8d3995b25fbe81e`.
+Signature matches the existing production certificate; local/GitHub/server/public
+download artifacts agree. Full downloaded bytes were compared, and Range/redirect
+checks passed. Old release 37 is archived with its file retained, per existing
+single-published-version behavior. Temporary signing/runner/SSH/tunnel cleanup
+is verified. See `docs/deployment/full-stack-release-2026-09-29.md` for gaps and recovery.
