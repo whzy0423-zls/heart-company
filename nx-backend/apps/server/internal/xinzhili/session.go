@@ -55,6 +55,10 @@ type ConversationKnowledgeTraceStore interface {
 	CompleteAssistantWithKnowledgeTrace(ctx context.Context, messageID int64, content string, sources json.RawMessage, trace KnowledgeTrace) error
 }
 
+type ConversationTurnStore interface {
+	CreateAssistantForUser(ctx context.Context, conversation Conversation, userMessageID int64, content string, mode Mode) (int64, error)
+}
+
 type PreferenceProvider interface {
 	PromptPreferences(ctx context.Context, userID int64) ([]string, error)
 }
@@ -247,9 +251,11 @@ type activeTurn struct {
 	sources                  []rag.Source
 	knowledgeTrace           *KnowledgeTrace
 	assistantID              int64
+	userMessageID            int64
 	segments                 map[uint32]string
 	lastAck                  int64
 	completionDone           bool
+	recommendationReady      bool
 	generationErr            error
 	normalizeOutputToChinese bool
 	chunker                  streamSentenceChunker
@@ -539,17 +545,12 @@ func (s *session) handleEvent(turn **activeTurn, event sessionEvent) {
 			s.executeStrategyActions(current, current.engine.Apply(Signal{Kind: SignalAssistantStopped}))
 		}
 		if current.assistantID > 0 && current.generationErr == nil && current.answer != "" {
-			sources, _ := json.Marshal(current.sources)
-			if current.knowledgeTrace != nil {
-				if store, ok := s.deps.Conversations.(ConversationKnowledgeTraceStore); ok {
-					_ = store.CompleteAssistantWithKnowledgeTrace(current.ctx, current.assistantID, current.answer, sources, *current.knowledgeTrace)
-				} else {
-					_ = s.deps.Conversations.CompleteAssistant(current.ctx, current.assistantID, current.answer, sources)
-				}
+			if err := s.persistCompletedAnswer(current); err != nil {
+				s.sendError(current, "conversation_save_failed", "回答保存失败，请重试", true)
 			} else {
-				_ = s.deps.Conversations.CompleteAssistant(current.ctx, current.assistantID, current.answer, sources)
+				s.confirmCompletedPlayback(current)
+				current.recommendationReady = event.err == nil
 			}
-			s.confirmCompletedPlayback(current)
 		}
 		if event.err != nil && !errors.Is(event.err, context.Canceled) {
 			log.Printf("xinzhili tts failed user_id=%d turn_id=%q segment_count=%d audio_bytes=%d err=%v",
@@ -833,13 +834,15 @@ func (s *session) beginProcessing(turn *activeTurn, text string) {
 		turn.cancel()
 		return
 	}
-	if _, err := s.deps.Conversations.SaveUser(turn.ctx, turn.conversation, text, turn.input.Mode); err != nil {
+	userMessageID, err := s.deps.Conversations.SaveUser(turn.ctx, turn.conversation, text, turn.input.Mode)
+	if err != nil {
 		s.sendError(turn, "conversation_save_failed", "会话保存失败，请重试", true)
 		_ = s.sendAssistantDone(turn)
 		turn.processing = true
 		turn.cancel()
 		return
 	}
+	turn.userMessageID = userMessageID
 	if !turn.input.DisableTTS && s.deps.Synthesizer == nil {
 		s.sendError(turn, "tts_not_configured", "请配置好语音模型后再重试", false)
 		_ = s.sendAssistantDone(turn)
@@ -888,6 +891,7 @@ func turnTranscript(turn *activeTurn) string {
 }
 
 func (s *session) startGeneration(turn *activeTurn, question string) {
+	turn.recommendationReady = false
 	prefix := turn.interruptionPrefix
 	turn.interruptionPrefix = ""
 	if rag.IsModelIdentityQuestion(question) {
@@ -1213,20 +1217,15 @@ func (s *session) completeTextOnlyTurn(turn *activeTurn, persist bool) {
 	if persist && turn.generationErr == nil && turn.answer != "" && !turn.proactivePrompt && !turn.terminalPrompt {
 		content := normalizeGeneratedContent(turn.answer)
 		if content != "" {
-			messageID, err := s.deps.Conversations.CreateAssistant(turn.ctx, turn.conversation, content, turn.input.Mode)
+			messageID, err := s.createAssistantForTurn(turn, content)
 			if err != nil {
 				s.sendError(turn, "conversation_save_failed", "回答保存失败，请重试", true)
 			} else {
 				turn.assistantID = messageID
-				sources, _ := json.Marshal(turn.sources)
-				if turn.knowledgeTrace != nil {
-					if store, ok := s.deps.Conversations.(ConversationKnowledgeTraceStore); ok {
-						_ = store.CompleteAssistantWithKnowledgeTrace(turn.ctx, messageID, content, sources, *turn.knowledgeTrace)
-					} else {
-						_ = s.deps.Conversations.CompleteAssistant(turn.ctx, messageID, content, sources)
-					}
+				if err := s.persistCompletedAnswer(turn); err != nil {
+					s.sendError(turn, "conversation_save_failed", "回答保存失败，请重试", true)
 				} else {
-					_ = s.deps.Conversations.CompleteAssistant(turn.ctx, messageID, content, sources)
+					turn.recommendationReady = true
 				}
 			}
 		}
@@ -1319,7 +1318,7 @@ func (s *session) acceptAudioSegment(turn *activeTurn, segment AudioSegment) err
 		if content == "" {
 			content = normalizeGeneratedContent(turn.draft)
 		}
-		messageID, err := s.deps.Conversations.CreateAssistant(turn.ctx, turn.conversation, content, turn.input.Mode)
+		messageID, err := s.createAssistantForTurn(turn, content)
 		if err != nil {
 			return err
 		}
@@ -1346,6 +1345,23 @@ func (s *session) sendTurnControl(turn *activeTurn, kind EventType, payload any)
 	})
 }
 
+func (s *session) createAssistantForTurn(turn *activeTurn, content string) (int64, error) {
+	if store, ok := s.deps.Conversations.(ConversationTurnStore); ok {
+		return store.CreateAssistantForUser(turn.ctx, turn.conversation, turn.userMessageID, content, turn.input.Mode)
+	}
+	return s.deps.Conversations.CreateAssistant(turn.ctx, turn.conversation, content, turn.input.Mode)
+}
+
+func (s *session) persistCompletedAnswer(turn *activeTurn) error {
+	sources, _ := json.Marshal(turn.sources)
+	if turn.knowledgeTrace != nil {
+		if store, ok := s.deps.Conversations.(ConversationKnowledgeTraceStore); ok {
+			return store.CompleteAssistantWithKnowledgeTrace(turn.ctx, turn.assistantID, turn.answer, sources, *turn.knowledgeTrace)
+		}
+	}
+	return s.deps.Conversations.CompleteAssistant(turn.ctx, turn.assistantID, turn.answer, sources)
+}
+
 func (s *session) sendError(turn *activeTurn, code, message string, retryable bool) {
 	turnID := turn.input.TurnID
 	payload, _ := json.Marshal(ErrorPayload{Code: code, Message: message, Retryable: retryable, Fatal: false, TurnID: &turnID})
@@ -1362,7 +1378,15 @@ func (s *session) sendAssistantDone(turn *activeTurn) error {
 		return nil
 	}
 	turn.doneSent = true
-	return s.sendTurnControl(turn, EventAssistantDone, map[string]any{"segmentCount": len(turn.segments)})
+	payload := map[string]any{"segmentCount": len(turn.segments)}
+	if turn.recommendationReady && turn.generationErr == nil && turn.assistantID > 0 && !turn.proactivePrompt && !turn.terminalPrompt && strings.TrimSpace(turn.answer) != "" {
+		payload["completed"] = true
+		payload["messageId"] = turn.assistantID
+		payload["conversationId"] = turn.conversation.ID
+		payload["transcript"] = turnTranscript(turn)
+		payload["answer"] = turn.answer
+	}
+	return s.sendTurnControl(turn, EventAssistantDone, payload)
 }
 
 func appendUniqueDocuments(existing, incoming []rag.Document) []rag.Document {

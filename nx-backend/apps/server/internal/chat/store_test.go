@@ -577,6 +577,7 @@ CREATE TABLE app_chat_messages(
   message_type TEXT NOT NULL DEFAULT 'text', audio_asset_id BIGINT,
   audio_duration_ms INTEGER NOT NULL DEFAULT 0, transcript TEXT NOT NULL DEFAULT '',
   delivery_status TEXT, delivered_text TEXT, xinzhili_mode TEXT,
+  reply_to_message_id BIGINT REFERENCES app_chat_messages(id) ON DELETE SET NULL,
   create_time TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE TABLE app_chat_knowledge_traces(
