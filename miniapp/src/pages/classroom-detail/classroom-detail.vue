@@ -30,7 +30,9 @@ import { STUDIO_TEACHER } from "../../data/teacherStudio";
 import { getToken } from "../../utils/auth";
 import { userErrorMessage } from "../../utils/userMessage";
 import { clearBookingIntent, setBookingIntent } from "../../utils/bookingIntent";
+import NxImagePreview from "../../components/NxImagePreview.vue";
 import { previewImage } from "../../utils/imagePreview";
+import { isWechatDevtools } from "../../utils/imagePreview";
 
 const contentId = ref("");
 const content = ref(normalizeClassroomContent());
@@ -55,6 +57,7 @@ const purchaseTargetError = ref("");
 const paymentEnabled = ref(normalizeMiniappPayment(getStoredSiteConfig()).enabled);
 const coverImageFailed = ref(false);
 const teacherAvatarFailed = ref(false);
+const teacherAvatarPreviewVisible = ref(false);
 const teacherAvatar = computed(() => {
   const configured = normalizeTeachers(getStoredSiteConfig() || {})[0]?.avatar || STUDIO_TEACHER.avatar;
   return /\/avatars\//i.test(configured) || /teacher-poster/i.test(configured)
@@ -133,7 +136,16 @@ function openTeacherDetail() {
 }
 
 function previewTeacherAvatar() {
-  if (!teacherAvatarFailed.value) previewImage(teacherAvatar.value);
+  if (teacherAvatarFailed.value) return;
+  if (isWechatDevtools()) {
+    teacherAvatarPreviewVisible.value = true;
+    return;
+  }
+  previewImage(teacherAvatar.value);
+}
+
+function closeTeacherAvatarPreview() {
+  teacherAvatarPreviewVisible.value = false;
 }
 
 const progressStorage = {
@@ -592,6 +604,13 @@ onUnload(() => {
 
 <template>
   <view class="classroom-detail ios-page ios-safe-bottom">
+    <NxImagePreview
+      v-if="teacherAvatar && !teacherAvatarFailed"
+      :visible="teacherAvatarPreviewVisible"
+      :src="teacherAvatar"
+      :alt="`${content.teacherName || '授课老师'}头像`"
+      @close="closeTeacherAvatarPreview"
+    />
     <view class="detail-shell__context">
       <text class="detail-shell__context-label">老师课堂</text>
       <text class="detail-shell__context-separator">/</text>

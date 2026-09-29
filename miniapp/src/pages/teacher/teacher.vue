@@ -1,15 +1,18 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import NxIcon from '../../components/NxIcon.vue'
+import NxImagePreview from '../../components/NxImagePreview.vue'
 import { STUDIO_TEACHER } from '../../data/teacherStudio'
 import { getStoredSiteConfig, refreshSiteConfig } from '../../utils/siteConfig'
 import { normalizeTeachers } from '../../utils/teacherCourseware'
 import { normalizeMiniappLearn } from '../../utils/miniappPages'
 import { setBookingIntent, clearBookingIntent } from '../../utils/bookingIntent'
 import { previewImage } from '../../utils/imagePreview'
+import { isWechatDevtools } from '../../utils/imagePreview'
 
 const config = ref(getStoredSiteConfig() || {})
 const imageFailed = ref(false)
+const previewVisible = ref(false)
 const mentorPhoto = '/static/teacher/mentor.jpg'
 const teacher = computed(() => {
   const cfg = config.value
@@ -27,7 +30,14 @@ const portrait = computed(() => {
 onMounted(async () => { try { const updated = await refreshSiteConfig(); config.value = getStoredSiteConfig() || updated || {}; imageFailed.value = false } catch { /* Retain verified local or cached introduction. */ } })
 function book() { setBookingIntent({ kind: 'consult', intentText: '' }); uni.switchTab({ url: '/pages/booking/booking', fail: clearBookingIntent }) }
 function daily() { uni.switchTab({ url: '/pages/learn/learn' }) }
-function preview() { previewImage(portrait.value) }
+function preview() {
+  if (isWechatDevtools()) {
+    previewVisible.value = true
+    return
+  }
+  previewImage(portrait.value)
+}
+function closePreview() { previewVisible.value = false }
 function previewMentorPhoto() { previewImage(mentorPhoto) }
 </script>
 <template>
@@ -46,6 +56,7 @@ function previewMentorPhoto() { previewImage(mentorPhoto) }
       <view class="teacher-cta"><view><text class="cta-title">给成长，留一点时间</text><text class="cta-note">从一次真诚的交流开始</text></view><button @click="book">预约聊聊<NxIcon name="arrow" :size="18" color="#FFFFFF" /></button></view>
     </template>
     <view v-else class="empty">老师介绍正在整理中，欢迎先看看日常分享。<button @click="daily">浏览日常</button></view>
+    <NxImagePreview v-if="portrait && !imageFailed" :visible="previewVisible" :src="portrait" :alt="`${teacher?.name || '老师'}头像`" @close="closePreview" />
   </view>
 </template>
 <style scoped>
