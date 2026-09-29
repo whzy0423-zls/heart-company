@@ -25,9 +25,12 @@ import {
 import { createWechatPaymentController } from "../../utils/payment";
 import { normalizeMiniappPayment } from "../../utils/miniappPages";
 import { getStoredSiteConfig, refreshSiteConfig } from "../../utils/siteConfig";
+import { normalizeTeachers } from "../../utils/teacherCourseware";
+import { STUDIO_TEACHER } from "../../data/teacherStudio";
 import { getToken } from "../../utils/auth";
 import { userErrorMessage } from "../../utils/userMessage";
 import { clearBookingIntent, setBookingIntent } from "../../utils/bookingIntent";
+import { previewImage } from "../../utils/imagePreview";
 
 const contentId = ref("");
 const content = ref(normalizeClassroomContent());
@@ -51,6 +54,13 @@ const purchaseOffer = ref(null);
 const purchaseTargetError = ref("");
 const paymentEnabled = ref(normalizeMiniappPayment(getStoredSiteConfig()).enabled);
 const coverImageFailed = ref(false);
+const teacherAvatarFailed = ref(false);
+const teacherAvatar = computed(() => {
+  const configured = normalizeTeachers(getStoredSiteConfig() || {})[0]?.avatar || STUDIO_TEACHER.avatar;
+  return /\/avatars\//i.test(configured) || /teacher-poster/i.test(configured)
+    ? STUDIO_TEACHER.avatar
+    : configured;
+});
 let detailTicket = 0;
 let playbackTicket = 0;
 let audioContext = null;
@@ -116,6 +126,14 @@ function consultTeacher() {
     url: "/pages/booking/booking",
     fail() { clearBookingIntent(); },
   });
+}
+
+function openTeacherDetail() {
+  uni.navigateTo({ url: "/pages/teacher/teacher" });
+}
+
+function previewTeacherAvatar() {
+  if (!teacherAvatarFailed.value) previewImage(teacherAvatar.value);
 }
 
 const progressStorage = {
@@ -681,15 +699,18 @@ onUnload(() => {
               <text v-if="content.durationSeconds">{{ formatTime(content.durationSeconds) }} · {{ content.contentType === "audio" ? "随时收听" : "随时回看" }}</text>
             </view>
             <text class="detail-head__title">{{ content.title }}</text>
-            <navigator class="content-summary__teacher" url="/pages/teacher/teacher" hover-class="teacher-link--pressed" aria-label="查看授课老师介绍">
-              <view class="content-summary__avatar" aria-hidden="true">{{ (content.teacherName || "九型老师").slice(0, 1) }}</view>
+            <view class="content-summary__teacher" hover-class="teacher-link--pressed" aria-label="查看授课老师介绍" role="button" @click="openTeacherDetail">
+              <button v-if="teacherAvatar && !teacherAvatarFailed" class="content-summary__avatar-action" aria-label="预览授课老师头像" @click.stop="previewTeacherAvatar">
+                <image class="content-summary__avatar" :src="teacherAvatar" mode="aspectFill" :aria-label="`${content.teacherName || '九型老师'}头像`" @error="teacherAvatarFailed = true" />
+              </button>
+              <view v-else class="content-summary__avatar content-summary__avatar--fallback" aria-hidden="true">{{ (content.teacherName || "九型老师").slice(0, 1) }}</view>
               <view class="content-summary__teacher-copy">
                 <text class="detail-head__teacher">{{ content.teacherName || "九型老师" }}</text>
                 <text class="content-summary__teacher-label">授课老师</text>
               </view>
               <text class="content-summary__teacher-link">了解老师</text>
               <text class="content-summary__arrow" aria-hidden="true">›</text>
-            </navigator>
+            </view>
           </view>
         </view>
       </view>
@@ -825,7 +846,10 @@ onUnload(() => {
 .detail-head__meta { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; color: #A55C3B; font-size: 22rpx; line-height: 1.5; }
 .detail-head__title { display: block; margin-top: 18rpx; color: var(--nx-text); font-size: 38rpx; font-weight: 600; line-height: 1.45; letter-spacing: -.5rpx; }
 .content-summary__teacher { display: flex; align-items: center; gap: 18rpx; min-height: 104rpx; margin-top: 28rpx; padding: 20rpx 0; border-top: 1rpx solid var(--nx-border); box-sizing: border-box; }
-.content-summary__avatar { display: flex; align-items: center; justify-content: center; flex: 0 0 68rpx; width: 68rpx; height: 68rpx; color: #7C664C; font-family: Georgia, "Songti SC", serif; font-size: 30rpx; background: #EDE6D9; border-radius: 50%; }
+.content-summary__avatar-action { display: block; flex: 0 0 68rpx; width: 68rpx; height: 68rpx; margin: 0; padding: 0; border: 0; overflow: hidden; border-radius: 50%; background: transparent; line-height: 0; }
+.content-summary__avatar-action::after { border: 0; }
+.content-summary__avatar { display: block; flex: 0 0 68rpx; width: 68rpx; height: 68rpx; object-fit: cover; background: #EDE6D9; border-radius: 50%; }
+.content-summary__avatar--fallback { display: flex; align-items: center; justify-content: center; color: #7C664C; font-family: Georgia, "Songti SC", serif; font-size: 30rpx; }
 .content-summary__teacher-copy { display: flex; flex: 1; flex-direction: column; gap: 2rpx; }
 .detail-head__teacher { color: var(--nx-text); font-size: 26rpx; font-weight: 600; }
 .content-summary__teacher-label { color: var(--nx-text-muted); font-size: 20rpx; }

@@ -1,6 +1,8 @@
 <script>
-import { initAppPush } from './utils/push'
 import { initializePreviewSession } from './utils/uiPreview'
+// #ifdef APP-PLUS
+import { initAppPush } from './utils/push'
+// #endif
 
 export default {
   onLaunch() {
