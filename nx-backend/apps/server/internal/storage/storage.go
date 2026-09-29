@@ -163,6 +163,10 @@ func NewOSSUploader(config OSSConfig) (*OSSUploader, error) {
 
 	cfg := oss.LoadDefaultConfig().
 		WithRegion(config.Region).
+		// The production bucket is configured for OSS Signature V1 query
+		// authentication. OSS SDK v2 defaults to V4, whose x-oss-* query
+		// parameters are rejected by that bucket when used for playback URLs.
+		WithSignatureVersion(oss.SignatureVersionV1).
 		WithCredentialsProvider(credentials.NewStaticCredentialsProvider(config.AccessKeyID, config.AccessKeySecret))
 	if config.Endpoint != "" {
 		cfg = cfg.WithEndpoint(config.Endpoint)
