@@ -50,6 +50,30 @@ func TestDefaultMembershipLevelQuotas(t *testing.T) {
 	}
 }
 
+func TestDefaultMembershipFeatureFlagsMatchApprovedTiers(t *testing.T) {
+	free := normalizeLoadedAppPlan(defaultAppPlan("free"))
+	vip := normalizeLoadedAppPlan(defaultAppPlan("vip"))
+	svip := normalizeLoadedAppPlan(defaultAppPlan("svip"))
+
+	for _, key := range []string{"deepChat", "companion", "memberPoster", "growthPortrait", "trendAnalysis", "relationshipInsight", "xinzhili"} {
+		if free.FeatureFlags[key] {
+			t.Fatalf("free feature %s must be disabled: %v", key, free.FeatureFlags)
+		}
+		if !vip.FeatureFlags[key] {
+			t.Fatalf("vip feature %s must be enabled: %v", key, vip.FeatureFlags)
+		}
+		if !svip.FeatureFlags[key] {
+			t.Fatalf("svip feature %s must be enabled: %v", key, svip.FeatureFlags)
+		}
+	}
+	if vip.FeatureFlags["prioritySupport"] {
+		t.Fatal("priority support must remain SVIP-only")
+	}
+	if !svip.FeatureFlags["prioritySupport"] {
+		t.Fatal("SVIP must include priority support")
+	}
+}
+
 func TestLegacyBillingCyclesUseCanonicalMembershipCardLimits(t *testing.T) {
 	for _, code := range []string{"vip_month", "vip_quarter", "vip_year", "vip"} {
 		plan := normalizeLoadedAppPlan(defaultAppPlan(code))

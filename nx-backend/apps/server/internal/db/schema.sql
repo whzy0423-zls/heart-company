@@ -3670,10 +3670,10 @@ ALTER TABLE app_plans ADD COLUMN IF NOT EXISTS limits JSONB NOT NULL DEFAULT '{}
 INSERT INTO app_plans
   (code,plan_level,billing_cycle,name,subtitle,price_cents,original_price_cents,badge,features,feature_flags,limits,enabled,sort_order,duration_days,daily_chat_limit,story_monthly_limit,card_limit,deep_chat_enabled,companion_enabled,member_poster_enabled)
 VALUES
-  ('free','free','none','免费版','完整基础体验','0','0','', '["基础与深度对话","专业陪伴模式","首次 1 篇人生故事","经典海报","成长画像与趋势分析","关系洞察与合盘"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true,"growthPortrait":true,"trendAnalysis":true,"relationshipInsight":true,"prioritySupport":true,"xinzhili":true}'::jsonb,'{"cardLimit":1,"dailyChatLimit":-1,"storyMonthlyLimit":1}'::jsonb,true,0,0,-1,1,1,true,true,true),
-  ('vip_month','vip','month','月卡会员','灵活体验完整成长陪伴',2900,0,'灵活','["深度对话与专业陪伴","每月 3 篇人生故事","最多 3 张人物卡","2 款会员海报"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":3,"dailyChatLimit":-1,"storyMonthlyLimit":3}'::jsonb,true,10,30,-1,3,3,true,true,true),
-  ('vip_quarter','vip','quarter','季卡会员','约 ¥26.3/月，适合持续成长',7900,8700,'推荐','["深度对话与专业陪伴","每月 5 篇人生故事","最多 3 张人物卡","2 款会员海报"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":3,"dailyChatLimit":-1,"storyMonthlyLimit":5}'::jsonb,true,20,90,-1,5,3,true,true,true),
-  ('vip_year','vip','year','年卡会员','约 ¥16.6/月，适合长期自我探索',19900,34800,'最划算','["深度对话与专业陪伴","每月 12 篇人生故事","最多 3 张人物卡","2 款会员海报"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":3,"dailyChatLimit":-1,"storyMonthlyLimit":12}'::jsonb,true,30,365,-1,12,3,true,true,true)
+  ('free','free','none','免费版','完整基础体验','0','0','', '["基础与深度对话","专业陪伴模式","首次 1 篇人生故事","经典海报","成长画像与趋势分析","关系洞察与合盘"]'::jsonb,'{"deepChat":false,"companion":false,"memberPoster":false,"growthPortrait":false,"trendAnalysis":false,"relationshipInsight":false,"prioritySupport":false,"xinzhili":false}'::jsonb,'{"cardLimit":1,"dailyChatLimit":-1,"storyMonthlyLimit":1}'::jsonb,true,0,0,-1,1,1,false,false,false),
+  ('vip_month','vip','month','月卡会员','灵活体验完整成长陪伴',2900,0,'灵活','["深度对话与专业陪伴","每月 3 篇人生故事","最多 3 张人物卡","2 款会员海报"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true,"growthPortrait":true,"trendAnalysis":true,"relationshipInsight":true,"xinzhili":true,"prioritySupport":false}'::jsonb,'{"cardLimit":3,"dailyChatLimit":-1,"storyMonthlyLimit":3}'::jsonb,true,10,30,-1,3,3,true,true,true),
+  ('vip_quarter','vip','quarter','季卡会员','约 ¥26.3/月，适合持续成长',7900,8700,'推荐','["深度对话与专业陪伴","每月 5 篇人生故事","最多 3 张人物卡","2 款会员海报"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true,"growthPortrait":true,"trendAnalysis":true,"relationshipInsight":true,"xinzhili":true,"prioritySupport":false}'::jsonb,'{"cardLimit":3,"dailyChatLimit":-1,"storyMonthlyLimit":5}'::jsonb,true,20,90,-1,5,3,true,true,true),
+  ('vip_year','vip','year','年卡会员','约 ¥16.6/月，适合长期自我探索',19900,34800,'最划算','["深度对话与专业陪伴","每月 12 篇人生故事","最多 3 张人物卡","2 款会员海报"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true,"growthPortrait":true,"trendAnalysis":true,"relationshipInsight":true,"xinzhili":true,"prioritySupport":false}'::jsonb,'{"cardLimit":3,"dailyChatLimit":-1,"storyMonthlyLimit":12}'::jsonb,true,30,365,-1,12,3,true,true,true)
 ON CONFLICT (code) DO NOTHING;
 
 -- 会员等级/周期是新权威字段；旧套餐代码和旧额度列继续保留，供历史订单和老客户端读取。
@@ -3695,17 +3695,17 @@ ALTER TABLE app_plans ADD CONSTRAINT app_plans_limits_check CHECK (jsonb_typeof(
 INSERT INTO app_plans
   (code,plan_level,billing_cycle,name,subtitle,price_cents,original_price_cents,badge,features,feature_flags,limits,enabled,sort_order,duration_days,daily_chat_limit,story_monthly_limit,card_limit,deep_chat_enabled,companion_enabled,member_poster_enabled)
 VALUES
-  ('svip','svip','year','SVIP','深度陪伴与优先权益',0,0,'','["深度对话与专业陪伴","每月 12 篇人生故事","最多 10 张人物卡","全部高级内容"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":10,"dailyChatLimit":-1,"storyMonthlyLimit":12}'::jsonb,false,40,365,-1,12,10,true,true,true),
-  ('svip_month','svip','month','SVIP 月卡','深度画像与高级关系洞察',5900,0,'高级权益','["完整成长画像与趋势分析","深度合盘与关系洞察","每月 12 篇人生故事","最多 10 张人物卡"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":10,"dailyChatLimit":-1,"storyMonthlyLimit":12}'::jsonb,true,40,30,-1,12,10,true,true,true),
-  ('svip_quarter','svip','quarter','SVIP 季卡','深度陪伴与长期洞察',15900,17700,'推荐','["完整成长画像与趋势分析","深度合盘与关系洞察","每月 12 篇人生故事","最多 10 张人物卡"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":10,"dailyChatLimit":-1,"storyMonthlyLimit":12}'::jsonb,true,50,90,-1,12,10,true,true,true),
-  ('svip_year','svip','year','SVIP 年卡','完整高级会员体验',49900,70800,'最划算','["完整成长画像与趋势分析","深度合盘与关系洞察","每月 12 篇人生故事","最多 10 张人物卡"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true}'::jsonb,'{"cardLimit":10,"dailyChatLimit":-1,"storyMonthlyLimit":12}'::jsonb,true,60,365,-1,12,10,true,true,true)
+  ('svip','svip','year','SVIP','深度陪伴与优先权益',0,0,'','["深度对话与专业陪伴","每月 12 篇人生故事","最多 10 张人物卡","全部高级内容"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true,"growthPortrait":true,"trendAnalysis":true,"relationshipInsight":true,"xinzhili":true,"prioritySupport":true}'::jsonb,'{"cardLimit":10,"dailyChatLimit":-1,"storyMonthlyLimit":12}'::jsonb,false,40,365,-1,12,10,true,true,true),
+  ('svip_month','svip','month','SVIP 月卡','深度画像与高级关系洞察',5900,0,'高级权益','["完整成长画像与趋势分析","深度合盘与关系洞察","每月 12 篇人生故事","最多 10 张人物卡"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true,"growthPortrait":true,"trendAnalysis":true,"relationshipInsight":true,"xinzhili":true,"prioritySupport":true}'::jsonb,'{"cardLimit":10,"dailyChatLimit":-1,"storyMonthlyLimit":12}'::jsonb,true,40,30,-1,12,10,true,true,true),
+  ('svip_quarter','svip','quarter','SVIP 季卡','深度陪伴与长期洞察',15900,17700,'推荐','["完整成长画像与趋势分析","深度合盘与关系洞察","每月 12 篇人生故事","最多 10 张人物卡"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true,"growthPortrait":true,"trendAnalysis":true,"relationshipInsight":true,"xinzhili":true,"prioritySupport":true}'::jsonb,'{"cardLimit":10,"dailyChatLimit":-1,"storyMonthlyLimit":12}'::jsonb,true,50,90,-1,12,10,true,true,true),
+  ('svip_year','svip','year','SVIP 年卡','完整高级会员体验',49900,70800,'最划算','["完整成长画像与趋势分析","深度合盘与关系洞察","每月 12 篇人生故事","最多 10 张人物卡"]'::jsonb,'{"deepChat":true,"companion":true,"memberPoster":true,"growthPortrait":true,"trendAnalysis":true,"relationshipInsight":true,"xinzhili":true,"prioritySupport":true}'::jsonb,'{"cardLimit":10,"dailyChatLimit":-1,"storyMonthlyLimit":12}'::jsonb,true,60,365,-1,12,10,true,true,true)
 ON CONFLICT (code) DO NOTHING;
 
 -- Keep the level-specific capability switches explicit for existing installs.
 UPDATE app_plans
 SET feature_flags = feature_flags || CASE
-  WHEN plan_level = 'svip' THEN '{"growthPortrait":true,"trendAnalysis":true,"relationshipInsight":true,"prioritySupport":true}'::jsonb
-  WHEN plan_level = 'vip' THEN '{"growthPortrait":false,"trendAnalysis":false,"relationshipInsight":false,"prioritySupport":false}'::jsonb
+  WHEN plan_level = 'svip' THEN '{"growthPortrait":true,"trendAnalysis":true,"relationshipInsight":true,"xinzhili":true,"prioritySupport":true}'::jsonb
+  WHEN plan_level = 'vip' THEN '{"growthPortrait":true,"trendAnalysis":true,"relationshipInsight":true,"xinzhili":true,"prioritySupport":false}'::jsonb
   ELSE '{}'::jsonb
 END;
 
@@ -3759,12 +3759,12 @@ WHERE limits = '{}'::jsonb;
 UPDATE app_plans
 SET subtitle = '完整基础体验',
     features = '["基础与深度对话","专业陪伴模式","首次 1 篇人生故事","经典海报","成长画像与趋势分析","关系洞察与合盘"]'::jsonb,
-    feature_flags = feature_flags || '{"deepChat":true,"companion":true,"memberPoster":true,"growthPortrait":true,"trendAnalysis":true,"relationshipInsight":true,"prioritySupport":true,"xinzhili":true}'::jsonb,
+    feature_flags = feature_flags || '{"deepChat":false,"companion":false,"memberPoster":false,"growthPortrait":false,"trendAnalysis":false,"relationshipInsight":false,"prioritySupport":false,"xinzhili":false}'::jsonb,
     limits = limits || '{"dailyChatLimit":-1}'::jsonb,
     daily_chat_limit = -1,
-    deep_chat_enabled = true,
-    companion_enabled = true,
-    member_poster_enabled = true,
+    deep_chat_enabled = false,
+    companion_enabled = false,
+    member_poster_enabled = false,
     update_time = now()
 WHERE code = 'free';
 
