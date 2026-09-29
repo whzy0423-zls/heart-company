@@ -4,6 +4,12 @@ function cleanImageUrl(value) {
 
 export function isWechatDevtools() {
   try {
+    // In the simulator the device profile can report `ios`/`android`, so the
+    // platform field alone is not reliable. The WeChat bridge is present in
+    // both the simulator and a real mini-program runtime; use the explicit
+    // native API as the stronger signal and keep the platform check for older
+    // developer tools.
+    if (typeof globalThis?.wx?.previewImage === 'function') return true
     return globalThis?.uni?.getSystemInfoSync?.().platform === 'devtools'
   } catch {
     return false

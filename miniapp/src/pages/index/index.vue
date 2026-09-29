@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import NxIcon from '../../components/NxIcon.vue'
+import NxImagePreview from '../../components/NxImagePreview.vue'
 import { listClassroomRecentApi } from '../../api'
 import { getStoredSiteConfig, refreshSiteConfig } from '../../utils/siteConfig'
 import { normalizeTeachers, normalizeCoursewareItems } from '../../utils/teacherCourseware'
@@ -10,6 +11,7 @@ import { setBookingIntent, clearBookingIntent } from '../../utils/bookingIntent'
 import { STUDIO_TEACHER, STUDIO_COURSES } from '../../data/teacherStudio'
 import { UI_PREVIEW } from '../../utils/uiPreview'
 import { previewImage } from '../../utils/imagePreview'
+import { isWechatDevtools } from '../../utils/imagePreview'
 
 const LOCAL_TEACHER_PORTRAIT = '/static/teacher/portrait.jpg'
 const config = ref(getStoredSiteConfig() || {})
@@ -17,6 +19,7 @@ const videos = ref([])
 const loading = ref(true)
 const error = ref('')
 const portraitFailed = ref(false)
+const portraitPreviewVisible = ref(false)
 const coverErrors = ref({})
 const classroomEnabled = computed(() => normalizeMiniappLearn(config.value).classroom.enabled)
 const teacher = computed(() => {
@@ -53,7 +56,14 @@ function booking(kind = 'course') { setBookingIntent({ kind, intentText: '' }); 
 function openCourse() { if (featuredCourse.value) navigate(`/pages/course-detail/course-detail?id=${UI_PREVIEW ? featuredCourse.value.id : 'course-0'}`); else booking() }
 function openVideo(item) { const url = classroomContentRoute(item); if (url) navigate(url) }
 function duration(value) { return `${String(Math.floor((value || 0) / 60)).padStart(2, '0')}:${String((value || 0) % 60).padStart(2, '0')}` }
-function previewPortrait() { previewImage(portraitFailed.value && isLaohan.value ? LOCAL_TEACHER_PORTRAIT : portrait.value) }
+function previewPortrait() {
+  if (isWechatDevtools()) {
+    portraitPreviewVisible.value = true
+    return
+  }
+  previewImage(portraitFailed.value && isLaohan.value ? LOCAL_TEACHER_PORTRAIT : portrait.value)
+}
+function closePortraitPreview() { portraitPreviewVisible.value = false }
 </script>
 
 <template>
@@ -117,6 +127,13 @@ function previewPortrait() { previewImage(portraitFailed.value && isLaohan.value
       <view class="home-footer"><text>向内看见，向外生长</text><text class="home-footer-en">GROW AT YOUR OWN PACE</text></view>
     </view>
   </view>
+  <NxImagePreview
+    v-if="(portraitFailed && isLaohan) || portrait"
+    :visible="portraitPreviewVisible"
+    :src="portraitFailed && isLaohan ? LOCAL_TEACHER_PORTRAIT : portrait"
+    :alt="`${teacher?.name || '老师'}头像`"
+    @close="closePortraitPreview"
+  />
 </template>
 
 <style scoped>
