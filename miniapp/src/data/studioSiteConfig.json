@@ -30,6 +30,7 @@
             "语言解码"
           ],
           "description": "认识自己的性格能量，理解反应模式与关系模式，找到成长方向。",
+          "cover": "/static/editorial/course-classroom.jpg",
           "title": "个人成长 · 关系疗愈"
         },
         {
@@ -40,6 +41,7 @@
             "组织文化建设"
           ],
           "description": "把九型应用于领导力开发，理解团队成员动机，提升协作与凝聚力。",
+          "cover": "/static/editorial/course-team.webp",
           "title": "领导力 · 团队协作"
         },
         {
@@ -50,6 +52,7 @@
             "个案疏导"
           ],
           "description": "面向婚姻、亲子、夫妻关系，提供咨询培训与一对一个案咨询治疗经验。",
+          "cover": "/static/editorial/course-family.webp",
           "title": "家庭关系 · 系统排列"
         }
       ],

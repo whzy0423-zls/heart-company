@@ -30,6 +30,8 @@ INITIAL_ASSETS = {
     "course-intro.webp": AssetSpec(800, 500, 140 * 1024),
     "course-growth.webp": AssetSpec(800, 500, 140 * 1024),
     "course-relation.webp": AssetSpec(800, 500, 140 * 1024),
+    "course-team.webp": AssetSpec(800, 500, 140 * 1024),
+    "course-family.webp": AssetSpec(800, 500, 140 * 1024),
 }
 
 RESULT_ASSETS = {
@@ -37,7 +39,17 @@ RESULT_ASSETS = {
     for number in range(1, 10)
 }
 
-ALLOWED_ARTIFACTS = set(INITIAL_ASSETS) | set(RESULT_ASSETS) | {".gitkeep"}
+ALLOWED_ARTIFACTS = (
+    set(INITIAL_ASSETS)
+    | set(RESULT_ASSETS)
+    | {
+        ".gitkeep",
+        "center-gut.png",
+        "center-head.png",
+        "center-heart.png",
+        "course-classroom.jpg",
+    }
+)
 
 
 def parse_args() -> argparse.Namespace:

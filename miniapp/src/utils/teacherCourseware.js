@@ -4,7 +4,7 @@ export const DEFAULT_TEACHERS = [
   {
     name: '韩老师',
     title: '九型人格主讲老师',
-    avatar: '/static/avatars/9.png',
+    avatar: '/static/teacher/portrait.jpg',
     bio: '长期带领九型人格学习与个案梳理，擅长把类型动机、关系沟通和日常成长练习讲清楚。',
     tags: ['九型入门', '关系沟通', '成长练习'],
   },
@@ -140,7 +140,7 @@ export function normalizeTeachers(config) {
     return {
       name: identity.name,
       title: identity.title,
-      avatar: firstAsset(source, ['avatar', 'photo', 'image', 'cover', 'fallbackImage'], '/static/avatars/9.png'),
+      avatar: firstAsset(source, ['avatar', 'photo', 'image', 'cover', 'fallbackImage'], '/static/teacher/portrait.jpg'),
       bio: firstText(source, ['bio', 'description', 'desc', 'intro', 'summary', 'lead']) || '带你用九型人格看见真实动机，把课程内容落到每天可练习的沟通与成长里。',
       tags: teacherTags(source),
     }
@@ -163,19 +163,19 @@ export function normalizeTeachers(config) {
 const COURSE_EDITORIAL = [
   {
     match: /个人|成长|疗愈/,
-    cover: '/static/editorial/course-growth.webp',
+    cover: '/static/editorial/course-classroom.jpg',
     materialTypes: ['课件', '音频'],
     duration: '6 讲 · 约 90 分钟',
   },
   {
     match: /领导|团队|企业|组织/,
-    cover: '/static/editorial/course-intro.webp',
+    cover: '/static/editorial/course-team.webp',
     materialTypes: ['课件', '视频'],
     duration: '8 讲 · 约 120 分钟',
   },
   {
     match: /家庭|亲子|夫妻|婚姻|系统排列/,
-    cover: '/static/editorial/course-relation.webp',
+    cover: '/static/editorial/course-family.webp',
     materialTypes: ['课件', '视频', '音频'],
     duration: '5 讲 · 约 75 分钟',
   },

@@ -29,7 +29,7 @@ import { previewImage } from '../../utils/imagePreview'
 import NxIcon from '../../components/NxIcon.vue'
 import { UI_PREVIEW } from '../../utils/uiPreview'
 
-const TEACHER_FALLBACK = ''
+const TEACHER_FALLBACK = '/static/teacher/portrait.jpg'
 const COURSE_FALLBACKS = [
   '/static/editorial/course-intro.webp',
   '/static/editorial/course-growth.webp',
@@ -106,7 +106,7 @@ function syncContentImages() {
   teacherImageFallbackUsed.reset()
   courseImageFallbackUsed.reset()
   const portrait = teacher.value?.avatar === '/static/avatars/9.png' ? '' : teacher.value?.avatar
-  const portraitSource = ['韩常青', '韩常青（老韩）', '韩常青(老韩)', '老韩'].includes(teacher.value?.name) && /teacher-poster/i.test(String(portrait || '')) ? '/static/teacher/portrait.jpg' : portrait
+  const portraitSource = /teacher-poster/i.test(String(portrait || '')) ? '/static/teacher/portrait.jpg' : portrait
   teacherImage.value = resolveContentAsset(portraitSource, TEACHER_FALLBACK)
   courseImages.value = Object.fromEntries(courseEntries.value.map(({ key: courseKey, item: course }) => [
     courseKey,
@@ -136,6 +136,13 @@ function onTeacherImageError() {
 
 function previewTeacherAvatar() {
   previewImage(teacherImage.value)
+}
+
+function previewCourseCover(courseKey) {
+  const current = courseImages.value?.[courseKey]
+  if (!current) return
+  const urls = Object.values(courseImages.value || {}).filter(Boolean)
+  previewImage(current, { urls })
 }
 
 function onCourseImageError(courseKey) {
@@ -269,7 +276,7 @@ onMounted(() => {
 
         <button v-if="featuredCourse" class="featured-video" @click="openPublishedCourse(featuredCourse.item)">
           <view class="featured-video__media">
-            <image class="featured-video__cover" :src="courseImages[featuredCourse.key]" mode="aspectFill" :aria-label="featuredCourse.item.title" @error="onCourseImageError(featuredCourse.key)" />
+            <image class="featured-video__cover" :src="courseImages[featuredCourse.key]" mode="aspectFill" :aria-label="featuredCourse.item.title" @click.stop="previewCourseCover(featuredCourse.key)" @error="onCourseImageError(featuredCourse.key)" />
             <view class="featured-video__shade" />
             <text class="featured-video__tag">{{ topicFor(featuredCourse.item) }}</text>
             <view class="featured-video__play"><NxIcon name="play" :size="23" color="#FFFFFF" /></view>
@@ -286,7 +293,7 @@ onMounted(() => {
         <view v-if="remainingCourses.length" class="course-list">
           <button v-for="courseEntry in remainingCourses" :key="courseEntry.key" class="course-row" @click="openPublishedCourse(courseEntry.item)">
             <view class="course-row__media">
-              <image class="course-row__cover" :src="courseImages[courseEntry.key]" mode="aspectFill" :aria-label="courseEntry.item.title" lazy-load @error="onCourseImageError(courseEntry.key)" />
+              <image class="course-row__cover" :src="courseImages[courseEntry.key]" mode="aspectFill" :aria-label="courseEntry.item.title" lazy-load @click.stop="previewCourseCover(courseEntry.key)" @error="onCourseImageError(courseEntry.key)" />
               <view class="course-row__play"><NxIcon name="play" :size="12" color="#FFFFFF" /></view>
               <text v-if="courseEntry.item.duration" class="course-row__duration">{{ courseEntry.item.duration }}</text>
             </view>
@@ -431,7 +438,9 @@ button:focus-visible { outline: 3rpx solid #A55C3B; outline-offset: 5rpx; }
 .learn-teacher { margin-top: 40rpx; padding: 24rpx; border: 1rpx solid #E6E1D8; border-radius: 24rpx; background: var(--nx-surface, #FFFFFF); }
 .learn-teacher__summary { display: flex; gap: 20rpx; align-items: center; }
 .learn-teacher__portrait { flex: none; width: 88rpx; aspect-ratio: 4 / 5; border-radius: 14rpx; overflow: hidden; }
-.teacher-card__avatar-action, .learn-teacher__image { display: block; width: 88rpx; height: 110rpx; }
+.teacher-card__avatar-action { display: block; width: 88rpx; height: 110rpx; padding: 0; margin: 0; border: 0; border-radius: 14rpx; background: transparent; overflow: hidden; }
+.teacher-card__avatar-action::after { border: 0; }
+.learn-teacher__image { display: block; width: 88rpx; height: 110rpx; border-radius: 14rpx; }
 .learn-teacher__image--placeholder { display: flex; align-items: center; justify-content: center; color: #A55C3B; background: #F0E9DD; font-family: 'Songti SC', serif; font-size: 40rpx; }
 .learn-teacher__identity { flex: 1; min-width: 0; }
 .section-label { color: #77786F; font-size: 21rpx; }

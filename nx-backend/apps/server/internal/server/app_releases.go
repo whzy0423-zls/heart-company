@@ -112,7 +112,12 @@ func ifNoneMatch(header, etag string) bool {
 }
 
 func (s *Server) appReleaseUpload(w http.ResponseWriter, r *http.Request) {
-	if err := http.NewResponseController(w).SetReadDeadline(time.Time{}); err != nil && !errors.Is(err, http.ErrNotSupported) {
+	controller := http.NewResponseController(w)
+	if err := controller.SetReadDeadline(time.Time{}); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		httpx.Fail(w, http.StatusInternalServerError, "App release upload unavailable")
+		return
+	}
+	if err := controller.SetWriteDeadline(time.Time{}); err != nil && !errors.Is(err, http.ErrNotSupported) {
 		httpx.Fail(w, http.StatusInternalServerError, "App release upload unavailable")
 		return
 	}

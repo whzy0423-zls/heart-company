@@ -89,7 +89,7 @@ assert.deepEqual(
   {
     name: '韩常青（老韩）',
     title: '首席导师',
-    avatar: '/static/avatars/9.png',
+    avatar: '/static/teacher/portrait.jpg',
     bio: '带你用九型人格看见真实动机，把课程内容落到每天可练习的沟通与成长里。',
     tags: [],
   },
@@ -269,9 +269,9 @@ assert.deepEqual(
 assert.deepEqual(
   enrichedCourses.map((item) => item.cover),
   [
-    '/static/editorial/course-growth.webp',
-    '/static/editorial/course-intro.webp',
-    '/static/editorial/course-relation.webp',
+    '/static/editorial/course-classroom.jpg',
+    '/static/editorial/course-team.webp',
+    '/static/editorial/course-family.webp',
   ],
   'the current three course categories should receive distinct local editorial covers',
 )

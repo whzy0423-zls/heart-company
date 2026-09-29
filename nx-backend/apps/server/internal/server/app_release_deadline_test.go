@@ -13,12 +13,12 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/apprelease"
 )
 
-func TestAppReleaseUploadClearsServerReadDeadline(t *testing.T) {
+func TestAppReleaseUploadClearsServerDeadlines(t *testing.T) {
 	service := slowUploadAppReleaseService{}
 	handler := &Server{appReleases: service}
 	testServer := httptest.NewUnstartedServer(http.HandlerFunc(handler.appReleaseUpload))
 	testServer.Config.ReadTimeout = 20 * time.Millisecond
-	testServer.Config.WriteTimeout = time.Second
+	testServer.Config.WriteTimeout = 20 * time.Millisecond
 	testServer.Start()
 	defer testServer.Close()
 

@@ -350,7 +350,12 @@ function reset() {
   background: var(--nx-page-bg);
 }
 .relation-hero {
+  position: relative;
+  box-sizing: border-box;
   min-height: 300rpx;
+  padding: 38rpx 34rpx 36rpx;
+  overflow: hidden;
+  border-radius: 38rpx;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -431,7 +436,12 @@ function reset() {
 .analyze--pressed, .reset--pressed { opacity: .84; transform: scale(.985); }
 
 .pair {
+  position: relative;
+  box-sizing: border-box;
   min-height: 330rpx;
+  padding: 34rpx 30rpx;
+  overflow: hidden;
+  border-radius: 38rpx;
   display: flex;
   align-items: center;
   justify-content: space-between;
