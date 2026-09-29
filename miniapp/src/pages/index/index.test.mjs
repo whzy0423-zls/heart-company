@@ -1,483 +1,162 @@
-import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import assert from 'node:assert/strict'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
-const pageUrl = new URL("./index.vue", import.meta.url);
-const source = await readFile(pageUrl, "utf8");
-const template = source.match(/<template>([\s\S]*?)<\/template>/)?.[1] || "";
-const script = source.match(/<script setup>([\s\S]*?)<\/script>/)?.[1] || "";
-const style = source.match(/<style scoped>([\s\S]*?)<\/style>/)?.[1] || "";
-const theme = await readFile(new URL("../../styles/apple-mobile.css", import.meta.url), "utf8");
+const source = await readFile(new URL('./index.vue', import.meta.url), 'utf8')
+const script = source.match(/<script setup>([\s\S]*?)<\/script>/)?.[1]
+assert.ok(script, 'home should expose executable page state')
+const executable = script.replace(/^import[\s\S]*?from\s+['"][^'"]+['"]\s*;?\s*$/gm, '')
+const dir = await mkdtemp(join(tmpdir(), 'nx-studio-home-'))
+const modulePath = join(dir, 'home-state.mjs')
+await writeFile(modulePath, `
+const ref = value => ({ value })
+const computed = getter => ({ get value() { return getter() } })
+const onMounted = handler => { globalThis.__homeHarness.mount = handler }
+const getStoredSiteConfig = () => globalThis.__homeHarness.cache
+const refreshSiteConfig = () => globalThis.__homeHarness.refresh()
+const listClassroomRecentApi = query => globalThis.__homeHarness.list(query)
+const normalizeTeachers = config => config.teachers || (config.home?.teacherTeaser ? [config.home.teacherTeaser] : [])
+const normalizeCoursewareItems = config => config.home?.courses?.items || []
+const normalizeMiniappLearn = config => ({ classroom: { enabled: config?.home?.miniappLearn?.classroom?.enabled !== false } })
+const classroomContentRoute = item => /^[1-9]\\d*$/.test(String(item?.id || '')) ? '/pages/classroom-detail/classroom-detail?id=' + item.id + '&type=' + (item.contentType === 'audio' ? 'audio' : 'video') : ''
+const setBookingIntent = value => { globalThis.__homeHarness.intent = value }
+const clearBookingIntent = () => { globalThis.__homeHarness.intent = null }
+const STUDIO_TEACHER = { name: '韩老师', avatar: '/static/teacher/portrait.jpg' }
+const STUDIO_COURSES = [{ id: 'preview-course', title: '演示课程' }]
+const UI_PREVIEW = globalThis.__homeHarness.preview
+${executable}
+export { config, videos, loading, error, teacher, portrait, isLaohan, courses, classroomEnabled, dailyVideos, load, daily, booking, openVideo, openCourse }
+`)
 
-assert.ok(template && script && style, "home page should expose template, executable page state, and scoped styles");
-
-const requiredOrder = [
-  "expert-hero",
-  "proof-stats",
-  "carousel",
-  "enterprise-services",
-  "test-game",
-  "classroom-preview",
-  "secondary-entries",
-  "enterprise-final-cta",
-];
-let previousIndex = -1;
-for (const className of requiredOrder) {
-  const index = template.indexOf(`class="${className}`);
-  assert.ok(index > previousIndex, `${className} should appear in the required home information order`);
-  previousIndex = index;
-}
-assert.doesNotMatch(template, /class="home-nav(?:__[^"\s]*)?/, "home should begin with the expert poster instead of rendering the brand strip");
-assert.doesNotMatch(template, /activateSecondaryEntry\(\{ key: 'profile' \}\)/, "home hero should not expose a profile activation button");
-assert.ok(
-  template.indexOf('class="carousel') > template.indexOf('class="proof-stats'),
-  "carousel should support the expert story instead of leading the home page",
-);
-assert.match(template, /v-if="view\.proofStats\.length"[^>]*class="proof-stats/, "proof stats should render only with configured data");
-assert.match(template, /v-if="carousel\.items\.length"[^>]*class="carousel/, "carousel should render only when images remain available");
-assert.match(template, /v-if="view\.game\.enabled"[^>]*class="test-game/, "test game should honor its enabled flag");
-assert.match(
-  template,
-  /class="expert-hero__secondary"[\s\S]{0,220}@click="goClassroom"/,
-  "the hero classroom CTA should open standalone classroom courseware rather than the generic learning tab",
-);
-assert.match(template, /:autoplay="carousel\.items\.length > 1 && carousel\.autoplay && !carouselPaused"/, "carousel autoplay should respect pause state");
-assert.match(template, /class="carousel__image"[\s\S]{0,240}lazy-load[\s\S]{0,240}:aria-label=[\s\S]{0,180}@error="removeCarouselItem\(item\.image\)"/, "carousel images should keep lazy loading, accessible labels, and failure isolation");
-assert.match(template, /class="carousel__toggle"[\s\S]{0,260}@click="toggleCarouselPaused"/, "carousel should expose an accessible pause control");
-assert.match(template, /老师正在整理更多视频与音频内容，稍后再来看看。/, "empty classroom preview should use visitor-facing copy");
-const secondaryTemplate = template.slice(
-  template.indexOf('class="secondary-entries"'),
-  template.indexOf('class="enterprise-final-cta"'),
-);
-assert.equal(
-  (secondaryTemplate.match(/class="section-heading"/g) || []).length,
-  1,
-  "secondary entries should have one section heading rather than a nested duplicate",
-);
-assert.match(theme, /--nx-home-gold-halo:\s*rgba\(/, "the root theme should centralize translucent home colors in semantic CSS variables");
-assert.doesNotMatch(style, /rgba\(/, "home style rules should consume root semantic variables instead of scattered rgba literals");
-
-for (const state of ["loading", "stale", "empty", "error"]) {
-  assert.match(source, new RegExp(`NxAsyncState[\\s\\S]{0,360}state=["']${state}["']`), `home should connect NxAsyncState ${state}`);
-}
-assert.match(source, /@action="retrySiteConfig"/, "stale config should expose a retry action");
-assert.match(source, /@action="retryClassroomPreview"/, "classroom async states should expose retry");
-assert.match(source, /:busy="siteRefreshing"/, "site retry should disable duplicate work while busy");
-assert.match(source, /:busy="classroomLoading"/, "classroom retry should disable duplicate work while busy");
-assert.doesNotMatch(source, /发布后的独立视频与音频课件/, "classroom empty copy should speak to visitors instead of backend publishing workflow");
-
-assert.match(source, /listClassroomRecentApi\(\{\s*limit:\s*2\s*\}\)/, "home should request the two most recently updated classroom entries");
-assert.match(source, /normalizeRecentClassroomItem/, "home should normalize the recent series/content union");
-assert.match(source, /classroomContentRoute\(item\)/, "classroom cards should use the shared detail route helper");
-assert.match(source, /item\.itemType\s*===\s*["']series["']/, "home cards should branch for series entries");
-assert.match(source, /\/pages\/classroom\/classroom\?tab=series&seriesId=/, "series cards should deep-link to their expanded series");
-assert.match(source, /\/pages\/classroom\/classroom\?tab=standalone/, "view-all should default to standalone classroom content");
-assert.match(source, /classroomAccessLabel/, "classroom cards should explain access permission");
-assert.match(source, /formatDuration\(item\.durationSeconds\)/, "classroom cards should expose useful duration metadata");
-
-assert.match(source, /expertHero\.detailImage/, "expert hero should render the configured teacher detail poster");
-const expertHeroTemplate = template.slice(
-  template.indexOf('class="expert-hero nx-card"'),
-  template.indexOf('class="proof-stats"'),
-);
-assert.doesNotMatch(
-  expertHeroTemplate,
-  /class="expert-hero__(?:copy|eyebrow|title|lead|portrait-overlay|portrait-label|portrait-arrow)"|view\.expertHero\.(?:eyebrow|title|lead)/,
-  "the complete detail poster should render without custom identity or affordance overlays",
-);
-assert.doesNotMatch(
-  expertHeroTemplate,
-  /expert-hero__primary/,
-  "the full-bleed teacher hero should not render the obsolete primary CTA",
-);
-assert.doesNotMatch(
-  style,
-  /\.expert-hero__primary(?:--pressed)?\b/,
-  "the full-bleed teacher hero should not retain obsolete primary CTA styles",
-);
-assert.match(
-  expertHeroTemplate,
-  /<button\b(?=[^>]*class="expert-hero__portrait")(?=[^>]*@click="previewTeacherDetail")[^>]*>[\s\S]*?<\/button>\s*<button\b(?=[^>]*class="expert-hero__secondary")(?=[^>]*@click="goClassroom")[^>]*>[\s\S]*?进入老师课堂[\s\S]*?<\/button>/,
-  "the classroom action should sit directly below the detail-poster preview as a sibling native button",
-);
-const portraitPreviewTemplate = expertHeroTemplate.match(
-  /<button\b[^>]*class="expert-hero__portrait"[^>]*>[\s\S]*?<\/button>/,
-)?.[0] || "";
-assert.ok(portraitPreviewTemplate, "the hero should expose one native portrait preview button");
-assert.equal(
-  (portraitPreviewTemplate.match(/<button\b/g) || []).length,
-  1,
-  "the classroom action must not be nested inside the portrait preview button",
-);
-assert.match(
-  expertHeroTemplate,
-  /<image\b(?=[^>]*class="expert-hero__image")(?=[^>]*:src="view\.expertHero\.detailImage")(?=[^>]*:key="view\.expertHero\.detailImage")(?=[^>]*:data-image="view\.expertHero\.detailImage")(?=[^>]*mode="aspectFit")[^>]*>/,
-  "teacher poster should bind source, render key, error identity, and aspectFit to detailImage",
-);
-assert.doesNotMatch(
-  expertHeroTemplate,
-  /view\.expertHero\.portraitImage/,
-  "the detail-poster hero should not fall back to the compact portrait source",
-);
-assert.match(source, /teacherDetailFailed/, "teacher detail poster should own an isolated failure state");
-assert.match(
-  template,
-  /<button\b(?=[^>]*class="expert-hero__portrait")(?=[^>]*aria-label="预览完整导师介绍海报")(?=[^>]*hover-class="expert-hero__portrait--pressed")(?=[^>]*@click="previewTeacherDetail")[^>]*>/,
-  "teacher detail poster should be one accessible native preview button",
-);
-assert.match(
-  template,
-  /v-else class="expert-hero__monogram"[^>]*>[\s\S]*?view\.expertHero\.monogram \|\| '九'/,
-  "failed teacher detail posters should preserve the configured Nine-Type monogram fallback",
-);
-assert.match(
-  source,
-  /function previewTeacherDetail\(\)\s*\{\s*const detailImage = view\.value\.expertHero\.detailImage;\s*if \(!detailImage\) return;\s*uni\.previewImage\(\{\s*current: detailImage,\s*urls: \[detailImage\],?\s*\}\);\s*\}/,
-  "teacher detail preview should open only the configured full poster when it exists",
-);
-assert.match(
-  style,
-  /\.expert-hero\s*\{[^}]*width:\s*640rpx;[^}]*max-width:\s*100%;[^}]*margin:\s*0 auto;[^}]*display:\s*flex;[^}]*flex-direction:\s*column;/s,
-  "the complete detail-poster hero should be a centered 640rpx vertical stack",
-);
-assert.match(
-  style,
-  /\.expert-hero__portrait\s*\{[^}]*position:\s*relative;[^}]*width:\s*100%;[^}]*height:\s*1140rpx;[^}]*border:\s*2rpx solid var\(--nx-home-gold-portrait-border\)/s,
-  "the poster preview should keep the complete 640 by 1140rpx artwork ratio and gold border",
-);
-assert.match(
-  expertHeroTemplate,
-  /class="expert-hero__image"[\s\S]{0,320}mode="aspectFit"/,
-  "the detail poster should use aspectFit so its introduction, person, and slogan remain visible",
-);
-assert.doesNotMatch(
-  style,
-  /\.expert-hero__portrait-(?:overlay|label|arrow)\b/,
-  "the complete poster should not retain custom overlay styling",
-);
-assert.match(
-  style,
-  /@media\s*\(max-width:\s*380px\)\s*\{[\s\S]*?\.expert-hero\s*\{[^}]*width:\s*100%;[\s\S]*?\.expert-hero__portrait\s*\{[^}]*height:\s*auto;[^}]*min-height:\s*0;[^}]*aspect-ratio:\s*1024\s*\/\s*1824;[\s\S]*?\.expert-hero__secondary\s*\{[^}]*min-height:\s*88rpx;/,
-  "narrow screens should derive poster height from the full 1024 by 1824 artwork ratio while preserving the 88rpx classroom action",
-);
-const narrowPosterRules = style.match(
-  /@media\s*\(max-width:\s*380px\)[\s\S]*?\.expert-hero__portrait\s*\{([^}]*)\}/,
-)?.[1] || "";
-assert.doesNotMatch(
-  narrowPosterRules,
-  /(?:height|min-height):\s*\d+rpx/,
-  "narrow poster rules should not retain a fixed rpx height that can distort clamped viewports",
-);
-assert.match(source, /failedCarouselImages/, "carousel images should keep an isolated failed-image Set");
-assert.match(source, /courseCoverErrors/, "course covers should keep isolated fallback state");
-assert.match(template, /class="classroom-card__cover-fallback"/, "missing classroom covers should use a CSS-only placeholder");
-assert.doesNotMatch(template, /classroom-card__cover-fallback"[^>]*>[\s\S]{0,80}[😀-🙏]/u, "course fallback should not use emoji");
-
-assert.match(source, /setBookingIntent\(\{\s*kind:\s*["']enterprise["'],\s*intentText:\s*["']["']\s*\}\)/, "primary enterprise CTA should store an empty enterprise intent");
-assert.match(source, /intentText:\s*service\.title/, "enterprise service cards should store their title as intent text");
-assert.match(source, /switchTab\(\{\s*url:\s*["']\/pages\/booking\/booking["']\s*\}\)/, "enterprise actions should switch to booking tab");
-assert.match(source, /navigateTo\(\{\s*url:\s*["']\/pages\/test\/test["']\s*\}\)/, "game should always navigate to the test page");
-assert.match(template, /18道生活情境题/, "test section should explain the fixed question count");
-assert.match(template, /约3分钟/, "test section should explain the approximate completion time");
-assert.doesNotMatch(template, /secondaryEntries[\s\S]{0,180}test/i, "test should not be duplicated in secondary navigation");
-assert.match(source, /MINIAPP_HOME_ENTRY_BEHAVIORS\[entry\.key\]/, "secondary entries should use fixed route behavior instead of configured URLs");
-
-for (const fictionalProof of [/80\+/, /96\s*%/, /虚构客户案例/, /客户案例/]) {
-  assert.doesNotMatch(source, fictionalProof, "home should not include unconfigured demonstration proof");
-}
-assert.doesNotMatch(template, /view\.cases|case-card/, "empty cases should not create a decorative case section");
-assert.doesNotMatch(template, /role="button"/, "interactive regions should use native buttons without nested controls");
-for (const tag of template.match(/<[^>]+@click[^>]*>/g) || []) {
-  assert.match(tag, /^<button\b/, `click interaction should have one native button region: ${tag}`);
-}
-for (const className of [
-  "expert-hero__portrait",
-  "expert-hero__secondary",
-  "enterprise-service",
-  "test-game__cta",
-  "classroom-card",
-  "secondary-entry",
-  "enterprise-final-cta__button",
-]) {
-  assert.match(source, new RegExp(`\\.${className}\\s*\\{[^}]*min-height:\\s*88rpx`, "s"), `${className} should meet the 88rpx touch target`);
-}
-for (const token of ["--nx-brand-900", "--nx-brand-700", "--nx-accent-gold", "--nx-page-bg", "--nx-surface", "--nx-text", "--nx-text-muted", "--nx-border"]) {
-  assert.match(source, new RegExp(`var\\(${token}\\)`), `home should use semantic token ${token}`);
-}
-assert.doesNotMatch(source, /purple|#7229ad|#6338c7|#7b3bc7/i, "home should not retain the old purple entertainment palette");
-const nonSemanticRgbaLines = source
-  .split("\n")
-  .map((line, index) => ({ index: index + 1, line: line.trim() }))
-  .filter(({ line }) => line.includes("rgba(") && !/^--nx-home-[a-z0-9-]+:\s*[^;]*rgba\(/.test(line));
-assert.deepEqual(nonSemanticRgbaLines, [], "home rgba values should be centralized as --nx-home-* semantic CSS variables");
-
-const executableScript = script.replace(/^import[\s\S]*?from\s+['"][^'"]+['"]\s*;?\s*$/gm, "");
-const dir = await mkdtemp(join(tmpdir(), "nx-home-page-state-"));
-const modulePath = join(dir, "index-state.mjs");
-const prelude = `
-const ref = (value) => ({ value })
-const computed = (getter) => ({ get value() { return getter() } })
-const onMounted = (handler) => { globalThis.__homeHarness.onMounted = handler }
-const getStoredSiteConfig = () => globalThis.__homeHarness.cached
-const refreshSiteConfig = () => {
-  globalThis.__homeHarness.siteCalls += 1
-  return globalThis.__homeHarness.refreshSiteConfig()
-}
-const normalizePersonalExpertHome = (cfg = {}) => ({
-  brand: { enabled: true, name: cfg.name || '默认品牌', tagline: '默认标语' },
-  expertHero: {
-    eyebrow: '导师',
-    title: cfg.teacher || '默认老师',
-    lead: '默认介绍',
-    portraitImage: cfg.teacherPortraitImage || '',
-    detailImage: cfg.teacherDetailImage || '',
-    image: cfg.teacherDetailImage || '',
-    monogram: '九',
-  },
-  proofStats: cfg.stats || [],
-  enterprise: { eyebrow: '企业', title: '团队服务', lead: '服务介绍', buttonText: '预约沟通', modules: [], services: cfg.services || [{ title: '团队共学', description: '共学介绍' }] },
-  game: { enabled: cfg.gameEnabled !== false, eyebrow: '探索', title: '人格测试', lead: '了解自己', buttonText: '开始测试' },
-  secondaryEntries: cfg.entries || [
-    { key: 'test', enabled: true, title: '不应重复的测试', description: '', icon: 'compass' },
-    { key: 'relation', enabled: true, title: '关系', description: '', icon: 'relation', url: '/configured/evil' },
-    { key: 'learn', enabled: false, title: '课程', description: '', icon: 'book' },
-    { key: 'profile', enabled: true, title: '档案', description: '', icon: 'growth' },
-  ],
-  cases: [],
-})
-const normalizeHomeCarousel = (cfg = {}) => ({ autoplay: true, interval: 4000, items: (cfg.images || []).map((image) => ({ image })) })
-const filterFailedCarouselItems = (carousel, failed) => ({ ...carousel, items: carousel.items.filter((item) => !failed.has(item.image)) })
-const MINIAPP_HOME_ENTRY_BEHAVIORS = {
-  relation: { method: 'navigateTo', url: '/pages/relation/relation', ariaLabel: '关系' },
-  learn: { method: 'switchTab', url: '/pages/learn/learn', ariaLabel: '课程' },
-  profile: { method: 'switchTab', url: '/pages/profile/profile', ariaLabel: '档案' },
-}
-const setBookingIntent = (intent) => { globalThis.__homeHarness.intents.push(intent); return true }
-const listClassroomRecentApi = (query) => {
-  globalThis.__homeHarness.classroomCalls.push(query)
-  return globalThis.__homeHarness.listRecent(query)
-}
-const normalizeClassroomContent = (item = {}) => ({ ...item, id: String(item.id || '') })
-const normalizeClassroomSeries = (item = {}) => ({ ...item, id: String(item.id || '') })
-const classroomContentRoute = (item) => item?.id ? '/detail/' + item.id : ''
-const classroomAccessLabel = (value) => value === 'paid' ? '付费课件' : '免费'
-`;
-
-await writeFile(
-  modulePath,
-  `${prelude}\n${executableScript}\nexport { view, carousel, secondaryEntries, siteStale, siteRefreshing, teacherDetailFailed, failedCarouselImages, classroomItems, classroomLoading, classroomError, classroomState, courseCoverErrors, initializeHome, retrySiteConfig, loadClassroomPreview, retryClassroomPreview, markTeacherDetailError, previewTeacherDetail, removeCarouselItem, markCourseCoverError, bookEnterprise, bookEnterpriseService, startTest, activateSecondaryEntry, openClassroomItem, goClassroom, formatDuration }\n`,
-);
-
-let caseId = 0;
-function deferred() {
-  let resolve;
-  let reject;
-  const promise = new Promise((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
-
-async function createHarness() {
+let counter = 0
+async function harness({ preview = false, cache = null } = {}) {
   const state = {
-    cached: null,
-    siteCalls: 0,
-    classroomCalls: [],
-    intents: [],
-    navigation: [],
-    previews: [],
-    refreshSiteConfig: async () => ({}),
-    listRecent: async () => ({ items: [] }),
-  };
-  globalThis.__homeHarness = state;
+    preview, cache, intent: null, navigations: [], tabs: [],
+    refresh: async () => state.cache || {},
+    list: async () => ({ items: [] }),
+  }
+  globalThis.__homeHarness = state
   globalThis.uni = {
-    navigateTo(options) { state.navigation.push({ method: "navigateTo", ...options }); },
-    switchTab(options) { state.navigation.push({ method: "switchTab", ...options }); },
-    previewImage(options) { state.previews.push(options); },
-  };
-  caseId += 1;
-  const page = await import(`${pathToFileURL(modulePath).href}?case=${caseId}`);
-  return { page, state };
+    navigateTo: options => state.navigations.push(options),
+    switchTab: options => state.tabs.push(options),
+  }
+  const page = await import(`${pathToFileURL(modulePath).href}?case=${++counter}`)
+  return { page, state }
+}
+function deferred() {
+  let resolve, reject
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej })
+  return { promise, resolve, reject }
 }
 
 try {
   {
-    const { page, state } = await createHarness();
-    state.cached = {
-      name: "缓存品牌",
-      teacher: "缓存老师",
-      teacherPortraitImage: "/teacher-a.png",
-      teacherDetailImage: "/teacher-detail-a.png",
-      images: ["/bad.png", "/good.png"],
-    };
-    state.refreshSiteConfig = async () => { throw new Error("刷新失败"); };
-    await page.initializeHome();
-    assert.equal(page.view.value.brand.name, "缓存品牌", "cached expert content should render immediately and survive refresh failure");
-    assert.equal(page.siteStale.value, true, "cached content should enter stale state when silent refresh fails");
-    assert.equal(page.siteRefreshing.value, false);
+    const cached = { teachers: [{ name: '已缓存老师' }], home: { courses: { items: [{ title: '正式课程' }] }, miniappLearn: { classroom: { enabled: false } } } }
+    const { page } = await harness({ cache: cached })
+    assert.equal(page.teacher.value.name, '已缓存老师', 'cached teacher should render before refresh')
+    assert.equal(page.classroomEnabled.value, false, 'cached classroom.enabled=false should hide published video entries')
+    assert.equal(page.courses.value[0].title, '正式课程', 'production should render configured courses rather than demo schedules')
+    assert.deepEqual(page.videos.value, [], 'production should not invent a published video list')
   }
-
   {
-    const { page, state } = await createHarness();
-    const pending = deferred();
-    state.refreshSiteConfig = () => pending.promise;
-    const first = page.retrySiteConfig();
-    const second = page.retrySiteConfig();
-    assert.equal(page.siteRefreshing.value, true, "site retry should expose busy state");
-    assert.equal(state.siteCalls, 1, "busy site retry should suppress duplicate refresh calls");
-    pending.resolve({
-      teacher: "新老师",
-      teacherPortraitImage: "/teacher-b.png",
-      teacherDetailImage: "/teacher-detail-b.png",
-    });
-    await Promise.all([first, second]);
-    assert.equal(page.siteRefreshing.value, false);
-    assert.equal(page.siteStale.value, false);
+    const { page } = await harness({ preview: true })
+    assert.equal(page.courses.value[0].id, 'preview-course', 'explicit preview may display the isolated sample schedule')
   }
-
   {
-    const { page, state } = await createHarness();
-    state.cached = {
-      teacher: "缓存老师",
-      teacherPortraitImage: "/teacher-a.png",
-      teacherDetailImage: "/teacher-detail-a.png",
-      images: ["/bad.png", "/good.png"],
-    };
-    state.refreshSiteConfig = async () => ({
-      teacher: "刷新老师",
-      teacherPortraitImage: "/teacher-b.png",
-      teacherDetailImage: "/teacher-detail-b.png",
-      images: ["/bad.png", "/good.png"],
-    });
-    page.markTeacherDetailError();
-    page.markCourseCoverError("course:1");
-    page.removeCarouselItem("/bad.png");
-    assert.equal(page.teacherDetailFailed.value, true);
-    assert.equal(page.courseCoverErrors.value["course:1"], true);
-    assert.deepEqual(page.carousel.value.items, [], "carousel failure should not depend on teacher or course cover state before config is applied");
-    await page.initializeHome();
-    assert.equal(page.teacherDetailFailed.value, false, "fresh config should reset teacher detail-poster failure");
-    assert.deepEqual(page.carousel.value.items.map((item) => item.image), ["/good.png"], "failed carousel URLs should stay filtered after refresh");
-    assert.equal(page.courseCoverErrors.value["course:1"], true, "site refresh should not mutate independent course cover failures");
-    page.markTeacherDetailError({ currentTarget: { dataset: { image: "/teacher-detail-a.png" } } });
-    assert.equal(page.teacherDetailFailed.value, false, "a late error from the replaced detail poster must not hide the refreshed poster");
-    page.markTeacherDetailError({ currentTarget: { dataset: { image: "/teacher-detail-b.png" } } });
-    assert.equal(page.teacherDetailFailed.value, true, "the current teacher detail poster should still fall back after its own error");
-    page.previewTeacherDetail();
-    assert.deepEqual(state.previews, [{
-      current: "/teacher-detail-b.png",
-      urls: ["/teacher-detail-b.png"],
-    }], "teacher detail poster should preview that same complete poster");
+    const { page, state } = await harness({ cache: { teachers: [{ name: '原老师' }] } })
+    state.refresh = async () => {
+      state.cache = { teachers: [{ name: '更新老师' }] }
+      return state.cache
+    }
+    state.list = async query => {
+      assert.equal(query.limit, 6)
+      return { items: [{ id: 8, itemType: 'series' }, { id: 21, title: '第一讲' }, { id: 20, title: '第二讲' }, { id: 19, title: '第三讲' }] }
+    }
+    await page.load()
+    assert.equal(page.teacher.value.name, '更新老师')
+    assert.deepEqual(page.dailyVideos.value.map(item => item.id), [21, 20], 'home should show two actual content entries, not misroute series as videos')
+    assert.equal(page.loading.value, false)
+    assert.equal(page.error.value, '')
   }
-
   {
-    const { page, state } = await createHarness();
-    page.previewTeacherDetail();
-    assert.deepEqual(state.previews, [], "missing teacher detail posters should not start an empty image preview");
+    const { page, state } = await harness({ cache: { teachers: [{ name: '保留老师' }] } })
+    // siteConfig cache tests verify the merge itself; this checks that the page
+    // reads the merged cache instead of replacing it with the partial payload.
+    state.refresh = async () => {
+      state.cache = { teachers: [{ name: '保留老师' }], home: { miniappLearn: { classroom: { enabled: false } } } }
+      return { home: { miniappLearn: { classroom: { enabled: false } } } }
+    }
+    await page.load()
+    assert.equal(page.teacher.value.name, '保留老师', 'partial config refresh must retain the previously configured teacher')
+    assert.equal(page.classroomEnabled.value, false, 'partial refresh should still update the classroom visibility switch')
+    state.refresh = async () => { state.cache = { teachers: [] }; return state.cache }
+    await page.load()
+    assert.equal(page.teacher.value, null, 'an explicitly empty teacher section must hide the teacher instead of resurrecting fallback content')
   }
-
   {
-    const { page, state } = await createHarness();
-    const pending = deferred();
-    state.listRecent = () => pending.promise;
-    const first = page.loadClassroomPreview();
-    const second = page.retryClassroomPreview();
-    assert.equal(page.classroomState.value, "loading");
-    assert.equal(state.classroomCalls.length, 1, "busy classroom retry should suppress duplicate requests");
-    pending.resolve({ items: [
-      { itemType: "series", id: 2, title: "第一项", lessonCount: 8 },
-      { itemType: "content", id: 3, title: "第二项", contentType: "audio" },
-      { itemType: "content", id: 4, title: "第三项" },
-    ] });
-    await Promise.all([first, second]);
-    assert.deepEqual(page.classroomItems.value.map((item) => item.id), ["2", "3"], "classroom preview should filter ids, preserve API order, and cap at two");
-    assert.deepEqual(page.classroomItems.value.map((item) => item.itemType), ["series", "content"]);
-    assert.deepEqual(state.classroomCalls[0], { limit: 2 });
-    assert.equal(page.classroomState.value, "ready");
+    const { page, state } = await harness({ cache: { teachers: [{ name: '缓存老师' }] } })
+    state.refresh = async () => { throw new Error('config offline') }
+    state.list = async () => ({ items: [{ id: 21 }] })
+    await page.load()
+    assert.equal(page.teacher.value.name, '缓存老师', 'a config failure should preserve cached teacher content')
+    assert.deepEqual(page.dailyVideos.value.map(item => item.id), [21], 'a config failure should not block independent video content')
+    state.refresh = async () => { state.cache = { teachers: [{ name: '新老师' }] }; return state.cache }
+    state.list = async () => { throw new Error('video offline') }
+    await page.load()
+    assert.equal(page.teacher.value.name, '新老师', 'a video failure should not block teacher updates')
+    assert.deepEqual(page.videos.value.map(item => item.id), [21], 'a video failure should retain already fetched video data')
+    assert.ok(page.error.value, 'a video failure must stay distinguishable from an empty library')
+    assert.equal(page.loading.value, false, 'request failure should always release the loading state')
   }
-
   {
-    const { page, state } = await createHarness();
-    const brandBefore = page.view.value.brand.name;
-    state.listRecent = async () => { throw new Error("课堂失败"); };
-    await page.loadClassroomPreview();
-    assert.equal(page.classroomState.value, "error");
-    assert.equal(page.classroomError.value, "课堂失败");
-    assert.equal(page.view.value.brand.name, brandBefore, "classroom failure must not block or replace other home modules");
-    state.listRecent = async () => ({ items: [] });
-    await page.retryClassroomPreview();
-    assert.equal(page.classroomState.value, "empty");
+    const { page, state } = await harness()
+    const oldConfig = deferred(), oldVideos = deferred(), newConfig = deferred(), newVideos = deferred()
+    let configCount = 0, videoCount = 0
+    state.refresh = () => (++configCount === 1 ? oldConfig.promise : newConfig.promise)
+    state.list = () => (++videoCount === 1 ? oldVideos.promise : newVideos.promise)
+    const older = page.load(), newer = page.load()
+    state.cache = { teachers: [{ name: '最新老师' }] }
+    newConfig.resolve(state.cache)
+    newVideos.resolve({ items: [{ id: 22 }] })
+    await newer
+    oldConfig.resolve({ teachers: [{ name: '过期老师' }] })
+    oldVideos.resolve({ items: [{ id: 11 }] })
+    await older
+    assert.equal(page.teacher.value.name, '最新老师', 'a late response must not replace current teacher content')
+    assert.deepEqual(page.videos.value.map(item => item.id), [22], 'a late response must not replace current video content')
   }
-
   {
-    const { page, state } = await createHarness();
-    state.cached = { home: { miniappHome: { entriesSection: { enabled: false } } } };
-    state.refreshSiteConfig = async () => { throw new Error("刷新失败"); };
-    await page.initializeHome();
-    assert.deepEqual(page.secondaryEntries.value, [], "disabled miniapp home entry sections should suppress every secondary entry");
+    const { page, state } = await harness()
+    page.daily()
+    assert.equal(state.tabs.at(-1).url, '/pages/learn/learn')
+    page.booking()
+    assert.deepEqual(state.intent, { kind: 'course', intentText: '' }, 'course entry should select course booking')
+    assert.equal(state.tabs.at(-1).url, '/pages/booking/booking')
+    page.booking('consult')
+    assert.deepEqual(state.intent, { kind: 'consult', intentText: '' }, 'consultation entry should select consultation booking')
+    state.tabs.at(-1).fail()
+    assert.equal(state.intent, null, 'failed tab navigation must clear booking intent')
+    page.openVideo({ id: 21, contentType: 'audio' })
+    assert.equal(state.navigations.at(-1).url, '/pages/classroom-detail/classroom-detail?id=21&type=audio')
+    const count = state.navigations.length
+    page.openVideo({ id: 'invalid' })
+    assert.equal(state.navigations.length, count, 'invalid content IDs must not produce broken detail routes')
   }
-
   {
-    const { page, state } = await createHarness();
-    const malformedConfig = Object.defineProperty({ name: "异常配置品牌" }, "home", {
-      get() {
-        throw new Error("bad home getter");
-      },
-    });
-    state.cached = malformedConfig;
-    state.refreshSiteConfig = async () => ({});
-    await assert.doesNotReject(
-      () => page.initializeHome(),
-      "malformed entriesSection access should not crash the home page",
-    );
-    assert.deepEqual(page.secondaryEntries.value.map((entry) => entry.key), ["relation", "profile"]);
+    const { page } = await harness({ cache: { teachers: [{ name: '李老师', avatar: '/static/avatars/9.png' }] } })
+    assert.equal(page.isLaohan.value, false, 'a configured teacher must not inherit another teacher identity')
+    assert.equal(page.portrait.value, '', 'missing portraits for another teacher must not display Laohan')
+    page.config.value = { teachers: [{ name: '韩梅', avatar: '/static/avatars/9.png' }] }
+    assert.equal(page.isLaohan.value, false, 'a shared surname does not establish teacher identity')
+    page.config.value = { teachers: [{ name: '韩常青（老韩）', avatar: 'https://site.example/assets/teacher-poster.jpg' }] }
+    assert.equal(page.isLaohan.value, true)
+    assert.equal(page.portrait.value, '/static/teacher/hero-portrait.jpg', 'verified Laohan uses the clean portrait instead of cropping a text poster')
   }
-
-  {
-    const { page, state } = await createHarness();
-    assert.deepEqual(page.secondaryEntries.value.map((entry) => entry.key), ["relation", "profile"], "secondary navigation should include enabled relation/learn/profile entries only");
-    page.bookEnterprise();
-    page.bookEnterpriseService({ title: "领导力工作坊" });
-    page.startTest();
-    page.activateSecondaryEntry({ key: "relation", url: "/configured/evil" });
-    page.openClassroomItem({ id: "9", contentType: "audio" });
-    page.openClassroomItem({ itemType: "series", id: "12" });
-    page.goClassroom();
-    assert.deepEqual(state.intents, [
-      { kind: "enterprise", intentText: "" },
-      { kind: "enterprise", intentText: "领导力工作坊" },
-    ]);
-    assert.deepEqual(state.navigation, [
-      { method: "switchTab", url: "/pages/booking/booking" },
-      { method: "switchTab", url: "/pages/booking/booking" },
-      { method: "navigateTo", url: "/pages/test/test" },
-      { method: "navigateTo", url: "/pages/relation/relation" },
-      { method: "navigateTo", url: "/detail/9" },
-      { method: "navigateTo", url: "/pages/classroom/classroom?tab=series&seriesId=12" },
-      { method: "navigateTo", url: "/pages/classroom/classroom?tab=standalone" },
-    ], "home actions should use fixed booking, test, secondary, and classroom routes");
-    assert.equal(page.formatDuration(185), "03:05");
-  }
-
-  {
-    const { page, state } = await createHarness();
-    const disabledEntriesConfig = {
-      home: {
-        miniappHome: {
-          entriesSection: { enabled: false },
-        },
-      },
-    };
-    state.cached = disabledEntriesConfig;
-    state.refreshSiteConfig = async () => disabledEntriesConfig;
-    await page.initializeHome();
-    assert.deepEqual(page.secondaryEntries.value, [], "disabled miniappHome entriesSection should hide secondary navigation even when entries are enabled");
-  }
-
-  console.log("personal expert home page tests passed");
+  console.log('teacher studio home state tests passed')
 } finally {
-  await rm(dir, { force: true, recursive: true });
+  delete globalThis.__homeHarness
+  delete globalThis.uni
+  await rm(dir, { recursive: true, force: true })
 }

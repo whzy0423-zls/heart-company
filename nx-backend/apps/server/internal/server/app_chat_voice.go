@@ -101,6 +101,12 @@ func (s *Server) appChatVoice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r, err = s.beginProblemFollowupTurn(r, userInfo.ID, sessionID)
+	if err != nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "消息暂未提交，请重试")
+		return
+	}
+
 	transcript, err := s.recognizeSpeech(r.Context(), audioData, header.Filename)
 	if err != nil {
 		if errors.Is(err, errASRNotConfigured) {

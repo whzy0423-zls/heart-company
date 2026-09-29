@@ -40,6 +40,10 @@ func (s *Server) appTeacherRouter(w http.ResponseWriter, r *http.Request) {
 	}
 	parts := strings.Split(path, "/")
 	key := parts[0]
+	if len(parts) == 2 && parts[1] == "enrollments" && r.Method == http.MethodPost {
+		s.appTeacherEnrollment(w, r, key)
+		return
+	}
 	if len(parts) == 1 && r.Method == http.MethodGet {
 		s.appTeacherDetail(w, r, key)
 		return

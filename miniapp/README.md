@@ -2,6 +2,19 @@
 
 基于现有官网与管理后台延伸的小程序前端。**复用同一个 Go 后端**（nx-backend），只新增了微信登录与小程序业务接口。
 
+## 老师个人品牌 UI 预览
+
+```bash
+cd miniapp
+npm run preview:ui
+```
+
+打开终端显示的本地地址，再访问 `/studio-preview.html`，可以并排操作「首页、日常、报名、我的」四个真实页面。端口占用时 Vite 会选择下一个可用端口。单页入口为 `/#/pages/index/index`。
+
+老师肖像、简介和 19 段视频取自项目已有官网与公开课堂。课程排期、价格和学员记录仅用于演示；只有开发环境显式设置 `VITE_UI_PREVIEW=true` 才会启用。演示报名写入独立本地存储，未知请求也会在本地结束，不会提交到正式后端。视频与封面从现有 `website-react/public/assets/videos` 按需读取，不进入小程序发布包。
+
+正式构建仍使用真实接口、微信登录与原有播放权限。设计说明和验证记录见 [UI 交付记录](docs/ui-preview/README.md)。
+
 ## 目录结构
 ```
 miniapp/

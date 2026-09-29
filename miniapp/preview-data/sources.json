@@ -1,0 +1,9 @@
+{
+  "capturedAt": "2026-09-29T17:57:02.641180+00:00",
+  "sources": {
+    "site-config": "https://xn--9iq9az5uo8fz16d.com/api/public/site-config",
+    "classroom-recent": "https://xn--9iq9az5uo8fz16d.com/api/public/classroom/recent?limit=50&offset=0",
+    "classroom-standalone": "https://xn--9iq9az5uo8fz16d.com/api/public/classroom/standalone?limit=50&offset=0"
+  },
+  "sanitization": "Signed URL query strings and token-like fields removed. Snapshot contains public content only; signed media URLs must be refreshed or replaced with bundled preview assets."
+}

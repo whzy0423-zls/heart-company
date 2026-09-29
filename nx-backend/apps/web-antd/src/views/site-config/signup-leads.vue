@@ -42,6 +42,11 @@ import {
 import { ellipsisColumn } from '#/components/ellipsis-tooltip/table';
 import EllipsisTooltip from '#/components/ellipsis-tooltip/ellipsis-tooltip.vue';
 
+import {
+  enrollmentKindLabel,
+  parseTeacherEnrollment,
+} from './signup-lead-display';
+
 import PageShell from '../system/components/page-shell.vue';
 
 const followStatusOptions = [
@@ -95,6 +100,7 @@ let refreshTimer: number | undefined;
 let requestId = 0;
 
 const current = computed(() => detail.value?.lead);
+const currentEnrollment = computed(() => enrollmentDetails(current.value));
 const isDeal = computed(() => current.value?.followStatus === 'deal');
 const ownerOptions = computed(() =>
   users.value
@@ -124,6 +130,10 @@ const summary = computed(() => {
 const columns = [
   { dataIndex: 'name', fixed: 'left' as const, title: '客户', width: 170 },
   { dataIndex: 'contact', title: '联系方式', width: 190 },
+  { dataIndex: 'teacher', title: '报名老师', width: 150 },
+  { dataIndex: 'enrollmentKind', title: '报名类型', width: 150 },
+  { dataIndex: 'enrollmentIntent', title: '意向方向', width: 170 },
+  { dataIndex: 'preferredTime', title: '期望时间', width: 170 },
   { dataIndex: 'followStatus', title: '跟进状态', width: 120 },
   { dataIndex: 'owner', title: '负责人', width: 140 },
   { dataIndex: 'nextFollowTime', title: '下次跟进', width: 170 },
@@ -242,12 +252,42 @@ function contactTypeLabel(type?: string) {
   return type === 'wechat' ? '微信号' : '手机号';
 }
 
+function enrollmentDetails(lead?: SignupLead) {
+  return parseTeacherEnrollment({
+    interest: lead?.interest,
+    message: lead?.message,
+    sourcePlatform: lead?.sourcePlatform,
+  });
+}
+
+function enrollmentField(
+  lead: SignupLead | undefined,
+  field: 'teacherName' | 'kind' | 'intent' | 'preferredTime',
+) {
+  const details = enrollmentDetails(lead);
+  if (!details.isTeacherEnrollment) return '';
+  if (field === 'kind') return enrollmentKindLabel(details.kind);
+  return details[field];
+}
+
+function enrollmentMessage(lead: SignupLead | undefined) {
+  const details = enrollmentDetails(lead);
+  return details.isTeacherEnrollment ? details.message : lead?.message || '';
+}
+
 function sourceLabel(lead?: SignupLead) {
   if (!lead) return '-';
   if (lead.utmSource) {
     return `${lead.utmSource}${lead.utmCampaign ? ` / ${lead.utmCampaign}` : ''}`;
   }
   if (lead.referrer) return '外部来源';
+  if (lead.sourcePlatform === 'miniapp') return '小程序';
+  if (lead.sourcePlatform === 'website') {
+    return lead.sourcePath?.startsWith('/app/') ||
+      lead.sourcePath?.startsWith('/api/app/')
+      ? 'App'
+      : '官网';
+  }
   return '自然访问';
 }
 
@@ -400,7 +440,10 @@ watch(
                 </div>
                 <div class="customer-main">
                   <EllipsisTooltip class="customer-name" :text="record.name" />
-                  <EllipsisTooltip class="customer-sub" :text="record.createTime" />
+                  <EllipsisTooltip
+                    class="customer-sub"
+                    :text="record.createTime"
+                  />
                 </div>
               </div>
             </template>
@@ -414,8 +457,41 @@ watch(
                 <span>{{ record.contact }}</span>
               </div>
             </template>
+            <template v-if="column.dataIndex === 'teacher'">
+              <EllipsisTooltip
+                v-if="enrollmentField(leadRecord(record), 'teacherName')"
+                :text="enrollmentField(leadRecord(record), 'teacherName')"
+              />
+              <span v-else>-</span>
+            </template>
+            <template v-if="column.dataIndex === 'enrollmentKind'">
+              <Tag
+                v-if="enrollmentField(leadRecord(record), 'kind')"
+                color="blue"
+              >
+                {{ enrollmentField(leadRecord(record), 'kind') }}
+              </Tag>
+              <span v-else>-</span>
+            </template>
+            <template v-if="column.dataIndex === 'enrollmentIntent'">
+              <EllipsisTooltip
+                v-if="enrollmentField(leadRecord(record), 'intent')"
+                :text="enrollmentField(leadRecord(record), 'intent')"
+              />
+              <span v-else>-</span>
+            </template>
+            <template v-if="column.dataIndex === 'preferredTime'">
+              <EllipsisTooltip
+                v-if="enrollmentField(leadRecord(record), 'preferredTime')"
+                :text="enrollmentField(leadRecord(record), 'preferredTime')"
+              />
+              <span v-else>-</span>
+            </template>
             <template v-if="column.dataIndex === 'interest'">
-              <Tag v-if="record.interest">{{ record.interest }}</Tag>
+              <Tag v-if="enrollmentField(leadRecord(record), 'intent')">
+                {{ enrollmentField(leadRecord(record), 'intent') }}
+              </Tag>
+              <Tag v-else-if="record.interest">{{ record.interest }}</Tag>
               <span v-else>-</span>
             </template>
             <template v-if="column.dataIndex === 'followStatus'">
@@ -430,7 +506,10 @@ watch(
               {{ record.nextFollowTime || '-' }}
             </template>
             <template v-if="column.dataIndex === 'message'">
-              <EllipsisTooltip :lines="2" :text="record.message" />
+              <EllipsisTooltip
+                :lines="2"
+                :text="enrollmentMessage(leadRecord(record))"
+              />
             </template>
             <template v-if="column.key === 'action'">
               <Button
@@ -466,7 +545,15 @@ watch(
             </div>
             <div class="profile-meta">
               {{ contactTypeLabel(current.contactType) }}：{{ current.contact }}
-              <span v-if="current.interest"> · {{ current.interest }}</span>
+              <span v-if="currentEnrollment.teacherName">
+                · {{ currentEnrollment.teacherName }}
+              </span>
+              <span v-if="currentEnrollment.intent">
+                · {{ currentEnrollment.intent }}
+              </span>
+              <span v-else-if="current.interest">
+                · {{ current.interest }}
+              </span>
             </div>
           </div>
         </div>
@@ -491,6 +578,20 @@ watch(
           <Descriptions.Item label="联系方式">
             {{ current.contact }}
           </Descriptions.Item>
+          <template v-if="currentEnrollment.isTeacherEnrollment">
+            <Descriptions.Item label="报名老师">
+              {{ currentEnrollment.teacherName || '-' }}
+            </Descriptions.Item>
+            <Descriptions.Item label="报名类型">
+              {{ enrollmentKindLabel(currentEnrollment.kind) }}
+            </Descriptions.Item>
+            <Descriptions.Item label="意向方向">
+              {{ currentEnrollment.intent || '-' }}
+            </Descriptions.Item>
+            <Descriptions.Item label="期望时间">
+              {{ currentEnrollment.preferredTime || '-' }}
+            </Descriptions.Item>
+          </template>
           <Descriptions.Item label="客户来源">
             {{ sourceLabel(current) }}
           </Descriptions.Item>
@@ -498,7 +599,9 @@ watch(
             {{ current.sourcePath || '-' }}
           </Descriptions.Item>
           <Descriptions.Item label="咨询需求" :span="2">
-            <div class="message-text">{{ current.message || '-' }}</div>
+            <div class="message-text">
+              {{ enrollmentMessage(current) || '-' }}
+            </div>
           </Descriptions.Item>
           <Descriptions.Item label="跟进备注" :span="2">
             <div class="message-text">{{ current.followNote || '-' }}</div>
@@ -585,7 +688,8 @@ watch(
                 <Select
                   v-model:value="followForm.status"
                   :options="activeFollowStatusOptions"
-                 placeholder="请选择跟进状态"/>
+                  placeholder="请选择跟进状态"
+                />
               </Form.Item>
               <Form.Item label="负责人">
                 <Select

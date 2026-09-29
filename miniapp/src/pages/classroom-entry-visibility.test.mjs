@@ -40,13 +40,13 @@ assert.match(
 
 assert.match(
   homeSource,
-  /<view\s+v-if="classroomEnabled"[^>]*class="[^"]*\bservice-entry--course\b[^"]*"[^>]*@tap="goCourse"/,
-  '首页课程学习入口应受总开关控制',
+  /<button\s+v-if="classroomEnabled"[^>]*class="quick-link"[^>]*@click="daily"/,
+  '首页老师日常入口应受总开关控制',
 )
 assert.match(
   homeSource,
-  /<section\s+v-if="classroomEnabled"\s+class="content-section"\s+aria-labelledby="course-heading">/,
-  '首页推荐课程区应受总开关控制',
+  /<view\s+v-if="classroomEnabled"\s+class="home-section">/,
+  '首页公开视频推荐区应受总开关控制',
 )
 assert.match(
   learnSource,

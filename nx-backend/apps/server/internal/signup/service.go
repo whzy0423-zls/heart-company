@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/businessmessage"
@@ -36,6 +37,43 @@ func NewService(beginner dbtx.Beginner, leads leadWriter, messages messageWriter
 }
 
 func (s *Service) CreateWebsiteSignup(ctx context.Context, input LeadInput, r *http.Request) (Lead, error) {
+	return s.createSignup(ctx, input, r, func(lead Lead) businessmessage.Event {
+		return businessmessage.WebsiteSignupCreated(
+			lead.ID,
+			lead.Name,
+			contactTypeLabel(lead.ContactType),
+			privacy.MaskPhone(lead.Contact),
+		)
+	})
+}
+
+// CreateTeacherSignup stores a teacher enrollment in the existing signups
+// table while emitting a teacher-specific management notification. The
+// source platform remains website so existing admin filters and analytics keep
+// their historical meaning.
+func (s *Service) CreateTeacherSignup(ctx context.Context, input LeadInput, teacherName, teacherKey, kind string, r *http.Request) (Lead, error) {
+	if s == nil {
+		return Lead{}, ErrServiceNotConfigured
+	}
+	teacherName = strings.TrimSpace(teacherName)
+	teacherKey = strings.TrimSpace(teacherKey)
+	kind = strings.TrimSpace(kind)
+	if teacherName == "" || teacherKey == "" {
+		return Lead{}, errors.New("teacher is required")
+	}
+	return s.createSignup(ctx, input, r, func(lead Lead) businessmessage.Event {
+		return businessmessage.TeacherSignupCreated(
+			lead.ID,
+			teacherName,
+			teacherKey,
+			kind,
+			lead.Name,
+			privacy.MaskPhone(lead.Contact),
+		)
+	})
+}
+
+func (s *Service) createSignup(ctx context.Context, input LeadInput, r *http.Request, eventFactory func(Lead) businessmessage.Event) (Lead, error) {
 	if s == nil || s.beginner == nil || s.leads == nil || s.messages == nil {
 		return Lead{}, ErrServiceNotConfigured
 	}
@@ -52,12 +90,10 @@ func (s *Service) CreateWebsiteSignup(ctx context.Context, input LeadInput, r *h
 	if err != nil {
 		return Lead{}, fmt.Errorf("create website signup: %w", err)
 	}
-	event := businessmessage.WebsiteSignupCreated(
-		lead.ID,
-		lead.Name,
-		contactTypeLabel(lead.ContactType),
-		privacy.MaskPhone(lead.Contact),
-	)
+	if eventFactory == nil {
+		return Lead{}, errors.New("signup: event factory is nil")
+	}
+	event := eventFactory(lead)
 	if _, err := s.messages.Create(opCtx, tx, event); err != nil {
 		return Lead{}, fmt.Errorf("create website signup message: %w", err)
 	}

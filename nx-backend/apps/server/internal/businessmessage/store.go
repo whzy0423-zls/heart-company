@@ -154,6 +154,30 @@ func WebsiteSignupCreated(id, name, contactLabel, maskedContact string) Event {
 	}
 }
 
+// TeacherSignupCreated records an App/Web teacher enrollment in the existing
+// signup stream. It deliberately uses the website platform for backwards
+// compatibility with the management console's source filter.
+func TeacherSignupCreated(id, teacherName, teacherKey, kind, name, maskedPhone string) Event {
+	teacherName = displayName(teacherName, "老师")
+	teacherKey = safeTraceID(teacherKey)
+	kind = displayName(kind, "consult")
+	name = displayName(name, "用户")
+	teacherLabel := teacherName
+	if teacherKey != "待回填" {
+		teacherLabel += "（" + teacherKey + "）"
+	}
+	return Event{
+		Type:         "signup",
+		Title:        "新的老师报名",
+		Content:      fmt.Sprintf("%s提交了%s的老师报名，报名类型：%s，手机号：%s", name, teacherLabel, kind, strings.TrimSpace(maskedPhone)),
+		Platform:     "website",
+		EventKey:     "teacher.signup.created",
+		BusinessID:   strings.TrimSpace(id),
+		BusinessType: "signup",
+		TargetPath:   "/customer/signups?leadId=" + url.QueryEscape(strings.TrimSpace(id)) + "&open=detail",
+	}
+}
+
 func MiniappUserCreated(id, name string) Event {
 	name = displayName(name, "小程序用户")
 	return Event{

@@ -1,6 +1,7 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import { onShow, onHide, onUnload } from '@dcloudio/uni-app'
+import NxIcon from '../../components/NxIcon.vue'
 import { ensureLogin } from '../../utils/auth'
 import { createBookingApi } from '../../api'
 import { userErrorMessage } from '../../utils/userMessage'
@@ -8,864 +9,251 @@ import { clearBookingDraft, loadBookingDraft, saveBookingDraft } from '../../uti
 import { consumeBookingIntent } from '../../utils/bookingIntent'
 import { getCachedSiteConfig, getStoredSiteConfig } from '../../utils/siteConfig'
 import { normalizePersonalExpertHome } from '../../utils/personalExpertHome'
+import { normalizeCoursewareItems, normalizeTeachers } from '../../utils/teacherCourseware'
 import { normalizeMiniappLearn } from '../../utils/miniappPages'
+import { STUDIO_COURSES, STUDIO_TEACHER } from '../../data/teacherStudio'
+import { UI_PREVIEW } from '../../utils/uiPreview'
 
 const kinds = [
-  { value: 'consult', label: '1v1 咨询' },
   { value: 'course', label: '课程报名' },
-  { value: 'enterprise', label: '企业服务' },
+  { value: 'consult', label: '1v1 咨询' },
+  { value: 'enterprise', label: '企业共学' },
 ]
-const ENTERPRISE_KIND_INDEX = kinds.findIndex((item) => item.value === 'enterprise')
-const kindIndex = ref(ENTERPRISE_KIND_INDEX)
+const kindIndex = ref(0)
+const currentKind = computed(() => kinds[kindIndex.value]?.value || 'course')
 const emptyForm = () => ({ contactName: '', phone: '', intent: '', preferredTime: '', message: '' })
 const form = ref(emptyForm())
-const fieldErrors = ref({ contactName: '', phone: '' })
+const fieldErrors = ref({ contactName: '', phone: '', consent: '' })
+const consent = ref(false)
 const submitting = ref(false)
 const submitted = ref(false)
+const submittedKind = ref('course')
+const siteConfig = ref(getStoredSiteConfig() || {})
+const enterpriseView = computed(() => normalizePersonalExpertHome(siteConfig.value).enterprise)
+const classroomEnabled = computed(() => normalizeMiniappLearn(siteConfig.value).classroom.enabled)
+const courses = computed(() => UI_PREVIEW ? STUDIO_COURSES : normalizeCoursewareItems(siteConfig.value).map((item, index) => ({ ...item, id: `course-${index}`, tag: item.badge, highlights: item.bullets })))
+const teacher = computed(() => UI_PREVIEW ? STUDIO_TEACHER : normalizeTeachers(siteConfig.value)[0])
+const serviceModes = computed(() => enterpriseView.value.serviceModes || [])
+const processSteps = computed(() => enterpriseView.value.processSteps || [])
+const formTitle = computed(() => ({ course: '为下一次成长，留一个位置', consult: '从你正在经历的事，聊起', enterprise: '一起找到团队的共学方向' }[currentKind.value]))
+const formHint = computed(() => ({ course: '留下联系方式，我们将与你确认课程安排。', consult: '简单说说你的困惑，老师会与你沟通咨询安排。', enterprise: '告诉我们团队背景，共同讨论适合的形式。' }[currentKind.value]))
+const intentPlaceholder = computed(() => ({ course: '选择上方课程，或填写感兴趣的主题', consult: '如：自我探索 / 亲密关系 / 职场沟通', enterprise: '如：团队工作坊 / 管理者培训' }[currentKind.value]))
+const messagePlaceholder = computed(() => currentKind.value === 'enterprise' ? '团队规模、背景，或希望改善的协作议题（选填）' : '想提前告诉老师的事，或你对课程的期待（选填）')
+const successTitle = computed(() => ({ course: '你的学习意向，已收到', consult: '你的咨询预约，已收到', enterprise: '你的企业需求，已收到' }[submittedKind.value]))
 const DRAFT_SAVE_DELAY = 250
 let draftSaveTimer = null
-
-const siteConfig = getStoredSiteConfig() || {}
-const enterpriseView = ref(normalizePersonalExpertHome(siteConfig).enterprise)
-const classroomEnabled = ref(normalizeMiniappLearn(siteConfig).classroom.enabled)
-const defaultScenarios = Object.freeze([
-  { title: '团队协作需要共同语言', description: '让不同风格的人看见彼此动机，减少误解。' },
-  { title: '管理者需要提升带队觉察', description: '帮助管理者理解沟通、防御与激励方式。' },
-  { title: '关键团队进入调整期', description: '在变化中建立共识，把讨论落到行动。' },
-])
-const scenarioDescriptions = Object.freeze([
-  '围绕真实工作场景，让团队把理解带回协作现场。',
-  '适合管理者、项目负责人和高频协作团队。',
-  '把九型语言转化为会议、沟通与复盘工具。',
-  '可按企业阶段定制主题与练习方式。',
-])
-const scenarioItems = computed(() => {
-  const modules = Array.isArray(enterpriseView.value.modules)
-    ? enterpriseView.value.modules.map((item) => String(item || '').trim()).filter(Boolean)
-    : []
-  if (!modules.length) return defaultScenarios.map((item) => ({ ...item }))
-  const fallbackDescription = scenarioDescriptions[scenarioDescriptions.length - 1]
-  return modules.slice(0, 4).map((title, index) => ({
-    title,
-    description: scenarioDescriptions[index] || fallbackDescription,
-  }))
-})
-
-const serviceModes = computed(() => enterpriseView.value.serviceModes || [])
-const selectedServiceModeIndex = ref(-1)
-const processSteps = computed(() => enterpriseView.value.processSteps || [])
-let enterpriseConfigLoadId = 0
-
+let configLoadId = 0
 const draft = loadBookingDraft()
 const restoredDraftNotice = ref(!!draft)
 if (draft) {
-  const restoredKindIndex = kindIndexFor(draft.kind)
-  if (restoredKindIndex >= 0) kindIndex.value = restoredKindIndex
+  const index = kinds.findIndex((item) => item.value === draft.kind)
+  if (index >= 0) kindIndex.value = index
   form.value = { ...emptyForm(), ...draft }
   delete form.value.kind
 }
 
-function kindIndexFor(kind) {
-  return kinds.findIndex((item) => item.value === kind)
-}
-
-function currentKind() {
-  return kinds[kindIndex.value]?.value || 'enterprise'
-}
-
-function currentDraft() {
-  return { kind: currentKind(), ...form.value }
-}
-
+function currentDraft() { return { kind: currentKind.value, ...form.value } }
 function cancelPendingDraftSave() {
-  if (draftSaveTimer === null) return
-  clearTimeout(draftSaveTimer)
+  if (draftSaveTimer !== null) clearTimeout(draftSaveTimer)
   draftSaveTimer = null
 }
-
+function persistDraft() {
+  if (submitted.value) return
+  // Visiting the course tab alone should not create a blank draft.
+  if (Object.values(form.value).some((value) => String(value).trim())) saveBookingDraft(currentDraft())
+  else clearBookingDraft()
+}
 function scheduleDraftSave() {
+  cancelPendingDraftSave()
   if (submitted.value) return
-  if (draftSaveTimer !== null) clearTimeout(draftSaveTimer)
-  draftSaveTimer = setTimeout(() => {
-    draftSaveTimer = null
-    if (!submitted.value) saveBookingDraft(currentDraft())
-  }, DRAFT_SAVE_DELAY)
+  draftSaveTimer = setTimeout(() => { draftSaveTimer = null; persistDraft() }, DRAFT_SAVE_DELAY)
 }
-
-function flushDraftSave() {
-  if (submitted.value) return
-  if (draftSaveTimer !== null) clearTimeout(draftSaveTimer)
-  draftSaveTimer = null
-  saveBookingDraft(currentDraft())
-}
-
-watch(
-  [kindIndex, form],
-  scheduleDraftSave,
-  { deep: true },
-)
-
+function flushDraftSave() { cancelPendingDraftSave(); persistDraft() }
+watch([kindIndex, form], scheduleDraftSave, { deep: true })
 onShow(applyBookingIntent)
 onHide(flushDraftSave)
 onUnload(flushDraftSave)
 
-async function refreshEnterpriseView() {
-  const loadId = ++enterpriseConfigLoadId
-  try {
-    const config = await getCachedSiteConfig()
-    if (loadId === enterpriseConfigLoadId) {
-      enterpriseView.value = normalizePersonalExpertHome(config || {}).enterprise
-      classroomEnabled.value = normalizeMiniappLearn(config || {}).classroom.enabled
-    }
-  } catch {
-    // 保留已渲染的配置，预约表单仍可继续填写。
-  } finally {
-    if (loadId === enterpriseConfigLoadId) matchSelectedServiceMode()
-  }
-}
-
-function matchSelectedServiceMode() {
-  selectedServiceModeIndex.value = currentKind() === 'enterprise'
-    ? serviceModes.value.findIndex((item) => item.title === form.value.intent.trim())
-    : -1
-}
-
-function applyBookingIntent() {
+async function applyBookingIntent() {
   const intent = consumeBookingIntent()
   if (intent) {
-    if (submitted.value) submitted.value = false
-
-    const nextKindIndex = kindIndexFor(intent.kind)
-    if (nextKindIndex >= 0) kindIndex.value = nextKindIndex
-
-    if (intent.intentText && !form.value.intent.trim()) {
-      form.value = { ...form.value, intent: intent.intentText }
-    }
+    submitted.value = false
+    const index = kinds.findIndex((item) => item.value === intent.kind)
+    if (index >= 0) kindIndex.value = index
+    // A new explicit course selection replaces the old direction, while contact details remain.
+    if (intent.intentText) form.value = { ...form.value, intent: intent.intentText }
   }
-
-  return refreshEnterpriseView()
+  const loadId = ++configLoadId
+  try {
+    const config = await getCachedSiteConfig()
+    if (loadId === configLoadId) siteConfig.value = config || {}
+  } catch {
+    // Cached content and the saved draft remain usable during a network interruption.
+  }
+  if (intent) {
+    await nextTick()
+    scrollToForm()
+  }
 }
-
-function onKindChange(e) {
-  const nextIndex = Number(e.detail.value)
-  if (Number.isInteger(nextIndex) && kinds[nextIndex]) kindIndex.value = nextIndex
-  if (currentKind() !== 'enterprise') selectedServiceModeIndex.value = -1
+function selectKind(index) {
+  if (submitting.value) return
+  kindIndex.value = index
 }
-
-function selectServiceMode(index) {
-  const mode = serviceModes.value[index]
-  if (!mode) return
-  selectedServiceModeIndex.value = index
-  kindIndex.value = ENTERPRISE_KIND_INDEX
+function viewCourse(course) { uni.navigateTo({ url: `/pages/course-detail/course-detail?id=${encodeURIComponent(course.id)}` }) }
+function selectServiceMode(mode) {
   form.value = { ...form.value, intent: mode.title }
+  scrollToForm()
 }
-
+function scrollToForm() { uni.pageScrollTo({ selector: '#booking-form', duration: 260 }) }
 function clearFieldError(field) {
-  if (!fieldErrors.value[field]) return
-  fieldErrors.value = { ...fieldErrors.value, [field]: '' }
+  if (fieldErrors.value[field]) fieldErrors.value = { ...fieldErrors.value, [field]: '' }
 }
-
 function resetForm() {
   cancelPendingDraftSave()
-  kindIndex.value = ENTERPRISE_KIND_INDEX
-  selectedServiceModeIndex.value = -1
+  kindIndex.value = 0
   form.value = emptyForm()
-  fieldErrors.value = { contactName: '', phone: '' }
+  fieldErrors.value = { contactName: '', phone: '', consent: '' }
   restoredDraftNotice.value = false
+  consent.value = false
 }
-
 function clearRestoredDraft() {
   if (submitting.value) return
   clearBookingDraft()
   resetForm()
 }
-
-function validateForm() {
-  const nextErrors = { contactName: '', phone: '' }
-  if (!form.value.contactName.trim()) nextErrors.contactName = '请填写称呼'
-  if (!/^1\d{10}$/.test(form.value.phone.trim())) nextErrors.phone = '请填写正确手机号'
-  fieldErrors.value = nextErrors
-  return !nextErrors.contactName && !nextErrors.phone
+function changeConsent(event) {
+  consent.value = event.detail.value.includes('agree')
+  clearFieldError('consent')
 }
-
+function showPrivacy() {
+  uni.showModal({
+    title: '预约信息使用说明',
+    content: UI_PREVIEW
+      ? '当前为界面演示。提交结果仅保存在本机，不会发送给老师。请使用示例信息体验。'
+      : '你填写的称呼、手机号、意向和留言将提交给工作室，仅用于本次预约沟通与课程安排。提交前的草稿保存在当前设备，可随时清空。请勿在留言中填写身份证、银行卡等敏感信息。',
+    showCancel: false,
+    confirmText: '我知道了',
+    confirmColor: '#A55C3B',
+  })
+}
+function validateForm() {
+  const errors = { contactName: '', phone: '', consent: '' }
+  if (!form.value.contactName.trim()) errors.contactName = '请填写你的称呼'
+  if (!/^1\d{10}$/.test(form.value.phone.trim())) errors.phone = '请填写 11 位有效手机号'
+  if (!consent.value) errors.consent = '请阅读并同意预约信息使用说明'
+  fieldErrors.value = errors
+  return !Object.values(errors).some(Boolean)
+}
 async function submit() {
-  if (!validateForm()) {
-    return uni.showToast({ title: fieldErrors.value.contactName || fieldErrors.value.phone, icon: 'none' })
-  }
   if (submitting.value) return
+  if (!validateForm()) {
+    uni.showToast({ title: Object.values(fieldErrors.value).find(Boolean), icon: 'none' })
+    return
+  }
   submitting.value = true
   try {
     await ensureLogin()
-    await createBookingApi(currentDraft())
-    uni.showToast({ title: '预约已提交', icon: 'success' })
+    const payload = currentDraft()
+    await createBookingApi(payload)
+    submittedKind.value = payload.kind
     cancelPendingDraftSave()
     clearBookingDraft()
     submitted.value = true
     resetForm()
-  } catch (e) {
-    uni.showToast({ title: userErrorMessage(e, '提交失败，请重试'), icon: 'none' })
-  } finally {
-    submitting.value = false
-  }
+    uni.pageScrollTo({ scrollTop: 0, duration: 250 })
+  } catch (error) {
+    uni.showToast({ title: userErrorMessage(error, '提交失败，填写内容已保留，请重试'), icon: 'none' })
+  } finally { submitting.value = false }
 }
-
-function viewBookingRecords() {
-  uni.navigateTo({ url: '/pages/booking-records/booking-records' })
-}
-
-function continueClassroom() {
-  uni.switchTab({ url: '/pages/learn/learn' })
-}
-
-function submitAnother() {
-  submitted.value = false
-  resetForm()
-}
+function viewBookingRecords() { uni.navigateTo({ url: '/pages/booking-records/booking-records' }) }
+function continueClassroom() { uni.switchTab({ url: '/pages/learn/learn' }) }
+function submitAnother() { resetForm(); submitted.value = false }
 </script>
 
 <template>
-  <view class="wrap booking page-stack ios-page ios-safe-bottom">
-    <view v-if="submitted" class="booking-success nx-card" aria-live="polite">
-      <text class="booking-success__eyebrow">预约已提交</text>
-      <text class="booking-success__title">老师会尽快与你确认企业需求</text>
-      <text class="booking-success__lead">{{ classroomEnabled ? '你可以查看预约记录，也可以继续浏览老师课堂了解视频与音频课件。' : '你可以查看预约记录，老师会尽快与你联系。' }}</text>
-      <view class="booking-success__actions">
-        <button class="booking-success__primary" @click="viewBookingRecords">查看预约记录</button>
-        <button v-if="classroomEnabled" class="booking-success__secondary" @click="continueClassroom">继续浏览老师课堂</button>
-        <button class="booking-success__text" @click="submitAnother">再提交一个需求</button>
-      </view>
+  <view class="booking-page">
+    <view class="page-masthead"><text class="masthead-name">共学与成长</text><button class="records-link" @click="viewBookingRecords">我的报名 <NxIcon name="arrow" :size="16" /></button></view>
+    <view v-if="submitted" class="booking-success">
+      <view class="success-symbol"><NxIcon name="check" :size="32" /></view>
+      <text class="eyebrow">{{ UI_PREVIEW ? '演示提交完成' : '已提交 · 等待确认' }}</text>
+      <text class="success-title">{{ successTitle }}</text>
+      <text class="success-copy">{{ UI_PREVIEW ? '这是一条保存在本机的演示记录，你可以继续体验报名流程。' : '工作室将通过你留下的联系方式与你沟通。具体时间、费用与安排，以双方确认为准。' }}</text>
+      <button class="primary-button" @click="viewBookingRecords">查看预约记录 <NxIcon name="arrow" :size="18" color="#FFFFFF" /></button>
+      <button v-if="classroomEnabled" class="secondary-button" @click="continueClassroom">继续浏览老师课堂</button>
+      <button class="text-button" @click="submitAnother">再提交一个需求</button>
     </view>
-
     <block v-else>
-      <view class="enterprise-hero nx-card">
-        <text class="enterprise-hero__eyebrow">{{ enterpriseView.eyebrow }}</text>
-        <text class="enterprise-hero__title">{{ enterpriseView.title }}</text>
-        <text class="enterprise-hero__lead">{{ enterpriseView.lead }}</text>
-        <view class="enterprise-hero__meta" aria-label="预约服务特点">
-          <text>先沟通</text>
-          <text>再定方案</text>
-          <text>按需匹配</text>
-        </view>
+      <view class="booking-hero">
+        <text class="eyebrow">LEARN TOGETHER</text>
+        <view class="hero-title"><text>把理解，</text><text>带进生活里</text></view>
+        <text class="hero-description">从一次相遇开始，走向更懂自己的日常。</text>
+        <view class="hero-rule"><view /><text>觉察 · 练习 · 成长</text></view>
+      </view>
+      <view class="kind-tabs" role="tablist" aria-label="报名类型">
+        <button v-for="(kind, index) in kinds" :key="kind.value" :class="['kind-tab', { 'is-active': kindIndex === index }]" role="tab" :aria-selected="kindIndex === index" @click="selectKind(index)">{{ kind.label }}</button>
       </view>
 
-      <view class="enterprise-scenarios">
-        <view class="section-heading">
-          <text class="section-heading__eyebrow">适用场景</text>
-          <text class="section-heading__title">把九型语言带进真实团队议题</text>
-        </view>
-        <view class="enterprise-scenarios__grid">
-          <view v-for="item in scenarioItems" :key="item.title" class="enterprise-scenario nx-card">
-            <text class="enterprise-scenario__title">{{ item.title }}</text>
-            <text class="enterprise-scenario__description">{{ item.description }}</text>
+      <view v-if="currentKind === 'course'" class="course-section">
+        <view class="section-heading"><text class="section-title">一起，在课堂里相遇</text><text class="section-meta">{{ courses.length }} 个学习方向</text></view>
+        <button v-for="(course, index) in courses" :key="course.id" class="course-card" hover-class="pressed" @click="viewCourse(course)">
+          <view class="course-image-wrap"><image class="course-image" :src="course.cover" mode="aspectFill" :aria-label="course.title" /><text class="course-tag">{{ course.tag || '主题课程' }}</text><text class="course-index">0{{ index + 1 }}</text></view>
+          <view class="course-body">
+            <view class="course-subtitle"><text>{{ course.format || '主题共学' }}</text><text class="dot">·</text><text>{{ course.duration }}</text></view>
+            <text class="course-title">{{ course.title }}</text>
+            <text class="course-description">{{ course.subtitle || course.description }}</text>
+            <view class="course-schedule"><NxIcon name="calendar" :size="15" /><text>{{ course.schedule || '具体排期请咨询工作室' }}</text><text v-if="UI_PREVIEW" class="demo-label">演示排期</text></view>
+            <view class="course-bottom"><view><text v-if="course.price !== undefined" class="course-price"><text class="currency">¥</text>{{ course.price.toLocaleString() }}</text><text v-else class="price-consult">咨询课程安排</text><text v-if="course.price !== undefined" class="price-unit"> / 人</text></view><view class="course-link"><text>了解课程</text><NxIcon name="arrow" :size="18" /></view></view>
           </view>
-        </view>
+        </button>
+        <view v-if="!courses.length" class="empty-card"><NxIcon name="book" :size="30" /><text class="section-title">新的共学，正在准备</text><text class="muted-copy">留下感兴趣的学习方向，我们会与你联系。</text></view>
       </view>
 
-      <view class="enterprise-modes">
-        <view class="section-heading">
-          <text class="section-heading__eyebrow">服务方式</text>
-          <text class="section-heading__title">选择你想先沟通的方向</text>
+      <view v-else-if="currentKind === 'consult'" class="consult-section">
+        <view class="consult-card">
+          <view class="consult-top"><image v-if="teacher" class="teacher-avatar" :src="teacher.avatar" mode="aspectFill" /><view class="consult-teacher"><text class="teacher-name">{{ teacher?.name || '老师' }} · 一对一</text><text class="muted-copy">一段被认真倾听的时间</text></view><NxIcon name="message" :size="25" /></view>
+          <text class="consult-title">当你想更靠近真实的自己</text>
+          <text class="consult-copy">从一段关系、一次情绪，或一个反复出现的困惑开始。和老师一起，看见行为背后的需要，找到属于你的下一步。</text>
+          <view class="topic-tags"><text>自我探索</text><text>关系沟通</text><text>成长困惑</text></view>
+          <view class="consult-note"><NxIcon name="clock" :size="18" /><text>时间与形式将在沟通后共同确认</text></view>
         </view>
-        <view class="enterprise-modes__list">
-          <button
-            v-for="(mode, index) in serviceModes"
-            :key="mode.title"
-            :class="['enterprise-mode', { 'enterprise-mode--active': selectedServiceModeIndex === index }]"
-            hover-class="enterprise-mode--pressed"
-            @click="selectServiceMode(index)"
-          >
-            <view class="enterprise-mode__copy">
-              <text class="enterprise-mode__title">{{ mode.title }}</text>
-              <text class="enterprise-mode__description">{{ mode.description }}</text>
-            </view>
-            <text class="enterprise-mode__action">预约沟通</text>
-          </button>
-        </view>
-        <view v-if="enterpriseView.services.length" class="enterprise-modes__courseware">
-          <text v-for="service in enterpriseView.services" :key="service.title" class="enterprise-modes__pill">{{ service.title }}</text>
-        </view>
+        <text class="section-footnote">九型人格用于自我觉察与成长，不替代专业心理诊疗。</text>
       </view>
 
-      <view class="enterprise-process">
-        <view class="section-heading">
-          <text class="section-heading__eyebrow">合作流程</text>
-          <text class="section-heading__title">从一次沟通到一次可落地的共学</text>
-        </view>
-        <view class="enterprise-process__list">
-          <view v-for="(step, index) in processSteps" :key="step.title" class="enterprise-process__item nx-card">
-            <text class="enterprise-process__index">{{ index + 1 }}</text>
-            <view class="enterprise-process__copy">
-              <text class="enterprise-process__title">{{ step.title }}</text>
-              <text class="enterprise-process__description">{{ step.description }}</text>
-            </view>
-          </view>
-        </view>
+      <view v-else class="enterprise-section">
+        <view class="enterprise-intro"><text class="eyebrow">GROW AS A TEAM</text><text class="section-title">{{ enterpriseView.title }}</text><text class="muted-copy">{{ enterpriseView.lead }}</text></view>
+        <button v-for="(mode, index) in serviceModes" :key="mode.title" :class="['service-card', { selected: form.intent === mode.title }]" @click="selectServiceMode(mode)"><text class="service-number">0{{ index + 1 }}</text><view class="service-copy"><text class="service-title">{{ mode.title }}</text><text class="muted-copy">{{ mode.description }}</text></view><NxIcon :name="form.intent === mode.title ? 'check' : 'arrow'" :size="20" /></button>
+        <view class="process-list"><view v-for="(step, index) in processSteps" :key="step.title" class="process-step"><text class="process-number">{{ index + 1 }}</text><text>{{ step.title }}</text></view></view>
       </view>
 
-      <view v-if="restoredDraftNotice" class="draft-restored nx-card" aria-live="polite">
-        <view class="draft-restored__copy">
-          <text class="draft-restored__title">已恢复上次填写的草稿</text>
-          <text class="draft-restored__hint">你可以继续填写，或清空后重新开始。</text>
-        </view>
-        <button class="draft-restored__clear" :disabled="submitting" @click="clearRestoredDraft">清空草稿</button>
-      </view>
-
-      <view class="booking-form nx-card">
-        <view class="section-heading">
-          <text class="section-heading__eyebrow">预约表单</text>
-          <text class="section-heading__title">留下企业需求与联系方式</text>
-          <text class="section-heading__lead">未提交前，草稿会自动保存在当前设备。</text>
-        </view>
-
-        <view class="form-section">
-          <view class="field">
-            <text class="label">预约类型</text>
-            <picker aria-label="预约类型" :range="kinds" range-key="label" :value="kindIndex" @change="onKindChange">
-              <view class="picker field-control">
-                <text>{{ kinds[kindIndex].label }}</text>
-                <view class="picker__arrow" aria-hidden="true" />
-              </view>
-            </picker>
-          </view>
-          <view class="field">
-            <text class="label">称呼</text>
-            <input
-              class="input field-control"
-              v-model="form.contactName"
-              aria-label="称呼"
-              aria-describedby="contact-name-error"
-              placeholder="怎么称呼你"
-              :aria-invalid="!!fieldErrors.contactName"
-              @input="clearFieldError('contactName')"
-            />
-            <text v-if="fieldErrors.contactName" id="contact-name-error" class="field-error" role="alert">{{ fieldErrors.contactName }}</text>
-          </view>
-          <view class="field">
-            <text class="label">手机号</text>
-            <input
-              class="input field-control"
-              v-model="form.phone"
-              aria-label="手机号"
-              aria-describedby="phone-error"
-              type="number"
-              maxlength="11"
-              placeholder="方便老师联系"
-              :aria-invalid="!!fieldErrors.phone"
-              @input="clearFieldError('phone')"
-            />
-            <text v-if="fieldErrors.phone" id="phone-error" class="field-error" role="alert">{{ fieldErrors.phone }}</text>
-          </view>
-          <view class="field">
-            <text class="label">意向方向</text>
-            <input class="input field-control" v-model="form.intent" aria-label="意向方向" placeholder="如：企业内训 / 团队工作坊 / 管理者培训" />
-          </view>
-          <view class="field">
-            <text class="label">期望时间</text>
-            <input class="input field-control" v-model="form.preferredTime" aria-label="期望时间" placeholder="如：工作日上午 / 下月内" />
-          </view>
-          <view class="field">
-            <text class="label">留言</text>
-            <textarea class="textarea field-control" v-model="form.message" aria-label="留言" placeholder="团队背景、人数范围或想先解决的问题（选填）" />
-          </view>
-          <text class="draft-hint">填写内容会自动保存在当前设备</text>
-        </view>
-
+      <view class="form-divider"><view /><NxIcon name="spark" :size="21" /><view /></view>
+      <view id="booking-form" class="booking-form">
+        <text class="eyebrow">LET'S BEGIN</text><text class="form-title">{{ formTitle }}</text><text class="form-hint">{{ formHint }}</text>
+        <view v-if="restoredDraftNotice" class="draft-restored"><text>已恢复上次填写的内容</text><button :disabled="submitting" @click="clearRestoredDraft">清空草稿</button></view>
+        <view class="field"><text class="field-label">你的称呼 <text class="required">*</text></text><input v-model="form.contactName" class="field-control" maxlength="40" aria-label="你的称呼" :aria-invalid="!!fieldErrors.contactName" placeholder="方便我们怎么称呼你" @input="clearFieldError('contactName')" /><text v-if="fieldErrors.contactName" class="field-error" role="alert">{{ fieldErrors.contactName }}</text></view>
+        <view class="field"><text class="field-label">手机号码 <text class="required">*</text></text><input v-model="form.phone" class="field-control" type="number" maxlength="11" aria-label="手机号码" :aria-invalid="!!fieldErrors.phone" placeholder="用于确认课程与预约安排" @input="clearFieldError('phone')" /><text v-if="fieldErrors.phone" class="field-error" role="alert">{{ fieldErrors.phone }}</text></view>
+        <view class="field"><text class="field-label">{{ currentKind === 'course' ? '意向课程' : '想聊的方向' }}</text><input v-model="form.intent" class="field-control" maxlength="120" aria-label="意向方向" :placeholder="intentPlaceholder" /></view>
+        <view class="field"><text class="field-label">方便联系的时间 <text class="optional">选填</text></text><input v-model="form.preferredTime" class="field-control" maxlength="100" aria-label="方便联系的时间" placeholder="例如：工作日 18:00 后" /></view>
+        <view class="field"><text class="field-label">想对老师说 <text class="optional">选填</text></text><textarea v-model="form.message" class="field-control message-input" maxlength="1000" aria-label="想对老师说" :placeholder="messagePlaceholder" /><text class="message-count">{{ form.message.length }} / 1000</text></view>
+        <view class="consent-row"><checkbox-group @change="changeConsent"><label class="consent-label"><checkbox value="agree" :checked="consent" color="#A55C3B" /><text>我已阅读并同意</text></label></checkbox-group><button class="privacy-link" @click="showPrivacy">预约信息使用说明</button></view>
+        <text v-if="fieldErrors.consent" class="field-error" role="alert">{{ fieldErrors.consent }}</text>
         <!-- #ifdef H5 -->
-        <button class="booking-submit booking-submit--disabled ios-button" disabled>请在微信小程序内提交预约</button>
+        <button v-if="!UI_PREVIEW" class="primary-button" disabled>请在微信小程序内提交预约</button>
+        <button v-else class="primary-button" :loading="submitting" :disabled="submitting" @click="submit">{{ submitting ? '正在提交' : currentKind === 'course' ? '提交报名意向' : '提交预约意向' }} <NxIcon v-if="!submitting" name="arrow" :size="19" color="#FFFFFF" /></button>
         <!-- #endif -->
         <!-- #ifndef H5 -->
-        <button class="booking-submit ios-button" :loading="submitting" :disabled="submitting" @click="submit">{{ enterpriseView.buttonText }}</button>
+        <button class="primary-button" :loading="submitting" :disabled="submitting" @click="submit">{{ submitting ? '正在提交' : currentKind === 'course' ? '提交报名意向' : '提交预约意向' }} <NxIcon v-if="!submitting" name="arrow" :size="19" color="#FFFFFF" /></button>
         <!-- #endif -->
+        <text class="form-footer">{{ UI_PREVIEW ? '当前为演示体验 · 提交仅保存在本机' : '提交意向无需付款 · 具体安排以工作室确认为准' }}</text>
+        <text class="draft-hint">未提交的内容会自动保存为本机草稿</text>
       </view>
+      <view class="page-ending"><text>每一步靠近，都是成长。</text><text class="ending-en">GROW, AT YOUR OWN PACE.</text></view>
     </block>
   </view>
 </template>
 
 <style scoped>
-.booking {
-  gap: 32rpx;
-  overflow-x: hidden;
-  color: var(--nx-text);
-}
-
-button {
-  box-sizing: border-box;
-  margin: 0;
-}
-
-button::after {
-  border: 0;
-}
-
-.enterprise-hero,
-.booking-success {
-  display: flex;
-  flex-direction: column;
-  gap: 18rpx;
-  padding: 42rpx 36rpx;
-  border: 2rpx solid var(--booking-gold-border);
-  border-radius: 38rpx;
-  background:
-    linear-gradient(135deg, var(--nx-brand-900), var(--nx-brand-700));
-  box-shadow: 0 28rpx 62rpx -40rpx var(--booking-brand-shadow);
-}
-
-.enterprise-hero__eyebrow,
-.booking-success__eyebrow,
-.section-heading__eyebrow {
-  color: var(--nx-accent-gold);
-  font-size: 23rpx;
-  font-weight: 900;
-  letter-spacing: 2rpx;
-}
-
-.enterprise-hero__title,
-.booking-success__title {
-  display: block;
-  color: var(--nx-surface);
-  font-size: 46rpx;
-  font-weight: 900;
-  line-height: 1.22;
-}
-
-.enterprise-hero__lead,
-.booking-success__lead {
-  display: block;
-  color: var(--booking-on-brand-muted);
-  font-size: 26rpx;
-  line-height: 1.68;
-}
-
-.enterprise-scenarios,
-.enterprise-modes,
-.enterprise-process,
-.booking-form {
-  display: flex;
-  flex-direction: column;
-  gap: 22rpx;
-}
-
-.section-heading {
-  display: flex;
-  flex-direction: column;
-  gap: 9rpx;
-}
-
-.section-heading__eyebrow {
-  color: var(--nx-brand-700);
-}
-
-.section-heading__title {
-  color: var(--nx-brand-900);
-  font-size: 36rpx;
-  font-weight: 900;
-  line-height: 1.32;
-}
-
-.section-heading__lead {
-  color: var(--nx-text-muted);
-  font-size: 24rpx;
-  line-height: 1.58;
-}
-
-.enterprise-scenarios__grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14rpx;
-}
-
-.enterprise-scenario,
-.enterprise-process__item {
-  flex: 1 1 30%;
-  min-width: 0;
-  padding: 26rpx;
-  border: 2rpx solid var(--nx-border);
-  border-radius: 28rpx;
-  background: var(--nx-surface);
-}
-.enterprise-process__item { flex: none; }
-
-.enterprise-scenario__title,
-.enterprise-process__title,
-.enterprise-mode__title,
-.draft-restored__title {
-  color: var(--nx-brand-900);
-  font-size: 27rpx;
-  font-weight: 900;
-  line-height: 1.4;
-}
-
-.enterprise-scenario__description,
-.enterprise-process__description,
-.enterprise-mode__description,
-.draft-restored__hint,
-.draft-hint {
-  display: block;
-  margin-top: 8rpx;
-  color: var(--nx-text-muted);
-  font-size: 23rpx;
-  line-height: 1.55;
-}
-
-.enterprise-modes__list,
-.enterprise-process__list {
-  display: flex;
-  flex-direction: column;
-  gap: 14rpx;
-}
-
-.enterprise-mode {
-  width: 100%;
-  min-height: 104rpx;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20rpx;
-  padding: 26rpx;
-  border: 2rpx solid var(--nx-border);
-  border-radius: 28rpx;
-  background: var(--nx-surface);
-  color: var(--nx-text);
-  text-align: left;
-  transition: opacity 180ms ease-out, transform 180ms ease-out, border-color 180ms ease-out;
-}
-
-.enterprise-mode--active {
-  border-color: var(--nx-accent-gold);
-  background: linear-gradient(110deg, var(--booking-gold-soft), var(--nx-surface));
-}
-
-.enterprise-mode--pressed,
-.booking-submit--pressed,
-.booking-success__primary--pressed,
-.booking-success__secondary--pressed,
-.booking-success__text--pressed {
-  opacity: .78;
-  transform: scale(.99);
-}
-
-.enterprise-mode__copy {
-  flex: 1;
-  min-width: 0;
-}
-
-.enterprise-mode__action {
-  flex: none;
-  color: var(--nx-brand-700);
-  font-size: 22rpx;
-  font-weight: 900;
-}
-
-.enterprise-modes__courseware {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12rpx;
-}
-
-.enterprise-modes__pill {
-  padding: 10rpx 18rpx;
-  border: 2rpx solid var(--nx-border);
-  border-radius: 999rpx;
-  background: var(--nx-surface-soft);
-  color: var(--nx-brand-700);
-  font-size: 21rpx;
-  font-weight: 700;
-}
-
-.enterprise-process__item {
-  display: flex;
-  align-items: flex-start;
-  gap: 20rpx;
-}
-
-.enterprise-process__index {
-  min-width: 54rpx;
-  height: 54rpx;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 18rpx;
-  background: var(--nx-brand-900);
-  color: var(--nx-accent-gold);
-  font-size: 24rpx;
-  font-weight: 900;
-}
-
-.enterprise-process__copy {
-  flex: 1;
-  min-width: 0;
-}
-
-.draft-restored {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20rpx;
-  padding: 24rpx;
-  border: 2rpx solid var(--nx-border);
-  border-radius: 28rpx;
-  background: var(--nx-surface-soft);
-}
-
-.draft-restored__copy {
-  flex: 1;
-  min-width: 0;
-}
-
-.draft-restored__clear {
-  flex: none;
-  min-width: 152rpx;
-  min-height: 88rpx;
-  padding: 0 22rpx;
-  border: 2rpx solid var(--nx-border);
-  border-radius: 999rpx;
-  background: var(--nx-surface);
-  color: var(--nx-brand-700);
-  font-size: 24rpx;
-  font-weight: 900;
-  line-height: 84rpx;
-}
-
-.booking-form {
-  padding: 32rpx;
-  border: 2rpx solid var(--nx-border);
-  border-radius: 34rpx;
-  background: var(--nx-surface);
-}
-
-.form-section {
-  display: flex;
-  flex-direction: column;
-  gap: 20rpx;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 10rpx;
-}
-
-.label {
-  display: block;
-  color: var(--nx-brand-900);
-  font-size: 25rpx;
-  font-weight: 800;
-}
-
-.field-control {
-  box-sizing: border-box;
-  width: 100%;
-  border: 2rpx solid var(--nx-border);
-  border-radius: 24rpx;
-  background: var(--nx-surface-soft);
-  color: var(--nx-text);
-  font-size: 28rpx;
-}
-
-.input {
-  display: block;
-  min-height: 88rpx;
-  padding: 0 24rpx;
-}
-
-.field-error {
-  display: block;
-  color: var(--nx-danger);
-  font-size: 24rpx;
-  font-weight: 700;
-  line-height: 1.5;
-}
-
-.textarea {
-  display: block;
-  height: 176rpx;
-  min-height: 176rpx;
-  padding: 20rpx 24rpx;
-  line-height: 1.55;
-}
-
-.picker {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 88rpx;
-  padding: 0 62rpx 0 24rpx;
-}
-
-.picker__arrow {
-  position: absolute;
-  right: 28rpx;
-  top: 30rpx;
-  width: 18rpx;
-  height: 18rpx;
-  border-right: 3rpx solid var(--nx-brand-700);
-  border-bottom: 3rpx solid var(--nx-brand-700);
-  box-sizing: border-box;
-  transform: rotate(45deg);
-}
-
-.booking-submit,
-.booking-success__primary,
-.booking-success__secondary,
-.booking-success__text {
-  min-height: 88rpx;
-  border-radius: 999rpx;
-  font-size: 25rpx;
-  font-weight: 900;
-  line-height: 88rpx;
-  transition: opacity 180ms ease-out, transform 180ms ease-out;
-}
-
-.booking-submit {
-  width: 100%;
-  margin-top: 10rpx;
-  background: var(--nx-brand-900);
-  color: var(--nx-surface);
-}
-
-.booking-submit--disabled {
-  border: 2rpx solid var(--nx-border);
-  background: var(--nx-surface-soft);
-  color: var(--nx-text-muted);
-  opacity: 1;
-}
-
-.booking-success__actions {
-  display: flex;
-  flex-direction: column;
-  gap: 14rpx;
-  margin-top: 10rpx;
-}
-
-.booking-success__primary {
-  background: var(--nx-accent-gold);
-  color: var(--nx-brand-900);
-}
-
-.booking-success__secondary {
-  border: 2rpx solid var(--booking-gold-border);
-  background: transparent;
-  color: var(--nx-surface);
-}
-
-.booking-success__text {
-  background: transparent;
-  color: var(--booking-on-brand-muted);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .booking button {
-    transition: none;
-  }
-}
-
-@media (max-width: 420px) {
-  .enterprise-scenarios__grid {
-    flex-direction: column;
-    grid-template-columns: 1fr;
-  }
-
-  .enterprise-scenario { flex-basis: auto; }
-
-  .draft-restored,
-  .enterprise-mode {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-}
-
-/* Booking page visual refresh. Keep the form calm and let one action lead. */
-.booking {
-  gap: 26rpx;
-  background: var(--nx-page-bg);
-}
-
-.enterprise-hero { order: 1; }
-.enterprise-modes { order: 2; }
-.enterprise-scenarios { order: 3; }
-.enterprise-process { order: 4; }
-.draft-restored { order: 5; }
-.booking-form { order: 6; }
-
-.enterprise-hero {
-  position: relative;
-  overflow: hidden;
-  min-height: 276rpx;
-  justify-content: flex-end;
-  padding: 34rpx 28rpx;
-  border-color: rgba(223, 188, 127, .58);
-  border-radius: 28rpx;
-  background: #EEE6D8;
-  box-shadow: 0 18rpx 42rpx -32rpx rgba(32, 42, 55, .42);
-}
-
-.enterprise-hero::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 42%;
-  height: 10rpx;
-  background: var(--nx-brand-900);
-}
-
-.enterprise-hero__eyebrow { color: var(--nx-brand-700); }
-.enterprise-hero__title { max-width: 640rpx; color: var(--nx-brand-900); font-size: 42rpx; }
-.enterprise-hero__lead { max-width: 660rpx; color: var(--nx-text-muted); font-size: 24rpx; }
-.enterprise-hero__meta { display: flex; flex-wrap: wrap; gap: 10rpx; margin-top: 20rpx; }
-.enterprise-hero__meta text { padding: 8rpx 14rpx; border: 2rpx solid rgba(49, 64, 82, .16); border-radius: 999rpx; color: var(--nx-brand-700); background: rgba(255, 253, 248, .58); font-size: 21rpx; font-weight: 900; }
-
-.enterprise-scenarios,
-.enterprise-modes,
-.enterprise-process { gap: 18rpx; }
-
-.section-heading { padding-left: 16rpx; border-left: 6rpx solid var(--nx-accent-gold); }
-.section-heading__eyebrow { color: var(--nx-brand-700); font-size: 21rpx; }
-.section-heading__title { font-size: 31rpx; }
-
-.enterprise-scenarios__grid { gap: 12rpx; }
-.enterprise-scenario {
-  flex-basis: 45%;
-  min-height: 158rpx;
-  padding: 22rpx;
-  border-radius: 20rpx;
-  background: var(--nx-surface);
-  box-shadow: 0 10rpx 24rpx -22rpx rgba(32, 42, 55, .54);
-}
-.enterprise-scenario:nth-child(2n) { border-color: rgba(223, 188, 127, .48); background: #F8F1E5; }
-.enterprise-scenario__title { font-size: 26rpx; }
-.enterprise-scenario__description { font-size: 22rpx; }
-
-.enterprise-mode {
-  min-height: 98rpx;
-  padding: 20rpx 22rpx;
-  border-radius: 20rpx;
-  background: var(--nx-surface);
-}
-.enterprise-mode--active { border-color: var(--nx-accent-gold); background: #F8F1E5; }
-.enterprise-mode__title { font-size: 27rpx; }
-.enterprise-mode__description { font-size: 22rpx; }
-.enterprise-mode__action { min-width: 108rpx; min-height: 58rpx; padding: 0 14rpx; display: inline-flex; align-items: center; justify-content: center; border-radius: 999rpx; background: var(--nx-brand-900); color: var(--nx-accent-gold); }
-
-.enterprise-process__item { padding: 20rpx; border-radius: 20rpx; background: var(--nx-surface); }
-.enterprise-process__index { min-width: 48rpx; height: 48rpx; border-radius: 14rpx; background: var(--nx-brand-900); color: var(--nx-accent-gold); }
-
-.draft-restored { padding: 20rpx; border-radius: 20rpx; background: #F8F1E5; }
-.booking-form { padding: 28rpx 24rpx; border-radius: 26rpx; background: var(--nx-surface); box-shadow: 0 16rpx 36rpx -30rpx rgba(32, 42, 55, .46); }
-.booking-form .section-heading { margin-bottom: 4rpx; }
-.form-section { gap: 16rpx; }
-.field { gap: 8rpx; }
-.label { color: var(--nx-brand-900); font-size: 24rpx; }
-.field-control { min-height: 88rpx; border-radius: 18rpx; background: var(--nx-surface-soft); }
-.textarea { min-height: 168rpx; }
-.booking-submit { min-height: 96rpx; margin-top: 6rpx; border-radius: 20rpx; background: var(--nx-brand-900); box-shadow: 0 14rpx 28rpx -20rpx rgba(32, 42, 55, .72); }
-
-.booking-success { border-radius: 28rpx; }
-
-@media (max-width: 420px) {
-  .enterprise-scenarios__grid { flex-direction: column; }
-  .enterprise-scenario { flex-basis: auto; min-height: 132rpx; }
-}
-
+.booking-page{box-sizing:border-box;min-height:100vh;padding:calc(28rpx + var(--status-bar-height, 0px)) 36rpx calc(56rpx + env(safe-area-inset-bottom));background:var(--nx-page-bg);color:var(--nx-text)}
+button{box-sizing:border-box;margin:0;border:0;line-height:1.5}button::after{border:0}button[disabled]{opacity:.48}.page-masthead{display:flex;align-items:center;justify-content:space-between;gap:16rpx}.masthead-name{font-size:24rpx;letter-spacing:3rpx}.records-link{min-height:88rpx;padding:0;display:flex;align-items:center;gap:10rpx;background:transparent;font-size:23rpx;color:var(--nx-text-muted)}.booking-hero{padding:35rpx 2rpx 40rpx}.eyebrow{display:block;color:var(--nx-brand-700);font-size:20rpx;letter-spacing:4rpx;line-height:1.6}.hero-title{display:block;margin-top:20rpx;font-family:'Songti SC','STSong',serif;font-size:64rpx;font-weight:500;line-height:1.4;letter-spacing:1rpx}.hero-title text{display:block}.hero-description{display:block;margin-top:23rpx;font-size:24rpx;line-height:1.8;color:var(--nx-text-muted)}.hero-rule{display:flex;align-items:center;gap:20rpx;margin-top:34rpx;color:var(--nx-text-muted);font-size:20rpx;letter-spacing:3rpx}.hero-rule view{width:58rpx;height:2rpx;background:var(--nx-brand-700)}.kind-tabs{display:flex;border-bottom:1rpx solid var(--nx-border);margin-bottom:36rpx;gap:28rpx}.kind-tab{position:relative;min-height:92rpx;flex:1;background:transparent;padding:20rpx 0;color:var(--nx-text-muted);font-size:27rpx;white-space:nowrap;border-radius:0}.kind-tab.is-active{color:var(--nx-brand-700);font-weight:600}.kind-tab.is-active::before{content:'';position:absolute;bottom:0;left:26%;width:48%;height:4rpx;border-radius:4rpx;background:var(--nx-brand-700)}.section-heading{display:flex;justify-content:space-between;align-items:center;gap:16rpx;margin:0 0 24rpx}.section-title{display:block;font-family:'Songti SC','STSong',serif;font-size:33rpx;line-height:1.5}.section-meta{color:var(--nx-text-muted);font-size:21rpx;flex-shrink:0}.course-card{display:block;padding:0;width:100%;margin-bottom:28rpx;border-radius:24rpx;overflow:hidden;background:var(--nx-surface);text-align:left;box-shadow:0 5rpx 20rpx rgba(56,45,32,.025)}.course-image-wrap{height:296rpx;position:relative;background:#E7E0D3}.course-image{width:100%;height:100%;display:block}.course-tag{position:absolute;top:24rpx;left:24rpx;font-size:20rpx;padding:9rpx 17rpx;border-radius:8rpx;background:rgba(255,255,255,.92);color:var(--nx-text)}.course-index{position:absolute;right:22rpx;bottom:7rpx;font-family:Georgia,serif;font-size:76rpx;color:rgba(255,255,255,.7)}.course-body{padding:29rpx 28rpx 24rpx}.course-subtitle{display:flex;align-items:center;gap:12rpx;font-size:20rpx;color:var(--nx-brand-700);letter-spacing:1rpx}.dot{color:#B5A99A}.course-title{display:block;margin-top:12rpx;font-size:36rpx;font-family:'Songti SC','STSong',serif;line-height:1.4;font-weight:600}.course-description{display:block;margin-top:12rpx;font-size:23rpx;line-height:1.65;color:var(--nx-text-muted)}.course-schedule{display:flex;align-items:center;flex-wrap:wrap;gap:9rpx;margin-top:27rpx;font-size:21rpx;color:var(--nx-text-muted)}.demo-label{font-size:17rpx;border:1rpx solid var(--nx-border);border-radius:4rpx;padding:2rpx 6rpx}.course-bottom{border-top:1rpx solid #EEEAE3;margin-top:24rpx;padding-top:21rpx;display:flex;align-items:center;justify-content:space-between}.course-price{font-family:Georgia,serif;font-size:39rpx;color:var(--nx-brand-700)}.currency{font-size:23rpx;margin-right:5rpx}.price-unit{color:var(--nx-text-muted);font-size:20rpx}.price-consult{color:var(--nx-brand-700);font-size:24rpx}.course-link{display:flex;gap:14rpx;align-items:center;font-size:22rpx}.pressed{opacity:.8}.empty-card{padding:50rpx 30rpx;display:flex;flex-direction:column;align-items:center;gap:20rpx;background:var(--nx-surface);border-radius:24rpx;text-align:center}.muted-copy{display:block;color:var(--nx-text-muted);font-size:23rpx;line-height:1.7}.consult-card{padding:32rpx;background:var(--nx-surface);border-radius:24rpx}.consult-top{display:flex;align-items:center;gap:20rpx}.teacher-avatar{width:90rpx;height:90rpx;border-radius:50%;background:var(--nx-border)}.consult-teacher{flex:1;min-width:0}.teacher-name{display:block;margin-bottom:6rpx;font-size:26rpx}.consult-title{display:block;margin-top:38rpx;font-family:'Songti SC','STSong',serif;font-size:34rpx;line-height:1.5}.consult-copy{display:block;color:var(--nx-text-muted);font-size:25rpx;line-height:1.9;margin-top:18rpx}.topic-tags{display:flex;gap:12rpx;flex-wrap:wrap;margin-top:27rpx}.topic-tags text{background:var(--nx-page-bg);padding:10rpx 18rpx;border-radius:8rpx;color:#6A695F;font-size:21rpx}.consult-note{display:flex;align-items:center;gap:12rpx;margin-top:34rpx;padding-top:24rpx;border-top:1rpx solid var(--nx-border);color:var(--nx-text-muted);font-size:22rpx}.section-footnote{display:block;font-size:20rpx;line-height:1.7;color:var(--nx-text-muted);margin:24rpx 8rpx}.enterprise-intro{padding:16rpx 0 28rpx}.enterprise-intro .section-title{margin:16rpx 0}.service-card{padding:28rpx 24rpx;background:var(--nx-surface);border:1rpx solid transparent;border-radius:20rpx;display:flex;align-items:center;gap:20rpx;margin-bottom:16rpx;text-align:left}.service-card.selected{border-color:var(--nx-brand-700)}.service-number{font-family:Georgia,serif;font-size:31rpx;color:#AC9882;align-self:flex-start;padding-top:3rpx}.service-copy{flex:1}.service-title{display:block;font-size:27rpx;margin-bottom:9rpx}.process-list{display:flex;gap:12rpx;justify-content:space-between;padding:25rpx 0 0}.process-step{display:flex;gap:10rpx;align-items:center;font-size:20rpx;color:var(--nx-text-muted)}.process-number{width:30rpx;height:30rpx;border-radius:50%;border:1rpx solid #CBC1B3;display:flex;align-items:center;justify-content:center;font-size:18rpx}.form-divider{display:flex;align-items:center;gap:23rpx;margin:50rpx 55rpx;color:#A79884}.form-divider view{height:1rpx;background:var(--nx-border);flex:1}.booking-form{padding:32rpx 28rpx;background:var(--nx-surface);border-radius:24rpx}.form-title{display:block;margin:16rpx 0;font-family:'Songti SC','STSong',serif;font-size:36rpx;line-height:1.5}.form-hint{display:block;color:var(--nx-text-muted);font-size:23rpx;line-height:1.7;margin-bottom:34rpx}.draft-restored{display:flex;align-items:center;justify-content:space-between;gap:12rpx;background:#F3F0E9;border-radius:10rpx;padding:4rpx 18rpx;margin:0 0 24rpx;font-size:21rpx;color:var(--nx-text-muted)}.draft-restored button{min-height:88rpx;padding:10rpx 0;display:flex;align-items:center;background:transparent;color:var(--nx-brand-700);font-size:21rpx}.field{position:relative;margin-top:27rpx}.field-label{display:block;font-size:25rpx;margin-bottom:14rpx}.required{color:var(--nx-brand-700);font-size:20rpx}.optional{margin-left:10rpx;font-size:20rpx;color:#8B8B82}.field-control{box-sizing:border-box;width:100%;height:88rpx;line-height:1.5;padding:0 20rpx;background:#F8F7F3;border:1rpx solid #EEEAE3;border-radius:10rpx;font-size:24rpx;color:var(--nx-text)}.message-input{height:188rpx;min-height:188rpx;padding:20rpx 20rpx 37rpx}.message-count{position:absolute;right:16rpx;bottom:11rpx;font-size:18rpx;color:#929087}.field-error{display:block;color:#A34432;margin-top:10rpx;font-size:22rpx;line-height:1.5}.consent-row{display:flex;align-items:center;flex-wrap:wrap;gap:0;margin-top:23rpx;font-size:21rpx;color:var(--nx-text-muted)}.consent-label{display:flex;align-items:center;min-height:88rpx}.consent-label checkbox{transform:scale(.76);transform-origin:left center;margin-right:-2rpx}.privacy-link{display:flex;align-items:center;min-height:88rpx;background:transparent;padding:0 0 0 4rpx;font-size:21rpx;color:var(--nx-brand-700);text-decoration:underline}.primary-button{display:flex;align-items:center;justify-content:center;gap:22rpx;min-height:96rpx;width:100%;padding:20rpx;border-radius:14rpx;background:var(--nx-brand-700);color:#fff;font-size:27rpx;letter-spacing:1rpx;margin-top:20rpx}.form-footer{display:block;text-align:center;margin-top:21rpx;font-size:20rpx;color:var(--nx-text-muted);line-height:1.6}.draft-hint{display:block;text-align:center;margin-top:9rpx;font-size:18rpx;color:#919087}.page-ending{display:flex;flex-direction:column;align-items:center;gap:15rpx;margin-top:48rpx;color:#979186;font-family:'Songti SC','STSong',serif;font-size:25rpx;letter-spacing:2rpx}.ending-en{font-family:Arial,sans-serif;font-size:16rpx;letter-spacing:3rpx}.booking-success{display:flex;flex-direction:column;align-items:center;padding:60rpx 24rpx;text-align:center}.success-symbol{display:flex;align-items:center;justify-content:center;width:116rpx;height:116rpx;border-radius:50%;background:#EAEDE3;color:#6E785C;margin-bottom:40rpx}.success-title{font-family:'Songti SC','STSong',serif;font-size:46rpx;line-height:1.5;margin-top:18rpx}.success-copy{font-size:26rpx;line-height:1.9;color:var(--nx-text-muted);margin:24rpx 0 40rpx}.secondary-button{min-height:92rpx;width:100%;display:flex;align-items:center;justify-content:center;border:1rpx solid var(--nx-border);background:transparent;color:var(--nx-text);font-size:25rpx;border-radius:14rpx;margin-top:18rpx}.text-button{min-height:88rpx;background:transparent;color:var(--nx-text-muted);font-size:24rpx;margin-top:18rpx;display:flex;align-items:center}.booking-page :deep(.uni-input-placeholder),.booking-page :deep(.uni-textarea-placeholder){color:#96958D}
+@media(min-width:600px){.booking-page{max-width:800rpx;margin:auto}.hero-title{font-size:58rpx}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
 </style>

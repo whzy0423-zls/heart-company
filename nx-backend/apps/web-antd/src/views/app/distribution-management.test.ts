@@ -148,12 +148,12 @@ describe('distribution management page', () => {
   it('renders business analytics with charts, yuan amounts, and ranking table', () => {
     for (const expected of [
       '经营数据分析',
-      '累计分成金额',
+      'analyticsScope.value.commissionTitle',
       '待结算金额',
       '订单金额',
       '分成金额',
       '代理经营排行',
-      '近 30 天经营趋势',
+      ':title="analyticsScope.trendTitle"',
       'formatYuan',
       'getDistributionAnalyticsApi',
       'trendChartOption',

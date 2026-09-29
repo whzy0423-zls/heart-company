@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"nine-xing/nx-backend/apps/server/internal/problemfollowup"
 	"nine-xing/nx-backend/apps/server/internal/rag"
 )
 
@@ -542,6 +543,9 @@ func (s *Store) savePair(ctx context.Context, sessionID int64, question, answer 
 		return 0, err
 	}
 	defer tx.Rollback()
+	if err = problemfollowup.LockTurnTx(ctx, tx, sessionID); err != nil {
+		return 0, err
+	}
 
 	emptySources := json.RawMessage("[]")
 	if sources == nil {
@@ -562,6 +566,9 @@ func (s *Store) savePair(ctx context.Context, sessionID int64, question, answer 
 		return 0, err
 	}
 	if err = insertKnowledgeTrace(ctx, tx, sessionID, assistantID, trace); err != nil {
+		return 0, err
+	}
+	if err = problemfollowup.EnqueueTx(ctx, tx, sessionID, assistantID, time.Now()); err != nil {
 		return 0, err
 	}
 	_, err = tx.ExecContext(ctx,
@@ -594,6 +601,9 @@ func (s *Store) saveVoicePair(ctx context.Context, sessionID, audioAssetID int64
 		return 0, 0, err
 	}
 	defer tx.Rollback()
+	if err = problemfollowup.LockTurnTx(ctx, tx, sessionID); err != nil {
+		return 0, 0, err
+	}
 
 	if sources == nil {
 		sources = json.RawMessage("[]")
@@ -621,6 +631,9 @@ func (s *Store) saveVoicePair(ctx context.Context, sessionID, audioAssetID int64
 		return 0, 0, err
 	}
 	if err = insertKnowledgeTrace(ctx, tx, sessionID, assistantID, trace); err != nil {
+		return 0, 0, err
+	}
+	if err = problemfollowup.EnqueueTx(ctx, tx, sessionID, assistantID, time.Now()); err != nil {
 		return 0, 0, err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE app_chat_sessions SET updated_at=now() WHERE id=$1`, sessionID); err != nil {

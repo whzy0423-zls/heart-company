@@ -14,6 +14,49 @@ import (
 
 const appPaymentModeConfigKey = "app_payment_mode"
 
+// Billing surfaces are separate routes so the native App and H5 checkout
+// cannot accidentally inherit one another's payment mode. The legacy route
+// remains configurable for older clients that have not been upgraded yet.
+const (
+	appBillingSurfaceWeb    = "web"
+	appBillingSurfaceNative = "native"
+	appBillingSurfaceLegacy = "legacy"
+)
+
+func appBillingSurface(r *http.Request) string {
+	if r == nil {
+		return appBillingSurfaceLegacy
+	}
+	path := r.URL.Path
+	switch {
+	case strings.HasPrefix(path, "/api/app/web/billing/"):
+		return appBillingSurfaceWeb
+	case strings.HasPrefix(path, "/api/app/native/billing/"):
+		return appBillingSurfaceNative
+	}
+	return appBillingSurfaceLegacy
+}
+
+func appBillingModeForSurface(surface, legacyMode string) string {
+	switch surface {
+	case appBillingSurfaceWeb:
+		return appPurchaseModeXZN
+	case appBillingSurfaceNative:
+		return appPurchaseModeCustomerService
+	default:
+		return legacyMode
+	}
+}
+
+func (s *Server) appBillingMode(ctx context.Context, surface string) (string, error) {
+	// Dedicated H5 checkout does not read or mutate the legacy App setting.
+	// A malformed App setting must not disable a separately configured H5 flow.
+	if surface == appBillingSurfaceWeb || surface == appBillingSurfaceNative {
+		return appBillingModeForSurface(surface, ""), nil
+	}
+	return s.loadAppPaymentMode(ctx)
+}
+
 type appPaymentModeConfig struct {
 	Mode string `json:"mode"`
 }

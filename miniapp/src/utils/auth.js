@@ -95,6 +95,9 @@ const defaultEnsureLogin = createLoginEnsurer({
 })
 
 export function ensureLogin() {
+  if (import.meta.env?.DEV === true && import.meta.env?.VITE_UI_PREVIEW === 'true') {
+    return import('./uiPreview').then(({ initializePreviewSession }) => initializePreviewSession())
+  }
   loginPromise = defaultEnsureLogin()
   return loginPromise
 }

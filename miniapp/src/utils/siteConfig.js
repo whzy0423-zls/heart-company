@@ -1,6 +1,6 @@
 import { getSiteConfigApi } from '../api'
 
-const SITE_CONFIG_CACHE_KEY = 'nx_site_config_cache'
+const SITE_CONFIG_CACHE_KEY = import.meta.env?.DEV === true && import.meta.env?.VITE_UI_PREVIEW === 'true' ? 'nx_ui_preview_site_config' : 'nx_site_config_cache'
 const DEFAULT_TTL_MS = 5 * 60 * 1000
 const TEACHER_SECTION_PATHS = [
   ['teacher'],

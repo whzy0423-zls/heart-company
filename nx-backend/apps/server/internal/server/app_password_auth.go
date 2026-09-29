@@ -150,7 +150,8 @@ func (s *Server) appLoginWithPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bindDistributionAgent(r.Context(), s.db, user.ID, body.AgentCode)
+	// Legacy clients may include agentCode on login. Attribution is created
+	// only during first registration and must not change on authentication.
 
 	if err := s.writeAppSession(w, r, user, deviceInfo); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "token error")

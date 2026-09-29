@@ -272,7 +272,9 @@ func TestAppChatTextEndpointsAllowEnabledTierForFreeUser(t *testing.T) {
 			generator := &layeredKnowledgeGenerator{}
 			server := newLayeredKnowledgeServer(t, store, &layeredKnowledgeResolver{mainType: 3}, newLayeredKnowledgeSearcher(), generator)
 			server.appChatPlanLoader = func(context.Context, int64) (appPlanConfig, error) {
-				return defaultAppPlan("free"), nil
+				plan := defaultAppPlan("free")
+				plan.DeepChatEnabled = true
+				return plan, nil
 			}
 
 			response := httptest.NewRecorder()
@@ -283,6 +285,32 @@ func TestAppChatTextEndpointsAllowEnabledTierForFreeUser(t *testing.T) {
 			}
 			if got := generator.lastTier(); got != "deep" {
 				t.Fatalf("generator tier = %q, want deep", got)
+			}
+		})
+	}
+}
+
+func TestAppChatTextEndpointsRejectDefaultFreeDeepTier(t *testing.T) {
+	for _, path := range []string{
+		"/api/app/chat/sessions/42/ask",
+		"/api/app/chat/sessions/42/ask/stream",
+	} {
+		t.Run(path, func(t *testing.T) {
+			store := &layeredKnowledgeChatStore{fakeAppChatStreamStore: newFakeAppChatStreamStore()}
+			generator := &layeredKnowledgeGenerator{}
+			server := newLayeredKnowledgeServer(t, store, &layeredKnowledgeResolver{mainType: 3}, newLayeredKnowledgeSearcher(), generator)
+			server.appChatPlanLoader = func(context.Context, int64) (appPlanConfig, error) {
+				return defaultAppPlan("free"), nil
+			}
+
+			response := httptest.NewRecorder()
+			server.appChatRouter(response, layeredKnowledgeTierRequest(t, path, layeredKnowledgeQuestion, "deep"))
+
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("default free deep status=%d body=%s, want 403", response.Code, response.Body.String())
+			}
+			if got := generator.lastTier(); got != "" {
+				t.Fatalf("denied request invoked generator with tier %q", got)
 			}
 		})
 	}

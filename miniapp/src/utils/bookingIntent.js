@@ -1,4 +1,4 @@
-export const BOOKING_INTENT_KEY = 'nx_booking_intent'
+export const BOOKING_INTENT_KEY = import.meta.env?.DEV === true && import.meta.env?.VITE_UI_PREVIEW === 'true' ? 'nx_ui_preview_booking_intent' : 'nx_booking_intent'
 
 const ALLOWED_KINDS = new Set(['consult', 'course', 'enterprise'])
 const MAX_INTENT_TEXT_LENGTH = 120

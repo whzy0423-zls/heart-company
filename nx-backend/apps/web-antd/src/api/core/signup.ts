@@ -17,6 +17,7 @@ export interface SignupLead {
   owner: string;
   referrer: string;
   sourcePath: string;
+  sourcePlatform?: 'website' | 'miniapp' | string;
   utmCampaign: string;
   utmContent: string;
   utmMedium: string;

@@ -6,6 +6,7 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { Page } from '@vben/common-ui';
 import { IconifyIcon } from '@vben/icons';
 import { useAccessStore } from '@vben/stores';
+
 import {
   Alert,
   Button,
@@ -13,19 +14,20 @@ import {
   Form,
   Input,
   InputNumber,
+  message,
   Modal,
   Space,
   Switch,
   Table,
   Tag,
-  message,
 } from 'ant-design-vue';
 
+import { getAccessCodesApi, getAppPlansApi, updateAppPlanApi } from '#/api';
+
 import {
-  getAccessCodesApi,
-  getAppPlansApi,
-  updateAppPlanApi,
-} from '#/api';
+  problemFollowupFlag,
+  updateProblemFollowupJSON,
+} from './plan-problem-followup';
 
 const access = useAccessStore();
 const canWrite = computed(() =>
@@ -37,6 +39,8 @@ const permissionsReady = ref(false);
 const actionLoadingCode = ref('');
 const drawerOpen = ref(false);
 const plans = ref<AppPlan[]>([]);
+const featureFlagsPlaceholder = '例如：{"deepChat":true,"xinzhili":false}';
+const limitsPlaceholder = '例如：{"deepReport":10,"voiceMinutes":60}';
 const form = reactive({
   badge: '',
   cardLimit: 1,
@@ -72,6 +76,27 @@ const baseColumns = [
   { dataIndex: 'enabled', title: '上架状态', width: 100 },
   { dataIndex: 'sortOrder', title: '排序', width: 80 },
 ];
+
+const problemFollowupEnabled = computed(() => {
+  if (form.code !== 'svip') {
+    const canonical = plans.value.find((plan) => plan.code === 'svip');
+    return problemFollowupFlag(form.planLevel, canonical?.featureFlags);
+  }
+  try {
+    return problemFollowupFlag(form.planLevel, JSON.parse(form.featuresJson));
+  } catch {
+    return false;
+  }
+});
+
+function changeProblemFollowup(value: boolean | number | string) {
+  const updated = updateProblemFollowupJSON(form.featuresJson, value === true);
+  if (updated === null) {
+    message.warning('请先修正功能开关 JSON，再修改问题解决跟进开关');
+    return;
+  }
+  form.featuresJson = updated;
+}
 const columns = computed(() => [
   ...baseColumns,
   ...(canWrite.value
@@ -92,17 +117,20 @@ function limitText(value: number) {
 }
 
 function levelText(value: AppPlan['planLevel']) {
-  return value === 'svip' ? 'SVIP' : value === 'vip' ? 'VIP' : '免费';
+  if (value === 'svip') return 'SVIP';
+  return value === 'vip' ? 'VIP' : '免费';
 }
 
 function cycleText(value: AppPlan['billingCycle']) {
-  return value === 'month'
-    ? '月'
-    : value === 'quarter'
-      ? '季'
-      : value === 'year'
-        ? '年'
-        : '无';
+  if (value === 'month') return '月';
+  if (value === 'quarter') return '季';
+  return value === 'year' ? '年' : '无';
+}
+
+function legacyBillingCycle(code: string): AppPlan['billingCycle'] {
+  if (code === 'vip_quarter') return 'quarter';
+  if (code === 'vip_year') return 'year';
+  return code === 'free' ? 'none' : 'month';
 }
 
 function parseJsonObject(value: string, label: string) {
@@ -137,7 +165,7 @@ function edit(plan: AppPlan) {
     priceYuan: plan.priceCents / 100,
     // Legacy annual SKUs remain VIP unless the API explicitly says SVIP.
     planLevel: plan.planLevel ?? (plan.code === 'free' ? 'free' : 'vip'),
-    billingCycle: plan.billingCycle ?? (plan.code === 'vip_quarter' ? 'quarter' : plan.code === 'vip_year' ? 'year' : plan.code === 'free' ? 'none' : 'month'),
+    billingCycle: plan.billingCycle ?? legacyBillingCycle(plan.code),
     featuresJson: JSON.stringify(plan.featureFlags ?? {}, null, 2),
     limitsJson: JSON.stringify(plan.limits ?? {}, null, 2),
   });
@@ -161,6 +189,7 @@ async function save() {
   const featureFlags = parseJsonObject(form.featuresJson, '功能开关');
   const limits = parseJsonObject(form.limitsJson, '扩展额度');
   if (!featureFlags || !limits) return;
+  featureFlags.problemFollowup = problemFollowupEnabled.value;
   saving.value = true;
   try {
     const payload: AppPlan = {
@@ -285,7 +314,11 @@ onMounted(async () => {
         </template>
         <template v-else-if="column.key === 'action'">
           <Space v-if="canWrite" :size="4">
-            <Button type="link" title="编辑套餐" @click="edit(recordOf(record))">
+            <Button
+              type="link"
+              title="编辑套餐"
+              @click="edit(recordOf(record))"
+            >
               <IconifyIcon icon="lucide:pencil" />
               <span>编辑</span>
             </Button>
@@ -296,7 +329,9 @@ onMounted(async () => {
               @click="toggleAvailability(recordOf(record))"
             >
               <IconifyIcon
-                :icon="recordOf(record).enabled ? 'lucide:archive' : 'lucide:upload'"
+                :icon="
+                  recordOf(record).enabled ? 'lucide:archive' : 'lucide:upload'
+                "
               />
               {{ recordOf(record).enabled ? '下架' : '上架' }}
             </Button>
@@ -429,14 +464,30 @@ onMounted(async () => {
           <Input.TextArea
             v-model:value="form.featuresJson"
             :auto-size="{ minRows: 3, maxRows: 6 }"
-            placeholder='例如：{"deepChat":true,"xinzhili":false}'
+            :placeholder="featureFlagsPlaceholder"
           />
+        </Form.Item>
+        <Form.Item label="问题解决跟进（SVIP 专属）">
+          <Switch
+            :checked="problemFollowupEnabled"
+            :disabled="form.code !== 'svip' || form.planLevel !== 'svip'"
+            @change="changeProblemFollowup"
+          />
+          <p class="plan-code">
+            AI 判断主会话存在待解决的问题后，回答完成 30
+            分钟仍未回复时跟进一次；继续聊天会取消旧跟进。
+          </p>
+          <p class="plan-code">
+            在“SVIP”（代码
+            svip）套餐中统一设置，月卡、季卡、年卡均继承此开关；免费版和 VIP
+            不享有此权益。下架仅停止售卖，已有会员仍按此开关享有权益。
+          </p>
         </Form.Item>
         <Form.Item label="扩展额度 JSON">
           <Input.TextArea
             v-model:value="form.limitsJson"
             :auto-size="{ minRows: 3, maxRows: 6 }"
-            placeholder='例如：{"deepReport":10,"voiceMinutes":60}'
+            :placeholder="limitsPlaceholder"
           />
         </Form.Item>
         <Alert

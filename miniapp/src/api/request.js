@@ -1,6 +1,6 @@
 import { API_BASE } from '../config'
 
-const TOKEN_KEY = 'nx_token'
+const TOKEN_KEY = import.meta.env?.DEV === true && import.meta.env?.VITE_UI_PREVIEW === 'true' ? 'nx_ui_preview_token' : 'nx_token'
 
 export function getToken() {
   try {
@@ -63,6 +63,9 @@ function normalizeFailError(err) {
  * options: { url, method, data, query, auth, timeout }
  */
 export function request(options) {
+  if (import.meta.env?.DEV === true && import.meta.env?.VITE_UI_PREVIEW === 'true') {
+    return import('../utils/previewTransport').then(({ previewRequest }) => previewRequest(options))
+  }
   const { url, method = 'GET', data, query, auth = false, timeout = 15000 } = options
   return new Promise((resolve, reject) => {
     const header = { 'Content-Type': 'application/json' }

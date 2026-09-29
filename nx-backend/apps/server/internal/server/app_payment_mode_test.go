@@ -1,6 +1,47 @@
 package server
 
-import "testing"
+import (
+	"net/http/httptest"
+	"testing"
+)
+
+func TestAppBillingSurfaceUsesDedicatedRoutes(t *testing.T) {
+	for _, tt := range []struct {
+		path   string
+		header string
+		want   string
+	}{
+		{path: "/api/app/web/billing/products", want: "web"},
+		{path: "/api/app/native/billing/products", want: "native"},
+		{path: "/api/app/billing/products", header: "native", want: "legacy"},
+		{path: "/api/app/billing/products", header: "web", want: "legacy"},
+		{path: "/api/app/billing/products?surface=native", want: "legacy"},
+		{path: "/unregistered/web/billing/products", want: "legacy"},
+		{path: "/api/app/billing/products", want: "legacy"},
+	} {
+		t.Run(tt.want, func(t *testing.T) {
+			r := httptest.NewRequest("GET", tt.path, nil)
+			if tt.header != "" {
+				r.Header.Set("X-Nine-Xing-Billing-Surface", tt.header)
+			}
+			if got := appBillingSurface(r); got != tt.want {
+				t.Fatalf("appBillingSurface(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAppBillingModeForSurfaceKeepsAppAndWebIndependent(t *testing.T) {
+	if got := appBillingModeForSurface("web", appPurchaseModeCustomerService); got != appPurchaseModeXZN {
+		t.Fatalf("web billing mode = %q, want xzn", got)
+	}
+	if got := appBillingModeForSurface("native", appPurchaseModeXZN); got != appPurchaseModeCustomerService {
+		t.Fatalf("native billing mode = %q, want customer_service", got)
+	}
+	if got := appBillingModeForSurface("legacy", appPurchaseModeXZN); got != appPurchaseModeXZN {
+		t.Fatalf("legacy billing mode = %q, want configured mode", got)
+	}
+}
 
 func TestNormalizeAppPaymentMode(t *testing.T) {
 	for _, tt := range []struct{ raw, want string }{

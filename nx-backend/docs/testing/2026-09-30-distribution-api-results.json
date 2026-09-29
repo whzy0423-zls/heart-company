@@ -1,0 +1,1875 @@
+{
+  "scope": "Local PostgreSQL 17, real HTTP routes/auth, simulated XZN provider; no production data or real funds",
+  "deduplicatedTestEvents": {
+    "pass": 310
+  },
+  "topLevelTests": 139,
+  "sourceLogs": [
+    "/tmp/distribution-full-api-20260930.jsonl",
+    "/tmp/distribution-invitation-auth-regression-20260930.jsonl",
+    "/tmp/distribution-rules-final-20260930.jsonl",
+    "/tmp/distribution-http-journey-final-20260930.jsonl"
+  ],
+  "tests": [
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAdminAppOrderGrantRequiresActivationTime",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAgentBackendMenusExposeDistributionRoute",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppAgentDiscountAmountUsesCentsAndKeepsPositivePayable/percentage_rounds_to_cents",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppAgentDiscountAmountUsesCentsAndKeepsPositivePayable/fixed_reduction",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppAgentDiscountAmountUsesCentsAndKeepsPositivePayable/large_fixed_reduction_keeps_one_cent",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppAgentDiscountAmountUsesCentsAndKeepsPositivePayable",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestValidateAppAgentDiscountRule",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestQuoteAppAgentDiscountEligibilityAndInviteIsolation/agent_self",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestQuoteAppAgentDiscountEligibilityAndInviteIsolation/direct_invite",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestQuoteAppAgentDiscountEligibilityAndInviteIsolation/descendant_invite",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestQuoteAppAgentDiscountEligibilityAndInviteIsolation/same_root_code",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestQuoteAppAgentDiscountEligibilityAndInviteIsolation/checkout_code",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestQuoteAppAgentDiscountEligibilityAndInviteIsolation/unbound_regular_price",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestQuoteAppAgentDiscountEligibilityAndInviteIsolation/paused_agent",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestQuoteAppAgentDiscountEligibilityAndInviteIsolation/second_level_agent",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestQuoteAppAgentDiscountEligibilityAndInviteIsolation/self_invite",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestQuoteAppAgentDiscountEligibilityAndInviteIsolation/different_existing_root",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestQuoteAppAgentDiscountEligibilityAndInviteIsolation",
+      "Action": "pass",
+      "Elapsed": 0.03
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppAgentDiscountAdminReplaceAndAppQuote",
+      "Action": "pass",
+      "Elapsed": 0.02
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationValidationRejectsBeforeStore/invalid_account",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationValidationRejectsBeforeStore/password_shorter_than_six_bytes",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationValidationRejectsBeforeStore/password_longer_than_seventy_two_bytes",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationValidationRejectsBeforeStore/invalid_nickname",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationValidationRejectsBeforeStore/invalid_mainland_phone",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationValidationRejectsBeforeStore/code_is_not_six_digits",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationValidationRejectsBeforeStore/code_contains_non_digits",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationValidationRejectsBeforeStore",
+      "Action": "pass",
+      "Elapsed": 0.02
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationRejectsInvalidAgentCodeBeforeStore",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersRejectTrailingJSON/registration/garbage",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersRejectTrailingJSON/registration/second_json_object",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersRejectTrailingJSON/registration/body_limit_exceeded_by_trailing_whitespace",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersRejectTrailingJSON/login/garbage",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersRejectTrailingJSON/login/second_json_object",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersRejectTrailingJSON/login/body_limit_exceeded_by_trailing_whitespace",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersRejectTrailingJSON/password_reset/garbage",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersRejectTrailingJSON/password_reset/second_json_object",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersRejectTrailingJSON/password_reset/body_limit_exceeded_by_trailing_whitespace",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersRejectTrailingJSON",
+      "Action": "pass",
+      "Elapsed": 0.08
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersAllowTrailingWhitespace/registration_continues_to_sms_limiter",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersAllowTrailingWhitespace/login_continues_to_password_limiter",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersAllowTrailingWhitespace",
+      "Action": "pass",
+      "Elapsed": 0.02
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersAllowUnknownFieldsInFirstJSONValue/registration_continues_to_sms_limiter",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersAllowUnknownFieldsInFirstJSONValue/login_continues_to_password_limiter",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersAllowUnknownFieldsInFirstJSONValue",
+      "Action": "pass",
+      "Elapsed": 0.02
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginValidationRejectsBeforeStore/empty_identifier",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginValidationRejectsBeforeStore/empty_password",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginValidationRejectsBeforeStore",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersRejectUnavailableAuthDependencies/registration/missing_app_user_store",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersRejectUnavailableAuthDependencies/registration/missing_database",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersRejectUnavailableAuthDependencies/login/missing_app_user_store",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersRejectUnavailableAuthDependencies/login/missing_database",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordHandlersRejectUnavailableAuthDependencies",
+      "Action": "pass",
+      "Elapsed": 0.04
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationErrorResponses/invalid_account",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationErrorResponses/invalid_password",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationErrorResponses/invalid_nickname",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationErrorResponses/invalid_sms_code",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationErrorResponses/disabled_user",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationErrorResponses/account_taken",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationErrorResponses/phone_registered",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationErrorResponses/wrapped_account_error",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationErrorResponses/internal_error",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationErrorResponses",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginErrorResponses/invalid_credentials",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginErrorResponses/wrapped_invalid_credentials",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginErrorResponses/disabled_user",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginErrorResponses/internal_error",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginErrorResponses",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginAttemptLimiterNormalizesKeysAndFailsOpenWhenNil",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginIPLimiterRunsBeforeAccountLimiter",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginAttemptLimiterUsesDatabaseWithoutTouchingMemory",
+      "Action": "pass",
+      "Elapsed": 0.78
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginAttemptLimiterFallsBackToMemoryWhenDatabaseFails/account",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginAttemptLimiterFallsBackToMemoryWhenDatabaseFails/ip",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginAttemptLimiterFallsBackToMemoryWhenDatabaseFails",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginAttemptLimiterTimesOutDatabaseAndFallsBackToMemory",
+      "Action": "pass",
+      "Elapsed": 0.5
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginAttemptLimiterRouteUsesCanceledRequestContext",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginAttemptLimiterEmptyKeysFailOpenWithoutTouchingLimiters/ip",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginAttemptLimiterEmptyKeysFailOpenWithoutTouchingLimiters/account",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginAttemptLimiterEmptyKeysFailOpenWithoutTouchingLimiters",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginAttemptLimiterDatabaseHelperHoldsAdvisoryLock",
+      "Action": "pass",
+      "Elapsed": 0.08
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginRouteAppliesLimiterBeforeStore",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingDiscountPostgresCheckoutAndCancel",
+      "Action": "pass",
+      "Elapsed": 0.64
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingEntitlementsUsesNormalizedPlan",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingEntitlementsExposesCanonicalSvipCapabilities",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingEntitlementsUnknownMemberFailsClosedToFree",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingEntitlementsIncludesExistingPendingOrder",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingEntitlementsHidesPendingOrderOlderThanPaidGrant",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingEntitlementsReturnsActiveMembershipDates",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingEntitlementsTreatsExpiredMembershipAsFree",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingEntitlementsIncludesTrialChatBalance",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingCreateOrderUsesDefaultCustomerServiceMode",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingCreateOrderPersistsAgentDiscountedAmount",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingCreateOrderRejectsDifferentPendingOrder",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestApplyAppAgentDiscountToCharge/ordinary_order",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestApplyAppAgentDiscountToCharge/upgrade_after_credit",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestApplyAppAgentDiscountToCharge/discount_cannot_make_upgrade_free",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestApplyAppAgentDiscountToCharge/no_rule",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestApplyAppAgentDiscountToCharge",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppOrderDiscountForChargeUsesUpgradeBalance",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppOrderMatchesPricing",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingCreateOrderExpiresOldPendingOrderBeforeCreating",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingProductsExposeSixMembershipPlans",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingOrderStatusKeepsPendingCustomerConfirmation",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingOrderStatusClosesOrderOlderThan15Minutes",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingOrderStatusRequiresOutTradeNo",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingXZNModeAlipayPostgres",
+      "Action": "pass",
+      "Elapsed": 0.63
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppOrderLifecycleUsesSnapshotAndRefundsIdempotently",
+      "Action": "pass",
+      "Elapsed": 0.72
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestRefundAppOrderRejectsUnpaidOrder",
+      "Action": "pass",
+      "Elapsed": 0.62
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAdminAppOrderRefundIsIdempotentAndAudited",
+      "Action": "pass",
+      "Elapsed": 0.64
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingCancelOrderClosesOwnPendingOrderIdempotently",
+      "Action": "pass",
+      "Elapsed": 0.73
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingSurfaceUsesDedicatedRoutes/web",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingSurfaceUsesDedicatedRoutes/native",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingSurfaceUsesDedicatedRoutes/legacy",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingSurfaceUsesDedicatedRoutes/legacy#01",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingSurfaceUsesDedicatedRoutes/legacy#02",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingSurfaceUsesDedicatedRoutes/legacy#03",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingSurfaceUsesDedicatedRoutes/legacy#04",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingSurfaceUsesDedicatedRoutes",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppBillingModeForSurfaceKeepsAppAndWebIndependent",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestXZNModeNeverFallsBackToCustomerService",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestResolveAppOrderPurchaseModeKeepsStoredMode",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPaymentModeXZNRequiresConfiguration",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingXZNPostgresIsolatedFromApp/legacy_config_preserves_Web_return_but_explicit_empty_clears_it",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingXZNPostgresIsolatedFromApp/web_products_do_not_depend_on_malformed_App_mode",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingXZNPostgresIsolatedFromApp/native_cannot_start_or_launch_across_pending_Web_checkout",
+      "Action": "pass",
+      "Elapsed": 0.03
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingXZNPostgresIsolatedFromApp/verified_return_survives_later_configuration_change",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingXZNPostgresIsolatedFromApp/signed_callback_grants_membership_exactly_once",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingXZNPostgresIsolatedFromApp/App_remains_manual_and_pending_is_visible_but_not_launchable_in_Web",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingXZNPostgresIsolatedFromApp/expired_pending_is_closed_before_replacement",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingXZNPostgresIsolatedFromApp/concurrent_native_and_Web_reservation_creates_one_pending",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingXZNPostgresIsolatedFromApp",
+      "Action": "pass",
+      "Elapsed": 0.76
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingReturnURLIsIndependentAndUsesHashQuery",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingReturnURLRejectsUntrustedDestinations/https://evil.example.test/app/index.html#/billing",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingReturnURLRejectsUntrustedDestinations/https://h5.example.test:8443/app/index.html#/billing",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingReturnURLRejectsUntrustedDestinations/http://h5.example.test/app/index.html#/billing",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingReturnURLRejectsUntrustedDestinations/https://user:password@h5.example.test/app/index.html#/billing",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingReturnURLRejectsUntrustedDestinations/https://h5.example.test/app/index.html?token=secret#/billing",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingReturnURLRejectsUntrustedDestinations/https://h5.example.test/app/index.html#/other",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingReturnURLRejectsUntrustedDestinations/https://h5.example.test/app/index.html#/billing?next=https://evil.test",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingReturnURLRejectsUntrustedDestinations/https://h5.example.test/app/index.html#/billing?payment_return=0",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingReturnURLRejectsUntrustedDestinations/https://h5.example.test/app/index.html#/billing?outTradeNo=forged",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingReturnURLRejectsUntrustedDestinations/https://h5.example.test/app/%0aindex.html#/billing",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingReturnURLRejectsUntrustedDestinations/https://h5.example.test/app/index.html#/billing%3fnext=x",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingReturnURLRejectsUntrustedDestinations/ninexing://billing/result",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingReturnURLRejectsUntrustedDestinations/javascript:alert(1)",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingReturnURLRejectsUntrustedDestinations///h5.example.test/app/index.html#/billing",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingReturnURLRejectsUntrustedDestinations/http://127.0.0.1:62654/index.html#/billing",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingReturnURLRejectsUntrustedDestinations",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingReturnURLUsesExplicitOriginsAndLocalOnlyOutsideProduction",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingRequiresReturnConfigurationInProducts",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingModeDoesNotReadLegacySetting",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppOrderCheckoutCompatibilityDoesNotReuseAnotherSurface",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestWebBillingDoesNotReusePendingCustomerServiceOrder",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestGenerateDistributionAgentCodeUsesSixUnambiguousCharacters",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestValidateDistributionAgentCodeFormat",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionHTTPPaymentJourneyPostgres/create_three_tiers_click_register_and_admin_attribution",
+      "Action": "pass",
+      "Elapsed": 3.16
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionHTTPPaymentJourneyPostgres/configure_rules_discount_and_isolated_web_gateway",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionHTTPPaymentJourneyPostgres/discounted_web_order_pending_bad_callbacks_do_not_pay",
+      "Action": "pass",
+      "Elapsed": 0.02
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionHTTPPaymentJourneyPostgres/successful_payment_replay_and_admin_reconciliation",
+      "Action": "pass",
+      "Elapsed": 0.02
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionHTTPPaymentJourneyPostgres/auth_boundary_and_order_ownership",
+      "Action": "pass",
+      "Elapsed": 0.61
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionHTTPPaymentJourneyPostgres/settlement_reservation_approval_payment_and_replay",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionHTTPPaymentJourneyPostgres/refund_replay_and_late_success_are_terminal",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionHTTPPaymentJourneyPostgres/no_invitation_no_commission_and_app_stays_manual",
+      "Action": "pass",
+      "Elapsed": 0.02
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionHTTPPaymentJourneyPostgres",
+      "Action": "pass",
+      "Elapsed": 4.56
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestPaidSettlementContainsDistributionCommissionHook",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPublicCodes/valid",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPublicCodes/case_and_whitespace",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPublicCodes/paused",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPublicCodes/unknown",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPublicCodes/database_id_is_not_invite_code",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPublicCodes/agent_number_is_not_query_field",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPublicCodes/missing",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPublicCodes",
+      "Action": "pass",
+      "Elapsed": 0.61
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPRegistrationAndLoginAttribution/new_registration_binds_case_insensitive_code_once",
+      "Action": "pass",
+      "Elapsed": 1.97
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPRegistrationAndLoginAttribution/reject_registration_X2Y3Z4",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPRegistrationAndLoginAttribution/reject_registration_P2Q3R4",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPRegistrationAndLoginAttribution/reject_registration_10",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPRegistrationAndLoginAttribution/existing_sms_account_credential_completion_does_not_bind",
+      "Action": "pass",
+      "Elapsed": 0.64
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPRegistrationAndLoginAttribution/existing_unbound_password_login_does_not_bind",
+      "Action": "pass",
+      "Elapsed": 4.17
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPRegistrationAndLoginAttribution",
+      "Action": "pass",
+      "Elapsed": 7.48
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/bind_unauthenticated",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/bind_self",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/bind_unbound",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/bind_repeat",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/bind_hijack",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/scope_app_users",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/scope_app_agents",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/scope_backend_agents",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/child_false_cross_tree",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/child_false_self",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/child_false_already_agent",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/child_false_non_agent",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/child_false_paused",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/child_true_cross_tree",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/child_true_self",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/child_true_already_agent",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/child_true_non_agent",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/child_true_paused",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/backend_child_uses_same_six_character_code_as_app",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes/agent_cannot_access_admin",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionInvitationHTTPPermissionsAndChildCodes",
+      "Action": "pass",
+      "Elapsed": 0.61
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresManualGrantCommissionsAndRefund/paid_10000_cents",
+      "Action": "pass",
+      "Elapsed": 0.63
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresManualGrantCommissionsAndRefund/paid_7901_cents",
+      "Action": "pass",
+      "Elapsed": 0.6
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresManualGrantCommissionsAndRefund",
+      "Action": "pass",
+      "Elapsed": 1.23
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresManualGrantCommissionFailureRollsBackPayment",
+      "Action": "pass",
+      "Elapsed": 0.64
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresManualGrantWithoutReferralStillGrantsMembership",
+      "Action": "pass",
+      "Elapsed": 0.64
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresRefundAfterPayoutRetainsPaymentEvidence",
+      "Action": "pass",
+      "Elapsed": 0.6
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppDistributionPosterAssetURLRewritesPrivateUploads",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppDistributionPosterAssetRouteRequiresAppAuth",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppDistributionPosterAssetServesOnlyReferencedActiveImage",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppDistributionPosterUploadServesOnlyReferencedLocalImage",
+      "Action": "pass",
+      "Elapsed": 0.01
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresAdminAgentListIncludesAppUserIdentity",
+      "Action": "pass",
+      "Elapsed": 0.04
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresCommissionSnapshotAndReplay",
+      "Action": "pass",
+      "Elapsed": 0.04
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresAdminAgentCreateAutoGeneratesAgentCode",
+      "Action": "pass",
+      "Elapsed": 0.04
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresChildCreationReturnsPersistedAgent",
+      "Action": "pass",
+      "Elapsed": 0.08
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresActivateDocumentedRoute",
+      "Action": "pass",
+      "Elapsed": 0.04
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresFrontendListContract/rules",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresFrontendListContract/settlements",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresFrontendListContract",
+      "Action": "pass",
+      "Elapsed": 0.04
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresConcurrentActivation",
+      "Action": "pass",
+      "Elapsed": 0.34
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresSettlementReservations",
+      "Action": "pass",
+      "Elapsed": 0.04
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresPayoutRejectsReversedCommission",
+      "Action": "pass",
+      "Elapsed": 0.04
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresPayoutAtomicOnFailure",
+      "Action": "pass",
+      "Elapsed": 0.04
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresLoginBindingRejectsSelfAndAgentCycle",
+      "Action": "pass",
+      "Elapsed": 0.03
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresRulesValidateBudget",
+      "Action": "pass",
+      "Elapsed": 0.03
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresConcurrentSettlementCreation",
+      "Action": "pass",
+      "Elapsed": 0.04
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresSuccessfulPayoutRequiresProof",
+      "Action": "pass",
+      "Elapsed": 0.04
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresAppOverviewMetrics",
+      "Action": "pass",
+      "Elapsed": 0.05
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresAnalyticsCountsEachOrderOnce",
+      "Action": "pass",
+      "Elapsed": 0.08
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresAgentScopeAndChildPermissions",
+      "Action": "pass",
+      "Elapsed": 0.04
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresPostRegistrationBindIsDisabled",
+      "Action": "pass",
+      "Elapsed": 0.03
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresSMSInviteOnlyBindsNewAccounts",
+      "Action": "pass",
+      "Elapsed": 0.04
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionAgentCannotUseAdminPermissions",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionPostgresPaidOrderAndRefundLifecycle",
+      "Action": "pass",
+      "Elapsed": 0.04
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionRouteContract",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestXZNCreatePaytypeKeepsLegacyAdminChannels",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestXZNOrderReturnURLCarriesOrderIdentity",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppXZNOrderReturnURLAlwaysReturnsToSupportedAppRoute",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestValidateXZNBaseURLAllowlist",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestValidateXZNSignTypeIsMD5Only",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestValidateXZNReturnURL",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestParseXZNCallbackRequiresSubjectAndKnownStatus",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestXZNReconcileLocalStatusDefersSuccessfulSettlement",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationAndLogin",
+      "Action": "pass",
+      "Elapsed": 3.36
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRecovery",
+      "Action": "pass",
+      "Elapsed": 3.39
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordInvalidCredentialsEnvelopeComparisonIgnoresFormattingAndExtraFields",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationBindsLegacySMSUser",
+      "Action": "pass",
+      "Elapsed": 0.85
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordRegistrationDuplicateAccountRollsBackSMSCode",
+      "Action": "pass",
+      "Elapsed": 2.98
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordSessionPersistenceFailureResponses",
+      "Action": "pass",
+      "Elapsed": 1.43
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginAttemptLimiterEnforcesDatabaseAccountLimit",
+      "Action": "pass",
+      "Elapsed": 3.4
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginAttemptLimiterEnforcesDatabaseIPLimitBeforeAccount",
+      "Action": "pass",
+      "Elapsed": 19.59
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginAttemptLimiterStoresPseudonymousDatabaseKeys",
+      "Action": "pass",
+      "Elapsed": 0.97
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginAttemptLimiterNewTestServerClearsOnlyOwnedScopes/server_lifecycle",
+      "Action": "pass",
+      "Elapsed": 0.54
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestAppPasswordLoginAttemptLimiterNewTestServerClearsOnlyOwnedScopes",
+      "Action": "pass",
+      "Elapsed": 0.55
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordValidatesBeforeDatabaseAccess/account",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordValidatesBeforeDatabaseAccess/password",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordValidatesBeforeDatabaseAccess/nickname",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordValidatesBeforeDatabaseAccess",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordCreatesAccountUser",
+      "Action": "pass",
+      "Elapsed": 1.35
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordBindsLegacySMSUserInPlace",
+      "Action": "pass",
+      "Elapsed": 1.3
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordRejectsDisabledLegacySMSUser",
+      "Action": "pass",
+      "Elapsed": 0.66
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordRejectsCredentialedPhone/existing_account",
+      "Action": "pass",
+      "Elapsed": 0.66
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordRejectsCredentialedPhone/existing_password_hash",
+      "Action": "pass",
+      "Elapsed": 0.67
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordRejectsCredentialedPhone",
+      "Action": "pass",
+      "Elapsed": 1.33
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordDuplicateAccountRollsBackSMSCode",
+      "Action": "pass",
+      "Elapsed": 1.37
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordUniqueAccountFailureRollsBackSMSCode",
+      "Action": "pass",
+      "Elapsed": 1.31
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordRejectsInvalidSMSCode/missing",
+      "Action": "pass",
+      "Elapsed": 0.66
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordRejectsInvalidSMSCode/expired",
+      "Action": "pass",
+      "Elapsed": 0.66
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordRejectsInvalidSMSCode/used",
+      "Action": "pass",
+      "Elapsed": 1.57
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordRejectsInvalidSMSCode",
+      "Action": "pass",
+      "Elapsed": 2.88
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordConcurrentSMSCodeUseHasOneWinner",
+      "Action": "pass",
+      "Elapsed": 0.71
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordConcurrentPhoneUseMapsUniqueConstraint",
+      "Action": "pass",
+      "Elapsed": 0.68
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordIdentifierRules/lowest_valid_prefix",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordIdentifierRules/highest_valid_prefix",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordIdentifierRules/prefix_too_low",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordIdentifierRules/too_short",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordIdentifierRules/too_long",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordIdentifierRules/contains_non_digit",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordIdentifierRules/outer_whitespace_is_not_part_of_phone_syntax",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordIdentifierRules",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordDummyHashIsFixedDefaultCost",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordSelectsOnlyUsableStoredHash/SQL_NULL",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordSelectsOnlyUsableStoredHash/empty",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordSelectsOnlyUsableStoredHash/damaged",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordSelectsOnlyUsableStoredHash/MinCost",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordSelectsOnlyUsableStoredHash/cost_31",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordSelectsOnlyUsableStoredHash/DefaultCost",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordSelectsOnlyUsableStoredHash",
+      "Action": "pass",
+      "Elapsed": 0.66
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordSucceedsByAccountOrPhone/lowercase_account_with_outer_whitespace",
+      "Action": "pass",
+      "Elapsed": 0.65
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordSucceedsByAccountOrPhone/account_with_different_casing",
+      "Action": "pass",
+      "Elapsed": 0.65
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordSucceedsByAccountOrPhone/exact_phone",
+      "Action": "pass",
+      "Elapsed": 0.67
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordSucceedsByAccountOrPhone",
+      "Action": "pass",
+      "Elapsed": 2.64
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordRejectsInvalidCredentialsBeforeStatus/wrong_password",
+      "Action": "pass",
+      "Elapsed": 0.66
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordRejectsInvalidCredentialsBeforeStatus/password_is_never_trimmed",
+      "Action": "pass",
+      "Elapsed": 0.65
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordRejectsInvalidCredentialsBeforeStatus/unknown_identifier",
+      "Action": "pass",
+      "Elapsed": 0.65
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordRejectsInvalidCredentialsBeforeStatus/SMS-only_user_has_no_password",
+      "Action": "pass",
+      "Elapsed": 0.63
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordRejectsInvalidCredentialsBeforeStatus/damaged_stored_hash",
+      "Action": "pass",
+      "Elapsed": 0.68
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordRejectsInvalidCredentialsBeforeStatus/MinCost_stored_hash_with_correct_password",
+      "Action": "pass",
+      "Elapsed": 0.63
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordRejectsInvalidCredentialsBeforeStatus/disabled_user_with_wrong_password_hides_status",
+      "Action": "pass",
+      "Elapsed": 0.64
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordRejectsInvalidCredentialsBeforeStatus/disabled_user_with_correct_password_returns_disabled",
+      "Action": "pass",
+      "Elapsed": 0.64
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordRejectsInvalidCredentialsBeforeStatus",
+      "Action": "pass",
+      "Elapsed": 5.86
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestAuthenticateWithPasswordRejectsHighCostHashWithoutComparingIt",
+      "Action": "pass",
+      "Elapsed": 1.34
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordMapsPostgresUniqueErrors/account_index",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordMapsPostgresUniqueErrors/phone_constraint",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordMapsPostgresUniqueErrors",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/appuser",
+      "Test": "TestRegisterWithPasswordInviteOnlyForNewAccounts",
+      "Action": "pass",
+      "Elapsed": 1.31
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/distribution",
+      "Test": "TestCreateChildAgentRequiresDirectInviteAndNextLevel",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/distribution",
+      "Test": "TestCreateChildAgentRejectsIndirectInviteAndLevelThree",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/distribution",
+      "Test": "TestBindInviteIsFirstBindingAndRejectsCycles",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/distribution",
+      "Test": "TestCommissionSnapshotSplitsDirectAndOverride",
+      "Action": "pass",
+      "Elapsed": 0
+    },
+    {
+      "Package": "nine-xing/nx-backend/apps/server/internal/server",
+      "Test": "TestDistributionHTTPPaymentJourneyPostgres/new_rule_preserves_paid_order_snapshot",
+      "Action": "pass",
+      "Elapsed": 0
+    }
+  ]
+}

@@ -38,11 +38,11 @@ assert.match(
 
 assert.match(
   learnSource,
-  /\.learning-panel\s*\{[^}]*background:\s*var\(--nx-surface\)/s,
+  /\.learning-panel\s*\{[^}]*background:\s*var\(--nx-surface,\s*#FFFFFF\)/s,
   '语录面板需要使用统一的阅读表面色',
 )
 
-assert.match(learnSource, /class="learn-header__title">学习中心<\/text>/, '学习页需要显示当前学习中心标题')
+assert.match(learnSource, /class="learn-header__title">跟着老韩，慢慢成长<\/text>/, '学习页需要显示老师日常的成长主题')
 assert.doesNotMatch(
   learnSource,
   /#4338ca|#4f46e5|#7c3aed|#f59e0b/i,

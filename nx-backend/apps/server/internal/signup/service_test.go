@@ -211,6 +211,38 @@ func TestWebsiteSignupSuccessUsesWebsiteSourceAndCommittedMessage(t *testing.T) 
 	}
 }
 
+func TestTeacherSignupSuccessUsesWebsiteSourceAndTeacherMessage(t *testing.T) {
+	tx := &fakeTx{}
+	request, _ := http.NewRequest(http.MethodPost, "/api/app/teachers/han/enrollments", nil)
+	input := LeadInput{Name: "张三", Contact: "13812345678", ContactType: ContactTypePhone, Interest: "老师：韩老师（han） | 报名类型：consult | 意向方向：个人成长"}
+	want := Lead{ID: "42", Name: "张三", ContactType: ContactTypePhone, Contact: "13812345678", SourcePlatform: "website"}
+	leads := &fakeLeadWriter{lead: want}
+	messages := &fakeMessageWriter{created: true}
+
+	got, err := NewService(&fakeBeginner{tx: tx}, leads, messages).CreateTeacherSignup(context.Background(), input, "韩老师", "han", "consult", request)
+	if err != nil {
+		t.Fatalf("CreateTeacherSignup() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("CreateTeacherSignup() = %+v, want %+v", got, want)
+	}
+	if leads.gotPlatform != "website" {
+		t.Fatalf("source platform = %q, want website", leads.gotPlatform)
+	}
+	if messages.event.EventKey != "teacher.signup.created" || messages.event.BusinessID != "42" || messages.event.Title != "新的老师报名" {
+		t.Fatalf("unexpected teacher message: %+v", messages.event)
+	}
+	if messages.event.TargetPath != "/customer/signups?leadId=42&open=detail" {
+		t.Fatalf("unexpected teacher target: %+v", messages.event)
+	}
+	if !strings.Contains(messages.event.Content, "韩老师（han）") || !strings.Contains(messages.event.Content, "报名类型：consult") {
+		t.Fatalf("teacher message content = %q", messages.event.Content)
+	}
+	if tx.commitCalls != 1 || tx.rollbackCalls != 1 {
+		t.Fatalf("expected one commit and deferred rollback, got commit=%d rollback=%d", tx.commitCalls, tx.rollbackCalls)
+	}
+}
+
 func TestWebsiteSignupCanceledContextRollsBackWithoutCommit(t *testing.T) {
 	parent, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -104,6 +104,11 @@ func TestEventConstructors(t *testing.T) {
 			want: Event{Type: "signup", Title: "新的官网报名", Content: "张三提交了官网报名，手机：138****5678", Platform: "website", EventKey: "signup.created", BusinessID: "42", BusinessType: "signup", TargetPath: "/customer/signups?leadId=42&open=detail"},
 		},
 		{
+			name: "teacher signup",
+			got:  TeacherSignupCreated("42", "韩老师", "han", "consult", "张三", "138****5678"),
+			want: Event{Type: "signup", Title: "新的老师报名", Content: "张三提交了韩老师（han）的老师报名，报名类型：consult，手机号：138****5678", Platform: "website", EventKey: "teacher.signup.created", BusinessID: "42", BusinessType: "signup", TargetPath: "/customer/signups?leadId=42&open=detail"},
+		},
+		{
 			name: "miniapp user",
 			got:  MiniappUserCreated("43", "小明"),
 			want: Event{Type: "miniapp", Title: "新的小程序用户", Content: "小明首次进入小程序", Platform: "miniapp", EventKey: "miniapp.user.created", BusinessID: "43", BusinessType: "miniapp-user", TargetPath: "/customer/miniapp-users?userId=43&open=detail"},

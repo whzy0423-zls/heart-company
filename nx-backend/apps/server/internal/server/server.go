@@ -55,6 +55,7 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/modelconfig"
 	"nine-xing/nx-backend/apps/server/internal/netguard"
 	"nine-xing/nx-backend/apps/server/internal/observability"
+	"nine-xing/nx-backend/apps/server/internal/problemfollowup"
 	"nine-xing/nx-backend/apps/server/internal/profilecalibration"
 	"nine-xing/nx-backend/apps/server/internal/publicknowledge"
 	"nine-xing/nx-backend/apps/server/internal/push"
@@ -187,6 +188,11 @@ type Server struct {
 	directMessages                 *directmessage.Store
 	careEvaluator                  *caresystem.Evaluator
 	careWorkerCancel               context.CancelFunc
+	problemFollowups               appProblemFollowupStore
+	problemFollowupCancel          context.CancelFunc
+	problemFollowupWorkers         sync.WaitGroup
+	problemFollowupEvaluate        func(context.Context, problemfollowup.Input) (problemfollowup.Decision, error)
+	problemFollowupPush            func(context.Context, problemfollowup.Delivery) error
 	directMedia                    *directmedia.Store
 	chatAppearance                 *chatappearance.Store
 	realtimeTickets                *realtime.TicketStore
@@ -294,6 +300,10 @@ type websiteSignupCreator interface {
 	CreateWebsiteSignup(context.Context, signup.LeadInput, *http.Request) (signup.Lead, error)
 }
 
+type teacherSignupCreator interface {
+	CreateTeacherSignup(context.Context, signup.LeadInput, string, string, string, *http.Request) (signup.Lead, error)
+}
+
 type miniappUserUpserter interface {
 	UpsertUser(context.Context, string, string, string, string) (int64, error)
 }
@@ -333,6 +343,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		panic("trusted proxy cidrs: " + err.Error())
 	}
 	signupStore := signup.NewStore(database)
+	signupService := signup.NewService(dbtx.SQLBeginner{DB: database}, signupStore, businessmessage.Store{})
 	s := &Server{
 		env:               env,
 		mux:               http.NewServeMux(),
@@ -343,7 +354,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		builder:           siteconfig.NewBuilder(env.BuildScript, "", time.Duration(env.BuildTimeout)*time.Second),
 		engagement:        engagement.NewStore(database),
 		signups:           signupStore,
-		signupService:     signup.NewService(dbtx.SQLBeginner{DB: database}, signupStore, businessmessage.Store{}),
+		signupService:     signupService,
 		uploads:           uploadasset.NewStore(database),
 		uploader:          env.ObjectUploader,
 		trustedProxyCIDRs: trustedProxyCIDRs,
@@ -602,6 +613,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 	if database != nil {
 		careCtx, careCancel := context.WithCancel(context.Background())
 		s.careWorkerCancel = careCancel
+		s.startProblemFollowups()
 		go s.runCareEvaluationSweep(careCtx)
 	}
 	if database != nil {
@@ -1123,6 +1135,18 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app/billing/orders", s.method(http.MethodPost, s.requireAppAuth(s.appBillingCreateOrder)))
 	s.mux.HandleFunc("/api/app/billing/orders/cancel", s.method(http.MethodPost, s.requireAppAuth(s.appBillingCancelOrder)))
 	s.mux.HandleFunc("/api/app/billing/orders/status", s.method(http.MethodGet, s.requireAppAuth(s.appBillingOrderStatus)))
+	// Dedicated checkout surfaces. Native clients stay on customer-service
+	// checkout while H5 uses the configured XZN cashier. The legacy routes
+	// above remain available for older App builds during the transition.
+	for _, prefix := range []string{"/api/app/native/billing", "/api/app/web/billing"} {
+		s.mux.HandleFunc(prefix+"/entitlements", s.method(http.MethodGet, s.requireAppAuth(s.appBillingEntitlements)))
+		s.mux.HandleFunc(prefix+"/products", s.method(http.MethodGet, s.requireAppAuth(s.appBillingProducts)))
+		s.mux.HandleFunc(prefix+"/discount-quote", s.method(http.MethodPost, s.requireAppAuth(s.appBillingDiscountQuote)))
+		s.mux.HandleFunc(prefix+"/upgrade-quote", s.method(http.MethodPost, s.requireAppAuth(s.appBillingUpgradeQuote)))
+		s.mux.HandleFunc(prefix+"/orders", s.method(http.MethodPost, s.requireAppAuth(s.appBillingCreateOrder)))
+		s.mux.HandleFunc(prefix+"/orders/cancel", s.method(http.MethodPost, s.requireAppAuth(s.appBillingCancelOrder)))
+		s.mux.HandleFunc(prefix+"/orders/status", s.method(http.MethodGet, s.requireAppAuth(s.appBillingOrderStatus)))
+	}
 	s.mux.HandleFunc("/api/app/memories/", s.requireAppAuth(s.appMemoryRouter))
 	s.mux.HandleFunc("/api/app/privacy/export", s.method(http.MethodPost, s.requireAppAuth(s.appPrivacyExport)))
 	s.mux.HandleFunc("/api/app/privacy/memories", s.method(http.MethodDelete, s.requireAppAuth(s.appPrivacyDeleteMemories)))
@@ -1341,6 +1365,10 @@ func (s *Server) routes() {
 }
 
 func (s *Server) Shutdown() {
+	if s.problemFollowupCancel != nil {
+		s.problemFollowupCancel()
+	}
+	s.problemFollowupWorkers.Wait()
 	if s.careWorkerCancel != nil {
 		s.careWorkerCancel()
 	}

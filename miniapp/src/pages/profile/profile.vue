@@ -11,6 +11,9 @@ import { requestWechatPayment } from '../../utils/payment'
 import { normalizeMiniappPayment } from '../../utils/miniappPages'
 import { getStoredSiteConfig, refreshSiteConfig } from '../../utils/siteConfig'
 import { previewImage } from '../../utils/imagePreview'
+import { bookingKindLabel, bookingStatusLabel } from '../../utils/bookingDisplay'
+import NxIcon from '../../components/NxIcon.vue'
+import { UI_PREVIEW } from '../../utils/uiPreview'
 
 const logged = ref(false)
 const user = ref(null)
@@ -23,8 +26,8 @@ const paymentTesting = ref(false)
 const paymentEnabled = ref(normalizeMiniappPayment(getStoredSiteConfig()).enabled)
 const profileLoading = ref(false)
 const userAvatarFailed = ref(false)
-const profileLogoFailed = ref(false)
-const visibleRecords = computed(() => previewItems(records.value))
+const historyExpanded = ref(false)
+const visibleRecords = computed(() => historyExpanded.value ? records.value : previewItems(records.value))
 const hiddenRecordCount = computed(() => hiddenCount(records.value))
 const latestBooking = computed(() => bookings.value[0] || null)
 const recordCount = computed(() => records.value.length)
@@ -202,10 +205,6 @@ function onUserAvatarError() {
   userAvatarFailed.value = true
 }
 
-function onProfileLogoError() {
-  profileLogoFailed.value = true
-}
-
 function previewUserAvatar() {
   if (!user.value?.avatar || userAvatarFailed.value) return
   previewImage(user.value.avatar)
@@ -221,6 +220,10 @@ function openBookingRecords() {
 
 function openLearn() {
   uni.switchTab({ url: '/pages/learn/learn' })
+}
+
+function openBooking() {
+  uni.switchTab({ url: '/pages/booking/booking' })
 }
 
 function openTest() {
@@ -251,455 +254,179 @@ async function testWechatPayment() {
 
 <template>
   <view class="wrap profile page-stack ios-page ios-safe-bottom">
-    <view v-if="!logged" class="profile-guest">
-      <view class="profile-hero nx-page-hero login">
-        <image v-if="!profileLogoFailed" src="/static/wheel.png" mode="aspectFit" aria-label="九型 Logo" class="profile-hero__mark profile-logo" @error="onProfileLogoError" />
-        <view v-else class="profile-hero__mark profile-hero__mark--ph">九</view>
-        <text class="profile-hero__eyebrow">个人档案</text>
-        <text class="profile-hero__title">记录每一次自我看见</text>
-        <text class="profile-hero__lead">登录后沉淀你的九型档案、测试历史和预约记录。</text>
-        <view class="login-benefits" aria-label="登录后可使用的功能">
-          <text>保存测试结果</text>
-          <text>查看预约进度</text>
-          <text>持续记录成长</text>
-        </view>
-        <!-- #ifdef H5 -->
-        <button class="profile-login ios-button" disabled>请在微信小程序内登录</button>
-        <text class="login__hint">H5 可浏览公开内容；保存档案和预约记录请打开微信小程序。</text>
-        <!-- #endif -->
-        <!-- #ifndef H5 -->
-        <button class="profile-login ios-button" :loading="logging" :disabled="logging" @click="login">微信一键登录</button>
-        <!-- #endif -->
+    <view class="profile-content">
+      <view class="profile-header">
+        <view class="eyebrow-row"><text class="eyebrow">MY GROWTH</text><text v-if="UI_PREVIEW" class="preview-badge">演示体验</text></view>
+        <text class="profile-header__title">我的成长手记</text>
+        <text class="profile-header__lead">每一次看见，都是向自己走近一点。</text>
       </view>
 
-      <view class="guest-preview">
-        <view class="guest-preview__heading">
-          <text class="guest-preview__eyebrow">现在就开始</text>
-          <text class="guest-preview__title">先探索，再决定是否登录</text>
+      <template v-if="!logged">
+        <view class="login-card">
+          <view class="login-card__icon"><NxIcon name="user" :size="30" color="#A55C3B" /></view>
+          <text class="login-card__title">让每一步成长，都有迹可循</text>
+          <text class="login-card__lead">登录后，保存你的九型画像，查看报名安排，记录与自己相遇的时刻。</text>
+          <!-- #ifdef H5 -->
+          <button class="profile-login" disabled>请在微信小程序内登录</button>
+          <text class="login__hint">你仍可以浏览老师日常，或开始一次九型探索。</text>
+          <!-- #endif -->
+          <!-- #ifndef H5 -->
+          <button class="profile-login" :loading="logging" :disabled="logging" @click="login">{{ logging ? '正在登录…' : '微信一键登录' }}</button>
+          <!-- #endif -->
         </view>
-        <view class="guest-preview__actions">
-          <view class="guest-preview__action guest-preview__action--test" role="button" tabindex="0" hover-class="profile-action--pressed" @click="openTest" @keydown.enter="openTest" @keydown.space.prevent="openTest">
-            <text class="guest-preview__number">01</text>
-            <text class="guest-preview__action-title">开始九型测试</text>
-            <text class="guest-preview__action-desc">用一组问题认识你的关注点</text>
+        <view class="guest-links">
+          <button class="guest-link" @click="openLearn"><view class="guest-link__icon"><NxIcon name="video" :size="23" color="#A55C3B" /></view><view class="guest-link__body"><text>先听听老韩的日常</text><text class="guest-link__desc">从一段分享，开启新的看见</text></view><NxIcon name="chevron" :size="18" color="#77786F" /></button>
+          <button class="guest-link" @click="openTest"><view class="guest-link__icon"><NxIcon name="spark" :size="23" color="#A55C3B" /></view><view class="guest-link__body"><text>做一次九型探索</text><text class="guest-link__desc">认识你的关注点与内在动力</text></view><NxIcon name="chevron" :size="18" color="#77786F" /></button>
+        </view>
+      </template>
+
+      <template v-else>
+        <view class="identity-card">
+          <view class="profile-hero__identity">
+            <button v-if="user && user.avatar && !userAvatarFailed" class="user-avatar-action" aria-label="预览个人头像" @click="previewUserAvatar"><image class="user__avatar" :src="user.avatar" mode="aspectFill" @error="onUserAvatarError" /></button>
+            <view v-else class="user__avatar user__avatar--ph">{{ (user && user.nickname ? user.nickname : '我').slice(0, 1) }}</view>
+            <button class="identity-edit" aria-label="编辑个人资料" @click="openProfileEdit"><view class="user__info"><text class="user__name">{{ (user && user.nickname) || '九型用户' }}</text><text class="user__type">{{ user && user.mainType ? typeName(user.mainType) : '保持好奇，继续认识自己' }}</text></view><NxIcon name="chevron" :size="18" color="#77786F" /></button>
           </view>
-          <view class="guest-preview__action guest-preview__action--learn" role="button" tabindex="0" hover-class="profile-action--pressed" @click="openLearn" @keydown.enter="openLearn" @keydown.space.prevent="openLearn">
-            <text class="guest-preview__number">02</text>
-            <text class="guest-preview__action-title">浏览学习内容</text>
-            <text class="guest-preview__action-desc">看看课程、课件和九型地图</text>
+          <view class="profile-stats">
+            <view class="profile-stat"><text class="profile-stat__value">{{ user && user.mainType ? `${user.mainType}` : '—' }}<text v-if="user && user.mainType" class="profile-stat__unit">号</text></text><text class="profile-stat__label">我的主型</text></view>
+            <view class="profile-stat"><text class="profile-stat__value">{{ recordCountLabel }}</text><text class="profile-stat__label">探索记录</text></view>
+            <view class="profile-stat"><text class="profile-stat__value">{{ bookingCountLabel }}</text><text class="profile-stat__label">报名与预约</text></view>
           </view>
         </view>
-        <text class="guest-preview__note">登录只在你需要保存记录和预约时使用。</text>
-      </view>
+
+        <view class="profile-actions" aria-label="个人快捷操作">
+          <button class="profile-action" @click="openBookingRecords"><view class="profile-action__icon"><NxIcon name="calendar" :size="25" color="#A55C3B" /></view><text class="profile-action__title">报名记录</text><text class="profile-action__desc">查看我的安排</text></button>
+          <button class="profile-action" @click="openTest"><view class="profile-action__icon"><NxIcon name="spark" :size="25" color="#A55C3B" /></view><text class="profile-action__title">九型探索</text><text class="profile-action__desc">更懂自己的内心</text></button>
+          <button class="profile-action" @click="openLearn"><view class="profile-action__icon"><NxIcon name="video" :size="25" color="#A55C3B" /></view><text class="profile-action__title">老师日常</text><text class="profile-action__desc">把看见带回生活</text></button>
+        </view>
+
+        <view class="section-heading"><text class="section-title">下一次，与成长相约</text><NxIcon name="calendar" :size="19" color="#A55C3B" /></view>
+        <view class="booking-summary">
+          <view v-if="profileLoading" class="empty" role="status">正在同步报名与预约记录…</view>
+          <view v-else-if="bookingsError" class="empty empty--error"><text>{{ bookingsError }}</text><button class="sync-retry" @click="loadAll">重新加载</button></view>
+          <view v-else-if="!latestBooking" class="booking-empty"><text class="booking-empty__title">给自己，留一段成长的时间</text><text class="booking-empty__copy">选择适合你的课程或咨询，与老师聊聊此刻的你。</text><button class="booking-cta" @click="openBooking">看看课程与咨询<NxIcon name="arrow" :size="18" color="#FFFFFF" /></button></view>
+          <template v-else>
+            <view class="booking-summary__eyebrow"><text>{{ bookingKindLabel(latestBooking.kind) }}</text><text class="booking-status">{{ bookingStatusLabel(latestBooking.status) }}</text></view>
+            <text class="booking-summary__title">{{ latestBooking.intent || '与老师一起，探索新的可能' }}</text>
+            <view class="booking-summary__meta"><NxIcon name="clock" :size="15" color="#77786F" /><text>{{ latestBooking.createTime }} 提交</text></view>
+            <button class="booking-summary__open" @click="openBookingRecords"><text>查看预约详情</text><NxIcon name="arrow" :size="18" color="#A55C3B" /></button>
+          </template>
+        </view>
+
+        <view class="section-heading"><text class="section-title">认识自己的足迹</text><text class="section-note">{{ recordCountLabel }} 次探索</text></view>
+        <view class="history-section">
+          <view v-if="profileLoading" class="empty" role="status">正在同步探索记录…</view>
+          <view v-else-if="recordsError" class="empty empty--error"><text>{{ recordsError }}</text><button class="sync-retry" @click="loadAll">重新加载</button></view>
+          <view v-else-if="records.length === 0" class="empty"><text>你的第一份九型画像，从这里开始。</text><button class="history-start" @click="openTest">开始九型探索<NxIcon name="arrow" :size="18" color="#A55C3B" /></button></view>
+          <view v-else class="history-timeline">
+            <view v-for="(rec, index) in visibleRecords" :key="rec.id" class="history-item"><view class="history-item__rail"><view class="history-item__dot" :class="{ 'history-item__dot--latest': index === 0 }" /></view><view class="history-item__body"><view class="history-item__heading"><text class="history-item__main">{{ typeName(rec.resultType) }}</text><text v-if="index === 0" class="history-latest">最近一次</text></view><text class="history-item__meta">{{ rec.createTime }}</text></view></view>
+            <button v-if="hiddenRecordCount" class="history-expand" @click="historyExpanded = !historyExpanded">{{ historyExpanded ? '收起历史记录' : `查看其余 ${hiddenRecordCount} 条记录` }}<NxIcon name="chevron" :size="16" color="#A55C3B" /></button>
+          </view>
+        </view>
+
+        <view class="account-links">
+          <button class="account-link" @click="openProfileEdit"><NxIcon name="user" :size="20" color="#77786F" /><text>个人资料</text><NxIcon name="chevron" :size="17" color="#77786F" /></button>
+          <button class="account-link" @click="openBooking"><NxIcon name="message" :size="20" color="#77786F" /><text>与老师聊一聊</text><NxIcon name="chevron" :size="17" color="#77786F" /></button>
+        </view>
+
+        <view v-if="paymentEnabled" class="wechat-pay-test">
+          <view class="section-heading"><text class="section-title">微信支付体验</text><text class="section-note">¥0.10</text></view>
+          <text class="wechat-pay-test__copy">点击后将发起一笔 0.10 元的微信支付测试订单。</text>
+          <button class="wechat-pay-test__button" :loading="paymentTesting" :disabled="paymentTesting" @click="testWechatPayment">{{ paymentTesting ? '正在调起支付…' : '测试微信支付 ¥0.10' }}</button>
+        </view>
+        <button class="logout" @click="logout">退出登录</button>
+      </template>
+      <view class="profile-footer"><view class="profile-footer__line" /><text>成长，是一场温柔的同行</text><view class="profile-footer__line" /></view>
     </view>
-
-    <template v-else>
-      <view class="profile-hero nx-page-hero user">
-        <view class="profile-hero__identity">
-          <button
-            v-if="user && user.avatar && !userAvatarFailed"
-            class="user-avatar-action"
-            type="button"
-            aria-label="预览个人头像"
-            hover-class="user-avatar-action--pressed"
-            @click="previewUserAvatar"
-          >
-            <image class="user__avatar" :src="user.avatar" mode="aspectFill" lazy-load @error="onUserAvatarError" />
-          </button>
-          <image v-else-if="!profileLogoFailed" src="/static/wheel.png" mode="aspectFit" aria-label="九型 Logo" class="user__avatar user__avatar--ph profile-logo" @error="onProfileLogoError" />
-          <view v-else class="user__avatar user__avatar--ph">九</view>
-          <view
-            class="profile-hero__identity-action"
-            role="button"
-            aria-role="button"
-            aria-label="编辑个人资料"
-            tabindex="0"
-            hover-class="profile-hero__identity-action--pressed"
-            @click="openProfileEdit"
-            @keydown.enter="openProfileEdit"
-            @keydown.space.prevent="openProfileEdit"
-          >
-            <view class="user__info">
-            <text class="profile-hero__eyebrow">个人档案</text>
-            <text class="user__name">{{ (user && user.nickname) || '九型用户' }}</text>
-            <text class="user__type" v-if="user && user.mainType">{{ typeName(user.mainType) }}</text>
-            <text class="user__type" v-else>已通过微信登录</text>
-            </view>
-            <text class="profile-hero__identity-arrow" aria-hidden="true">›</text>
-          </view>
-        </view>
-        <text class="profile-hero__title">记录每一次自我看见</text>
-        <text class="profile-hero__lead">你的成长轨迹，正在每一次探索中变得更清晰。</text>
-        <view class="profile-stats">
-          <view class="profile-stat">
-            <text class="profile-stat__value">{{ user && user.mainType ? `${user.mainType}号` : '—' }}</text>
-            <text class="profile-stat__label">主型</text>
-          </view>
-          <view class="profile-stat">
-            <text class="profile-stat__value">{{ recordCountLabel }}</text>
-            <text class="profile-stat__label">测试</text>
-          </view>
-          <view class="profile-stat">
-            <text class="profile-stat__value">{{ bookingCountLabel }}</text>
-            <text class="profile-stat__label">预约</text>
-          </view>
-        </view>
-      </view>
-
-      <view class="profile-actions" aria-label="个人快捷操作">
-        <view class="profile-action profile-action--primary" role="button" tabindex="0" hover-class="profile-action--pressed" @click="openTest" @keydown.enter="openTest" @keydown.space.prevent="openTest">
-          <text class="profile-action__index">01</text>
-          <text class="profile-action__title">重新测试</text>
-          <text class="profile-action__desc">更新你的九型画像</text>
-        </view>
-        <view class="profile-action profile-action--gold" role="button" tabindex="0" hover-class="profile-action--pressed" @click="openBookingRecords" @keydown.enter="openBookingRecords" @keydown.space.prevent="openBookingRecords">
-          <text class="profile-action__index">02</text>
-          <text class="profile-action__title">预约记录</text>
-          <text class="profile-action__desc">查看老师沟通安排</text>
-        </view>
-        <view class="profile-action profile-action--soft" role="button" tabindex="0" hover-class="profile-action--pressed" @click="openLearn" @keydown.enter="openLearn" @keydown.space.prevent="openLearn">
-          <text class="profile-action__index">03</text>
-          <text class="profile-action__title">继续学习</text>
-          <text class="profile-action__desc">回到课程与课件</text>
-        </view>
-      </view>
-
-      <view v-if="paymentEnabled" class="wechat-pay-test nx-panel ios-card">
-        <view class="section-head">
-          <view>
-            <text class="section-kicker">支付联调</text>
-            <text class="sec-title">测试微信支付</text>
-          </view>
-          <text class="section-count">¥0.10</text>
-        </view>
-        <text class="wechat-pay-test__copy">仅用于验证当前小程序是否能调起微信支付，订单金额固定为 0.10 元。</text>
-        <button class="wechat-pay-test__button ios-button" :loading="paymentTesting" :disabled="paymentTesting" @click="testWechatPayment">{{ paymentTesting ? '正在调起支付…' : '测试微信支付 ¥0.10' }}</button>
-      </view>
-
-      <view class="history-section nx-panel ios-card">
-        <view class="section-head">
-          <view>
-            <text class="section-kicker">自我探索</text>
-            <text class="sec-title">我的测试历史</text>
-          </view>
-          <text class="section-count">{{ recordCountLabel }}</text>
-        </view>
-        <view v-if="profileLoading" class="empty">正在同步测试历史…</view>
-        <view v-else-if="recordsError" class="empty empty--error">
-          <text>{{ recordsError }}</text>
-          <button class="sync-retry" @click="loadAll">重试</button>
-        </view>
-        <view v-else-if="records.length === 0" class="empty">还没有记录，去测一测吧</view>
-        <view v-else class="history-timeline">
-          <view v-for="rec in visibleRecords" :key="rec.id" class="history-item">
-            <view class="history-item__rail"><view class="history-item__dot" /></view>
-            <view class="history-item__body">
-              <text class="history-item__main">{{ typeName(rec.resultType) }}</text>
-              <text class="history-item__meta">{{ rec.createTime }}</text>
-            </view>
-          </view>
-          <text v-if="hiddenRecordCount" class="more-tip">还有 {{ hiddenRecordCount }} 条记录已收起</text>
-        </view>
-      </view>
-
-      <view class="booking-summary nx-panel ios-card">
-        <view class="section-head">
-          <view>
-            <text class="section-kicker">持续陪伴</text>
-            <text class="sec-title">我的预约</text>
-          </view>
-          <text class="section-count">{{ bookingCountLabel }}</text>
-        </view>
-        <view
-          class="booking-summary__open"
-          role="button"
-          aria-role="button"
-          aria-label="查看全部预约记录"
-          tabindex="0"
-          hover-class="booking-summary__open--pressed"
-          @click="openBookingRecords"
-          @keydown.enter="openBookingRecords"
-          @keydown.space.prevent="openBookingRecords"
-        >
-          <view class="booking-summary__status" aria-live="polite">
-            <view v-if="profileLoading" class="booking-summary__state">
-              <text class="booking-summary__main">正在同步预约记录…</text>
-              <text class="booking-summary__meta">进入列表查看完整安排</text>
-            </view>
-            <view v-else-if="bookingsError" class="booking-summary__state">
-              <text class="booking-summary__main">预约记录暂时无法同步</text>
-              <text class="booking-summary__meta">{{ bookingsError }}</text>
-            </view>
-            <view v-else-if="!latestBooking" class="booking-summary__state">
-              <text class="booking-summary__main">暂无预约</text>
-              <text class="booking-summary__meta">进入列表页可以去提交新预约</text>
-            </view>
-            <view v-else class="booking-summary__state">
-              <text class="booking-summary__main">{{ latestBooking.intent || latestBooking.kind }}</text>
-              <text class="booking-summary__meta">{{ latestBooking.status }} · {{ latestBooking.createTime }}</text>
-            </view>
-          </view>
-          <view class="booking-summary__footer">
-            <text>查看全部预约</text>
-            <text class="booking-summary__arrow" aria-hidden="true">›</text>
-          </view>
-        </view>
-        <button v-if="bookingsError" class="booking-summary__retry ios-button" tabindex="0" @click.stop="loadAll">重试</button>
-      </view>
-
-      <button class="logout ios-button" @click="logout">退出登录</button>
-    </template>
   </view>
 </template>
 
 <style scoped>
-.profile {
-  gap: 24rpx;
-  overflow-x: hidden;
-  background: var(--nx-page-bg);
-}
-.profile-hero {
-  box-sizing: border-box;
-  width: 100%;
-  padding: 38rpx 34rpx;
-  border: 2rpx solid rgba(223, 188, 127, .34);
-  border-radius: 38rpx;
-  background:
-    radial-gradient(circle at 94% 4%, rgba(223, 188, 127, .24), transparent 34%),
-    linear-gradient(145deg, var(--nx-brand-900), var(--nx-brand-700));
-  color: var(--nx-surface);
-  box-shadow: 0 26rpx 54rpx -34rpx rgba(32, 42, 55, .72);
-  overflow: hidden;
-}
-.login { display: flex; flex-direction: column; gap: 14rpx; }
-.profile-hero__mark {
-  width: 116rpx;
-  height: 116rpx;
-  border-radius: 34rpx;
-  background: rgba(255, 255, 255, .10);
-  border: 2rpx solid rgba(223, 188, 127, .58);
-  color: var(--nx-accent-gold);
-  font-size: 50rpx;
-  font-weight: 900;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.profile-hero__eyebrow { color: var(--nx-accent-gold); font-size: 24rpx; font-weight: 800; line-height: 1.45; }
-.profile-hero__title { display: block; margin-top: 10rpx; color: var(--nx-surface); font-size: 42rpx; font-weight: 900; line-height: 1.25; }
-.profile-hero__lead { display: block; margin-top: 14rpx; color: rgba(255, 255, 255, .80); font-size: 25rpx; line-height: 1.65; }
-.profile-login { width: 100%; min-height: 88rpx; margin-top: 16rpx; border-radius: 24rpx; background: var(--nx-surface); color: var(--nx-brand-900); font-size: 28rpx; font-weight: 900; }
-.profile-login::after { border: none; }
-.login__hint { color: rgba(255, 255, 255, .72); font-size: 24rpx; line-height: 1.55; }
-.profile-hero__identity-action { min-height: 88rpx; flex: 1; min-width: 0; display: flex; align-items: center; gap: 22rpx; border-radius: 24rpx; cursor: pointer; }
-.profile-hero__identity-action--pressed { opacity: .76; transform: scale(.992); }
-.profile-hero__identity-action:focus-visible { outline: 4rpx solid var(--nx-accent-gold); outline-offset: 6rpx; }
-.profile-hero__identity-arrow { flex: none; color: var(--nx-accent-gold); font-size: 40rpx; line-height: 1; }
-.profile-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12rpx; margin-top: 30rpx; }
-.profile-stat { min-width: 0; padding: 20rpx 10rpx; border-radius: 22rpx; background: rgba(255, 255, 255, .10); border: 2rpx solid rgba(255, 255, 255, .14); text-align: center; }
-.profile-stat__value { display: block; color: var(--nx-surface); font-size: 34rpx; font-weight: 900; line-height: 1.2; font-variant-numeric: tabular-nums; }
-.profile-stat__label { display: block; margin-top: 8rpx; color: rgba(255, 255, 255, .72); font-size: 24rpx; line-height: 1.35; }
-.user__avatar { width: 104rpx; height: 104rpx; flex: 0 0 104rpx; border-radius: 34rpx; border: 3rpx solid rgba(223, 188, 127, .72); box-sizing: border-box; }
-.user__avatar--ph { background: rgba(255, 255, 255, .10); color: var(--nx-accent-gold); font-size: 44rpx; font-weight: 900; display: flex; align-items: center; justify-content: center; }
-.profile-hero__identity { display: flex; align-items: center; gap: 18rpx; min-width: 0; }
-.user-avatar-action { flex: 0 0 auto; width: 92rpx; height: 92rpx; min-height: 92rpx; padding: 0; border: 0; border-radius: 26rpx; background: transparent; overflow: hidden; }
-.user-avatar-action::after { border: 0; }
-.user-avatar-action--pressed { opacity: .78; transform: scale(.96); }
-.user-avatar-action .user__avatar { width: 92rpx; height: 92rpx; display: block; }
-.profile-logo {
-  box-sizing: border-box;
-  padding: 12rpx;
-  background: var(--nx-brand-900);
-  object-fit: contain;
-}
+.profile { padding: 0; padding-bottom: calc(24rpx + env(safe-area-inset-bottom) + var(--window-bottom, 0px)); overflow-x: hidden; background: var(--nx-page-bg, #F7F5F0); color: #282A27; }
+.profile-content { width: 100%; max-width: 980rpx; margin: 0 auto; padding: 36rpx 36rpx 48rpx; box-sizing: border-box; }
+button { margin: 0; padding: 0; border-radius: 0; background: transparent; color: inherit; font-size: inherit; line-height: 1.5; text-align: left; box-sizing: border-box; }
+button::after { border: 0; }
+button:active { opacity: .74; }
+button:focus-visible { outline: 3rpx solid #A55C3B; outline-offset: 5rpx; }
+.profile-header { padding: 8rpx 0 38rpx; }
+.eyebrow-row { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; }
+.eyebrow { color: #A55C3B; font-size: 21rpx; font-weight: 600; letter-spacing: 4rpx; }
+.preview-badge { padding: 5rpx 12rpx; border: 1rpx solid #D9C6B9; border-radius: 8rpx; color: #8D634D; font-size: 20rpx; }
+.profile-header__title { display: block; margin-top: 24rpx; font-family: 'Songti SC', 'STSong', serif; font-size: 48rpx; font-weight: 600; letter-spacing: 2rpx; line-height: 1.45; }
+.profile-header__lead { display: block; margin-top: 14rpx; font-size: 26rpx; line-height: 1.7; color: #77786F; }
+.identity-card { padding: 34rpx 30rpx 30rpx; border: 1rpx solid #E6E1D8; border-radius: 24rpx; background: #FFFFFF; }
+.profile-hero__identity { display: flex; align-items: center; gap: 24rpx; }
+.user-avatar-action, .user__avatar { width: 116rpx; height: 116rpx; flex: none; border-radius: 50%; overflow: hidden; }
+.user__avatar { display: block; }
+.user__avatar--ph { display: flex; align-items: center; justify-content: center; background: #EBE5DA; color: #A55C3B; font-family: 'Songti SC', 'STSong', serif; font-size: 48rpx; }
+.identity-edit { display: flex; flex: 1; min-width: 0; align-items: center; gap: 14rpx; min-height: 116rpx; }
 .user__info { flex: 1; min-width: 0; }
-.user__name { color: var(--nx-surface); font-size: 35rpx; font-weight: 900; display: block; line-height: 1.28; }
-.user__type { color: rgba(255, 255, 255, .72); font-size: 25rpx; display: block; margin-top: 7rpx; }
-.history-section,
-.booking-summary,
-.wechat-pay-test { box-sizing: border-box; width: 100%; padding: 30rpx; background: var(--nx-surface); border-color: var(--nx-border); }
-.section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20rpx; margin-bottom: 22rpx; }
-.section-kicker { display: block; margin-bottom: 6rpx; color: var(--nx-brand-700); font-size: 24rpx; font-weight: 800; line-height: 1.35; }
-.sec-title { display: block; color: var(--nx-text); font-size: 32rpx; font-weight: 900; line-height: 1.3; }
-.section-count { min-width: 64rpx; color: var(--nx-brand-900); font-size: 30rpx; font-weight: 900; text-align: right; font-variant-numeric: tabular-nums; }
-.empty { color: var(--nx-text-muted); font-size: 25rpx; padding: 28rpx 20rpx; text-align: center; border-radius: 22rpx; background: var(--nx-surface-soft); }
-.empty--error { display: flex; align-items: center; justify-content: space-between; gap: 18rpx; text-align: left; border: 2rpx solid rgba(180, 35, 24, .22); }
-.sync-retry { flex-shrink: 0; min-width: 112rpx; min-height: 88rpx; padding: 0 20rpx; border-radius: 999rpx; background: var(--nx-surface); border: 2rpx solid var(--nx-border); color: var(--nx-brand-900); font-size: 24rpx; font-weight: 900; display: flex; align-items: center; justify-content: center; }
-.sync-retry::after { border: none; }
-.history-timeline { width: 100%; }
-.history-item { display: flex; align-items: stretch; gap: 20rpx; min-height: 88rpx; border-bottom: 2rpx solid var(--nx-border); }
-.history-item:last-of-type { border-bottom: none; }
-.history-item__rail { width: 20rpx; flex: 0 0 20rpx; display: flex; justify-content: center; padding-top: 30rpx; }
-.history-item__dot { width: 16rpx; height: 16rpx; border-radius: 50%; background: var(--nx-accent-gold); box-shadow: 0 0 0 7rpx rgba(223, 188, 127, .18); }
-.history-item__body { min-width: 0; flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 18rpx 0; }
-.history-item__main { color: var(--nx-text); font-size: 28rpx; font-weight: 900; line-height: 1.35; }
-.history-item__meta { display: block; margin-top: 7rpx; color: var(--nx-text-muted); font-size: 24rpx; line-height: 1.45; }
-.more-tip { display: block; margin-top: 16rpx; color: var(--nx-text-muted); font-size: 24rpx; line-height: 1.5; }
-.booking-summary__open { min-height: 88rpx; padding: 24rpx; border-radius: 24rpx; background: var(--nx-surface-soft); border: 2rpx solid var(--nx-border); box-sizing: border-box; cursor: pointer; }
-.booking-summary__open--pressed { opacity: .76; transform: scale(.992); }
-.booking-summary__open:focus-visible { outline: 4rpx solid var(--nx-accent-gold); outline-offset: 4rpx; }
-.booking-summary__state { min-height: 90rpx; display: flex; flex-direction: column; justify-content: center; }
-.booking-summary__main { color: var(--nx-text); font-size: 28rpx; font-weight: 900; line-height: 1.4; }
-.booking-summary__meta { display: block; margin-top: 8rpx; color: var(--nx-text-muted); font-size: 24rpx; line-height: 1.5; }
-.booking-summary__footer { min-height: 56rpx; margin-top: 20rpx; padding-top: 18rpx; border-top: 2rpx solid var(--nx-border); color: var(--nx-brand-700); font-size: 24rpx; font-weight: 900; display: flex; align-items: center; justify-content: space-between; gap: 20rpx; }
-.booking-summary__arrow { font-size: 38rpx; line-height: 1; }
-.booking-summary__retry { width: 100%; min-height: 88rpx; margin-top: 16rpx; border-radius: 22rpx; background: var(--nx-surface-soft); border: 2rpx solid var(--nx-border); color: var(--nx-brand-900); font-size: 24rpx; font-weight: 900; }
-.booking-summary__retry::after { border: none; }
-.logout { width: 100%; min-height: 88rpx; border-radius: 24rpx; background: transparent; border: 2rpx solid rgba(180, 35, 24, .30); color: var(--nx-danger); font-size: 26rpx; font-weight: 800; }
-.logout::after { border: none; }
-.wechat-pay-test__copy { display: block; color: var(--nx-text-muted); font-size: 24rpx; line-height: 1.6; }
-.wechat-pay-test__button { width: 100%; min-height: 88rpx; margin-top: 22rpx; border-radius: 22rpx; background: var(--nx-brand-900); color: var(--nx-surface); font-size: 26rpx; font-weight: 900; }
-.wechat-pay-test__button::after { border: none; }
-@media (max-width: 360px) {
-  .profile-hero,
-  .history-section,
-  .booking-summary { padding-left: 26rpx; padding-right: 26rpx; }
-}
-
-/* Personal dashboard refresh: compact identity, clear stats, calm history cards. */
-.profile {
-  gap: 18rpx;
-  padding-top: 22rpx;
-  background: var(--nx-page-bg);
-}
-
-.profile-hero {
-  padding: 28rpx;
-  border-radius: 28rpx;
-  box-shadow: 0 22rpx 48rpx -34rpx rgba(32, 42, 55, .72);
-}
-
-.login.profile-hero { min-height: 0; justify-content: flex-start; padding-top: 30rpx; padding-bottom: 28rpx; }
-.profile-hero__mark { width: 96rpx; height: 96rpx; border-radius: 26rpx; }
-.profile-hero__title { font-size: 38rpx; }
-.profile-hero__lead { font-size: 24rpx; }
-.profile-login { min-height: 94rpx; margin-top: 12rpx; border-radius: 20rpx; }
-.login-benefits { display: flex; flex-wrap: wrap; gap: 10rpx; margin-top: 20rpx; }
-.login-benefits text { padding: 8rpx 12rpx; border: 2rpx solid rgba(223, 188, 127, .32); border-radius: 999rpx; color: rgba(255, 255, 255, .82); background: rgba(255, 255, 255, .08); font-size: 21rpx; }
-
-.guest-preview {
-  padding: 24rpx;
-  border: 2rpx solid var(--nx-border);
-  border-radius: 24rpx;
-  background: var(--nx-surface);
-  box-shadow: 0 14rpx 32rpx -28rpx rgba(32, 42, 55, .5);
-}
-.guest-preview__heading { display: flex; flex-direction: column; gap: 5rpx; padding-left: 14rpx; border-left: 6rpx solid var(--nx-accent-gold); }
-.guest-preview__eyebrow { color: var(--nx-brand-700); font-size: 21rpx; font-weight: 900; letter-spacing: 1rpx; }
-.guest-preview__title { color: var(--nx-brand-900); font-size: 29rpx; font-weight: 900; line-height: 1.35; }
-.guest-preview__actions { display: flex; gap: 12rpx; margin-top: 18rpx; }
-.guest-preview__action { flex: 1 1 0; min-width: 0; min-height: 150rpx; padding: 20rpx; display: flex; flex-direction: column; justify-content: flex-end; border: 2rpx solid var(--nx-border); border-radius: 20rpx; box-sizing: border-box; touch-action: manipulation; }
-.guest-preview__action--test { background: #EEF1F3; border-color: rgba(49, 64, 82, .22); }
-.guest-preview__action--learn { background: #F8F1E5; border-color: rgba(223, 188, 127, .48); }
-.guest-preview__number { color: var(--nx-brand-700); font-size: 20rpx; font-weight: 900; letter-spacing: 1rpx; }
-.guest-preview__action-title { margin-top: 8rpx; color: var(--nx-brand-900); font-size: 26rpx; font-weight: 900; line-height: 1.35; }
-.guest-preview__action-desc { margin-top: 5rpx; color: var(--nx-text-muted); font-size: 21rpx; line-height: 1.4; }
-.guest-preview__note { display: block; margin-top: 16rpx; color: var(--nx-text-muted); font-size: 21rpx; line-height: 1.5; }
-
-.user.profile-hero { padding-top: 24rpx; }
-.profile-hero__identity-action { min-height: 104rpx; padding: 4rpx 0; }
-.user__avatar { width: 92rpx; height: 92rpx; flex-basis: 92rpx; border-radius: 26rpx; }
-.user__name { font-size: 32rpx; }
-.profile-stats { gap: 10rpx; margin-top: 22rpx; }
-.profile-stat { padding: 16rpx 8rpx; border-radius: 18rpx; background: rgba(255, 255, 255, .12); }
-.profile-stat__value { font-size: 30rpx; }
-.profile-stat__label { font-size: 22rpx; }
-
-.history-section,
-.booking-summary {
-  position: relative;
-  overflow: hidden;
-  padding: 24rpx;
-  border-radius: 24rpx;
-  box-shadow: 0 14rpx 32rpx -28rpx rgba(32, 42, 55, .5);
-}
-
-.history-section::before,
-.booking-summary::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 8rpx;
-}
-.history-section::before { background: var(--nx-brand-700); }
-.booking-summary::before { background: var(--nx-accent-gold); }
-.section-head { margin-bottom: 18rpx; padding-top: 4rpx; }
-.section-kicker { font-size: 21rpx; letter-spacing: 1rpx; }
-.sec-title { font-size: 29rpx; }
-.section-count { font-size: 28rpx; }
-
-.empty { min-height: 116rpx; display: flex; align-items: center; justify-content: center; padding: 20rpx; border-radius: 18rpx; }
-.history-item { min-height: 78rpx; gap: 16rpx; }
-.history-item__rail { padding-top: 26rpx; }
-.history-item__dot { width: 14rpx; height: 14rpx; }
-.history-item__body { padding: 14rpx 0; }
-.history-item__main { font-size: 26rpx; }
-.history-item__meta { font-size: 22rpx; }
-.more-tip { font-size: 22rpx; }
-
-.booking-summary__open { padding: 20rpx; border-radius: 18rpx; background: #F8F1E5; }
-.booking-summary__state { min-height: 82rpx; }
-.booking-summary__main { font-size: 26rpx; }
-.booking-summary__meta { font-size: 22rpx; }
-.booking-summary__footer { margin-top: 16rpx; padding-top: 14rpx; color: var(--nx-brand-700); }
-
-.logout {
-  min-height: 82rpx;
-  margin-top: 2rpx;
-  border: 2rpx solid rgba(180, 35, 24, .22);
-  border-radius: 18rpx;
-  background: transparent;
-  color: var(--nx-danger);
-  font-size: 24rpx;
-}
-
-.profile-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12rpx;
-}
-
-.profile-action {
-  position: relative;
-  overflow: hidden;
-  flex: 1 1 30%;
-  min-width: 0;
-  min-height: 148rpx;
-  padding: 20rpx;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  border: 2rpx solid var(--nx-border);
-  border-radius: 22rpx;
-  box-sizing: border-box;
-  touch-action: manipulation;
-}
-
-.profile-action::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 7rpx;
-  background: var(--nx-brand-700);
-}
-
-.profile-action--primary { background: #EEF1F3; }
-.profile-action--gold { background: #F8F1E5; }
-.profile-action--gold::before { background: var(--nx-accent-gold); }
-.profile-action--soft { background: #F2F3EF; }
-.profile-action--soft::before { background: #7A6253; }
-.profile-action__index { color: var(--nx-brand-700); font-size: 20rpx; font-weight: 900; letter-spacing: 1rpx; }
-.profile-action__title { margin-top: 8rpx; color: var(--nx-brand-900); font-size: 27rpx; font-weight: 900; line-height: 1.35; }
-.profile-action__desc { margin-top: 5rpx; color: var(--nx-text-muted); font-size: 21rpx; line-height: 1.4; }
-.profile-action--pressed { opacity: .78; transform: translateY(2rpx); }
-.profile-action:focus-visible { outline: 4rpx solid var(--nx-accent-gold); outline-offset: 3rpx; }
-
-@media (max-width: 500rpx) {
-  .profile-action { flex-basis: 45%; }
-  .profile-action--soft { flex-basis: 100%; min-height: 116rpx; }
-}
+.user__name { display: block; font-size: 36rpx; font-weight: 600; line-height: 1.5; }
+.user__type { display: block; margin-top: 10rpx; color: #77786F; font-size: 24rpx; }
+.profile-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 34rpx; padding-top: 26rpx; border-top: 1rpx solid #E6E1D8; }
+.profile-stat { position: relative; text-align: center; padding: 4rpx; }
+.profile-stat + .profile-stat::before { content: ''; position: absolute; left: 0; top: 18rpx; bottom: 18rpx; width: 1rpx; background: #E6E1D8; }
+.profile-stat__value { display: block; font-family: Georgia, serif; font-size: 44rpx; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.profile-stat__unit { padding-left: 4rpx; font-family: sans-serif; font-size: 21rpx; }
+.profile-stat__label { display: block; margin-top: 12rpx; color: #77786F; font-size: 23rpx; }
+.profile-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 26rpx; padding: 20rpx 0; }
+.profile-action { display: flex; min-height: 152rpx; flex-direction: column; align-items: center; justify-content: center; }
+.profile-action__icon { display: flex; width: 80rpx; height: 74rpx; align-items: center; justify-content: center; }
+.profile-action__title { display: block; margin-top: 9rpx; font-size: 27rpx; font-weight: 500; }
+.profile-action__desc { display: block; margin-top: 7rpx; color: #77786F; font-size: 21rpx; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; margin: 34rpx 0 24rpx; }
+.section-title { font-family: 'Songti SC', 'STSong', serif; font-size: 34rpx; font-weight: 600; line-height: 1.5; }
+.section-note { flex: none; color: #77786F; font-size: 22rpx; }
+.booking-summary { padding: 28rpx 30rpx 0; border: 1rpx solid #DED7CA; border-radius: 24rpx; background: #EDE9DF; }
+.booking-summary__eyebrow { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; color: #8D634D; font-size: 22rpx; }
+.booking-status { border: 1rpx solid #C8C7B4; padding: 5rpx 12rpx; border-radius: 8rpx; color: #687357; background: #E7E8DB; font-size: 21rpx; }
+.booking-summary__title { display: block; margin-top: 22rpx; font-size: 32rpx; font-weight: 500; line-height: 1.6; }
+.booking-summary__meta { display: flex; align-items: center; gap: 10rpx; margin-top: 18rpx; color: #77786F; font-size: 22rpx; line-height: 1.5; }
+.booking-summary__open { display: flex; width: 100%; min-height: 96rpx; align-items: center; justify-content: space-between; gap: 16rpx; margin-top: 28rpx; border-top: 1rpx solid #DCD4C5; color: #A55C3B; font-size: 25rpx; }
+.booking-empty { padding-bottom: 28rpx; }
+.booking-empty__title { display: block; font-size: 30rpx; line-height: 1.6; }
+.booking-empty__copy { display: block; margin-top: 14rpx; color: #77786F; font-size: 25rpx; line-height: 1.8; }
+.booking-cta { display: flex; align-items: center; justify-content: space-between; min-height: 88rpx; width: 100%; margin-top: 28rpx; padding: 0 24rpx; border-radius: 14rpx; background: #A55C3B; color: #FFFFFF; font-size: 26rpx; }
+.history-section { padding: 12rpx 26rpx; border: 1rpx solid #E6E1D8; border-radius: 24rpx; background: #FFFFFF; }
+.history-item { display: flex; gap: 22rpx; min-height: 124rpx; }
+.history-item__rail { position: relative; flex: none; display: flex; width: 20rpx; align-items: center; justify-content: center; }
+.history-item__rail::before { position: absolute; content: ''; top: 0; bottom: 0; width: 1rpx; background: #E6E1D8; }
+.history-item:first-child .history-item__rail::before { top: 50%; }
+.history-item:last-child .history-item__rail::before { bottom: 50%; }
+.history-item__dot { position: relative; z-index: 1; width: 11rpx; height: 11rpx; border: 4rpx solid #FFFFFF; border-radius: 50%; background: #CAC7BE; }
+.history-item__dot--latest { background: #A55C3B; }
+.history-item__body { display: flex; flex: 1; min-width: 0; flex-direction: column; justify-content: center; padding: 24rpx 0; }
+.history-item + .history-item .history-item__body { border-top: 1rpx solid #F0EDE7; }
+.history-item__heading { display: flex; align-items: center; justify-content: space-between; gap: 12rpx; }
+.history-item__main { font-size: 27rpx; line-height: 1.5; }
+.history-latest { color: #A55C3B; font-size: 21rpx; }
+.history-item__meta { display: block; margin-top: 9rpx; color: #77786F; font-size: 22rpx; }
+.history-expand { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 88rpx; gap: 12rpx; border-top: 1rpx solid #E6E1D8; color: #A55C3B; font-size: 24rpx; }
+.empty { display: flex; flex-direction: column; gap: 16rpx; align-items: center; justify-content: center; min-height: 128rpx; padding: 24rpx 8rpx; color: #77786F; font-size: 25rpx; text-align: center; line-height: 1.8; }
+.empty--error { color: #964A32; }
+.sync-retry { min-height: 88rpx; display: flex; align-items: center; justify-content: center; padding: 0 26rpx; color: #A55C3B; }
+.history-start { min-height: 88rpx; display: flex; align-items: center; gap: 16rpx; color: #A55C3B; }
+.account-links { margin-top: 32rpx; padding: 0 26rpx; border: 1rpx solid #E6E1D8; border-radius: 24rpx; background: #FFFFFF; }
+.account-link { display: flex; align-items: center; width: 100%; min-height: 112rpx; gap: 22rpx; font-size: 27rpx; }
+.account-link + .account-link { border-top: 1rpx solid #E6E1D8; }
+.account-link > text { flex: 1; }
+.wechat-pay-test { padding: 0 26rpx 26rpx; margin-top: 30rpx; border: 1rpx solid #E6E1D8; border-radius: 24rpx; }
+.wechat-pay-test__copy { display: block; color: #77786F; font-size: 24rpx; line-height: 1.7; }
+.wechat-pay-test__button { min-height: 88rpx; display: flex; align-items: center; justify-content: center; width: 100%; margin-top: 20rpx; background: #A55C3B; border-radius: 14rpx; color: #FFFFFF; font-size: 26rpx; }
+.logout { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 88rpx; margin-top: 28rpx; color: #77786F; font-size: 25rpx; }
+.profile-footer { display: flex; align-items: center; justify-content: center; gap: 18rpx; margin-top: 38rpx; color: #99978D; font-size: 22rpx; }
+.profile-footer__line { width: 44rpx; height: 1rpx; background: #DCD6CA; }
+.login-card { padding: 36rpx 30rpx; border: 1rpx solid #E6E1D8; border-radius: 24rpx; background: #FFFFFF; }
+.login-card__icon { display: flex; width: 100rpx; height: 100rpx; align-items: center; justify-content: center; border-radius: 50%; background: #F3EDE4; }
+.login-card__title { display: block; margin-top: 24rpx; font-family: 'Songti SC', 'STSong', serif; font-size: 36rpx; line-height: 1.6; }
+.login-card__lead { display: block; margin-top: 18rpx; font-size: 26rpx; line-height: 1.8; color: #77786F; }
+.profile-login { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 96rpx; margin-top: 30rpx; border-radius: 16rpx; background: #A55C3B; color: #FFFFFF; font-size: 28rpx; }
+.profile-login[disabled] { background: #DED8CE; color: #6A695F; }
+.login__hint { display: block; margin-top: 20rpx; color: #77786F; font-size: 22rpx; line-height: 1.7; }
+.guest-links { margin-top: 34rpx; padding: 0 24rpx; border: 1rpx solid #E6E1D8; border-radius: 24rpx; background: #FFFFFF; }
+.guest-link { display: flex; align-items: center; gap: 22rpx; width: 100%; min-height: 148rpx; padding: 24rpx 0; }
+.guest-link + .guest-link { border-top: 1rpx solid #E6E1D8; }
+.guest-link__icon { flex: none; display: flex; align-items: center; justify-content: center; width: 74rpx; height: 74rpx; border-radius: 14rpx; background: #F3EDE4; }
+.guest-link__body { flex: 1; min-width: 0; font-size: 27rpx; }
+.guest-link__desc { display: block; margin-top: 9rpx; color: #77786F; font-size: 22rpx; }
 </style>

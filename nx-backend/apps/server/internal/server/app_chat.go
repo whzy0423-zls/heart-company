@@ -662,6 +662,11 @@ func (s *Server) appChatAsk(w http.ResponseWriter, r *http.Request) {
 		failAppChatTier(w, err)
 		return
 	}
+	r, err = s.beginProblemFollowupTurn(r, userInfo.ID, sessionID)
+	if err != nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "消息暂未提交，请重试")
+		return
+	}
 	replyPlan := buildAppChatEnneagramReplyPlan(body.Question)
 	requestStartedAt := time.Now()
 	if answer, ok := appChatModelIdentityAnswer(body.Question); ok {
@@ -850,6 +855,11 @@ func (s *Server) appChatAskStream(w http.ResponseWriter, r *http.Request) {
 	tier, err := s.appChatTierForUser(r.Context(), userInfo.ID, body.Tier)
 	if err != nil {
 		failAppChatTier(w, err)
+		return
+	}
+	r, err = s.beginProblemFollowupTurn(r, userInfo.ID, sessionID)
+	if err != nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "消息暂未提交，请重试")
 		return
 	}
 	replyPlan := buildAppChatEnneagramReplyPlan(body.Question)

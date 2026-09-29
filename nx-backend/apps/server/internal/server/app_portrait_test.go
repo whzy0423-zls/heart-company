@@ -3,9 +3,37 @@ package server
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/quiz"
 )
+
+func TestPortraitRefreshDueUsesSevenDayWindow(t *testing.T) {
+	generatedAt := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	card := quiz.Card{ID: 9, UpdateTime: "2026/09/01 09:00:00"}
+	snapshot := portraitSnapshot{CardID: card.ID, SourceUpdateTime: card.UpdateTime, GeneratedAt: generatedAt}
+
+	if portraitRefreshDue(snapshot, card, generatedAt.Add(6*24*time.Hour+23*time.Hour+59*time.Minute)) {
+		t.Fatal("portrait should be reused before seven days")
+	}
+	if !portraitRefreshDue(snapshot, card, generatedAt.Add(7*24*time.Hour)) {
+		t.Fatal("portrait should refresh at seven days")
+	}
+}
+
+func TestPortraitRefreshDueRefreshesWhenCardChanges(t *testing.T) {
+	generatedAt := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	snapshot := portraitSnapshot{
+		CardID:           9,
+		SourceUpdateTime: "2026/09/01 09:00:00",
+		GeneratedAt:      generatedAt,
+	}
+	card := quiz.Card{ID: 9, UpdateTime: "2026/09/02 09:00:00"}
+
+	if !portraitRefreshDue(snapshot, card, generatedAt.Add(time.Hour)) {
+		t.Fatal("portrait should refresh when the source card changes")
+	}
+}
 
 func TestBuildPortraitIncludesPositiveGrowthSections(t *testing.T) {
 	for mainType := 1; mainType <= 9; mainType++ {

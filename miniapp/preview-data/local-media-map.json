@@ -1,0 +1,176 @@
+{
+  "verification": "Public API IDs/titles/durations matched against text printed on existing local video poster images. Public API cover URLs do not expose original filenames. Source files were not edited.",
+  "items": [
+    {
+      "id": 3,
+      "title": "停止教育内卷！父母上的“必修课”",
+      "durationSeconds": 28,
+      "localVideo": "website-react/public/assets/videos/laohan-01.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-01.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-01.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-01.jpg"
+    },
+    {
+      "id": 2,
+      "title": "健康的孩子是什么样的状态？",
+      "durationSeconds": 50,
+      "localVideo": "website-react/public/assets/videos/laohan-02.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-02.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-02.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-02.jpg"
+    },
+    {
+      "id": 4,
+      "title": "孩子12岁后为什么开始“装”？",
+      "durationSeconds": 51,
+      "localVideo": "website-react/public/assets/videos/laohan-03.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-03.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-03.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-03.jpg"
+    },
+    {
+      "id": 5,
+      "title": "14岁男孩的“较劲”：你越逼他上学，他越躺平",
+      "durationSeconds": 50,
+      "localVideo": "website-react/public/assets/videos/laohan-04.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-04.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-04.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-04.jpg"
+    },
+    {
+      "id": 6,
+      "title": "你活出生命的天性，还是被习性牵引？",
+      "durationSeconds": 57,
+      "localVideo": "website-react/public/assets/videos/laohan-05.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-05.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-05.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-05.jpg"
+    },
+    {
+      "id": 7,
+      "title": "二胎年龄差，决定他们未来是亲人还是亲戚？",
+      "durationSeconds": 39,
+      "localVideo": "website-react/public/assets/videos/laohan-06.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-06.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-06.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-06.jpg"
+    },
+    {
+      "id": 8,
+      "title": "孩子成长关系中，藏着未来社交密码",
+      "durationSeconds": 45,
+      "localVideo": "website-react/public/assets/videos/laohan-07.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-07.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-07.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-07.jpg"
+    },
+    {
+      "id": 9,
+      "title": "性格能量呈现的状态是振频",
+      "durationSeconds": 39,
+      "localVideo": "website-react/public/assets/videos/laohan-08.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-08.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-08.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-08.jpg"
+    },
+    {
+      "id": 10,
+      "title": "停止内耗：亲密关系的困惑",
+      "durationSeconds": 37,
+      "localVideo": "website-react/public/assets/videos/laohan-10.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-10.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-10.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-10.jpg"
+    },
+    {
+      "id": 11,
+      "title": "技术再牛，不会传递情绪价值，算高人吗？",
+      "durationSeconds": 56,
+      "localVideo": "website-react/public/assets/videos/laohan-11.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-11.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-11.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-11.jpg"
+    },
+    {
+      "id": 12,
+      "title": "为什么要线下学习九型课程？",
+      "durationSeconds": 31,
+      "localVideo": "website-react/public/assets/videos/laohan-13.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-13.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-13.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-13.jpg"
+    },
+    {
+      "id": 13,
+      "title": "怕出错，何以创造？",
+      "durationSeconds": 40,
+      "localVideo": "website-react/public/assets/videos/laohan-14.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-14.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-14.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-14.jpg"
+    },
+    {
+      "id": 14,
+      "title": "为什么越听话的孩子，越容易压抑自己的情绪",
+      "durationSeconds": 38,
+      "localVideo": "website-react/public/assets/videos/laohan-15.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-15.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-15.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-15.jpg"
+    },
+    {
+      "id": 15,
+      "title": "你的柔软才是引流密码",
+      "durationSeconds": 35,
+      "localVideo": "website-react/public/assets/videos/laohan-16.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-16.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-16.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-16.jpg"
+    },
+    {
+      "id": 16,
+      "title": "为什么孩子越大，不愿和我说心里话？",
+      "durationSeconds": 54,
+      "localVideo": "website-react/public/assets/videos/laohan-17.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-17.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-17.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-17.jpg"
+    },
+    {
+      "id": 17,
+      "title": "普通家庭该不该逼孩子努力？",
+      "durationSeconds": 50,
+      "localVideo": "website-react/public/assets/videos/laohan-18.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-18.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-18.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-18.jpg"
+    },
+    {
+      "id": 19,
+      "title": "情绪暴躁的父母，正在毁掉孩子",
+      "durationSeconds": 49,
+      "localVideo": "website-react/public/assets/videos/laohan-19.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-19.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-19.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-19.jpg"
+    },
+    {
+      "id": 20,
+      "title": "不要和孩子说“我都是为了你好”",
+      "durationSeconds": 47,
+      "localVideo": "website-react/public/assets/videos/laohan-20.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-20.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-20.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-20.jpg"
+    },
+    {
+      "id": 21,
+      "title": "高度决定你的认知",
+      "durationSeconds": 49,
+      "localVideo": "website-react/public/assets/videos/laohan-22.mp4",
+      "localPoster": "website-react/public/assets/videos/posters/laohan-22.jpg",
+      "assetVideoUrl": "/assets/videos/laohan-22.mp4",
+      "assetPosterUrl": "/assets/videos/posters/laohan-22.jpg"
+    }
+  ]
+}

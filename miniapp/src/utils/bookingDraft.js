@@ -1,4 +1,4 @@
-export const BOOKING_DRAFT_KEY = 'nx_booking_draft'
+export const BOOKING_DRAFT_KEY = import.meta.env?.DEV === true && import.meta.env?.VITE_UI_PREVIEW === 'true' ? 'nx_ui_preview_booking_draft' : 'nx_booking_draft'
 
 const DEFAULT_KIND = 'consult'
 const FIELDS = ['contactName', 'phone', 'intent', 'preferredTime', 'message']

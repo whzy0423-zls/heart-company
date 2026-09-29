@@ -1,920 +1,129 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { QUESTIONS } from '../../data/enneagramGame'
+import NxIcon from '../../components/NxIcon.vue'
 import { listClassroomRecentApi } from '../../api'
 import { getStoredSiteConfig, refreshSiteConfig } from '../../utils/siteConfig'
-import { resolveContentAsset } from '../../utils/contentAsset'
-import { DEFAULT_TEACHERS, normalizeTeachers } from '../../utils/teacherCourseware'
-import { mapPublishedClassroomItems } from '../../utils/classroomCourseware'
-import { clearLearningNavIntent, setLearningNavIntent } from '../../utils/learningNavIntent'
+import { normalizeTeachers, normalizeCoursewareItems } from '../../utils/teacherCourseware'
 import { normalizeMiniappLearn } from '../../utils/miniappPages'
-import { userErrorMessage } from '../../utils/userMessage'
-import { previewImage } from '../../utils/imagePreview'
+import { classroomContentRoute } from '../../utils/classroomDisplay'
+import { setBookingIntent, clearBookingIntent } from '../../utils/bookingIntent'
+import { STUDIO_TEACHER, STUDIO_COURSES } from '../../data/teacherStudio'
+import { UI_PREVIEW } from '../../utils/uiPreview'
 
-const TEACHER_FALLBACK = ''
-const COURSE_FALLBACKS = [
-  '/static/editorial/course-intro.webp',
-  '/static/editorial/course-growth.webp',
-  '/static/editorial/course-relation.webp',
-]
-const TEACHER_SECTION_PATHS = [
-  ['teacher'],
-  ['teachers'],
-  ['home', 'teacher'],
-  ['home', 'teachers'],
-  ['home', 'teacherTeaser'],
-]
-
-const total = QUESTIONS.length
-const teachers = ref(normalizeTeachers())
-const courses = ref([])
-const classroomEnabled = ref(true)
+const config = ref(getStoredSiteConfig() || {})
+const videos = ref([])
 const loading = ref(true)
-const loadError = ref('')
-const teacherExpanded = ref(false)
-const teacherImage = ref(TEACHER_FALLBACK)
-const courseImages = ref([])
-const teacherImageFallbackUsed = ref(false)
-const courseImageFallbackUsed = ref({})
-let loadTicket = 0
-let keyboardActivationAt = 0
-let keyboardActivationTarget = null
-
-const teacher = computed(() => teachers.value[0] || null)
-const featuredCourse = computed(() => courses.value[0] || null)
-const latestMaterial = computed(() => {
-  const course = courses.value.find((item) => Array.isArray(item.materialTypes) && item.materialTypes.length > 0)
-  if (!course) return null
-  return { course, type: course.materialTypes[0] }
+const error = ref('')
+const portraitFailed = ref(false)
+const coverErrors = ref({})
+const classroomEnabled = computed(() => normalizeMiniappLearn(config.value).classroom.enabled)
+const teacher = computed(() => {
+  const cfg = config.value
+  const hasTeacher = [cfg.teacher, cfg.teachers, cfg.home?.teacher, cfg.home?.teachers, cfg.home?.teacherTeaser].some(value => value !== undefined)
+  return hasTeacher ? normalizeTeachers(cfg)[0] || null : STUDIO_TEACHER
 })
-const teacherImageLabel = computed(() => teacher.value ? `${teacher.value.name}老师肖像` : '授课老师肖像')
-
-function courseFallback(index) {
-  return COURSE_FALLBACKS[index % COURSE_FALLBACKS.length]
-}
-
-function hasSectionAtPath(config, path) {
-  let current = config
-  for (let index = 0; index < path.length; index += 1) {
-    if (!current || typeof current !== 'object') return false
-    const key = path[index]
-    if (!Object.prototype.hasOwnProperty.call(current, key)) return false
-    if (index === path.length - 1) return true
-    current = current[key]
-  }
-  return false
-}
-
-function hasTeacherSection(config) {
-  return TEACHER_SECTION_PATHS.some((path) => hasSectionAtPath(config, path))
-}
-
-function homeCourseCover(course, index) {
-  const cover = typeof course?.cover === 'string' ? course.cover.trim() : ''
-  const isLegacyWheel = /^\/static\/wheel\.png(?:[?#].*)?$/i.test(cover)
-  return !cover || isLegacyWheel ? courseFallback(index) : cover
-}
-
-function syncContentImages() {
-  teacherImageFallbackUsed.value = false
-  courseImageFallbackUsed.value = {}
-  const portrait = teacher.value?.avatar === '/static/avatars/9.png' ? '' : teacher.value?.avatar
-  teacherImage.value = resolveContentAsset(portrait, TEACHER_FALLBACK)
-  courseImages.value = courses.value.map((course, index) => (
-    resolveContentAsset(homeCourseCover(course, index), courseFallback(index))
-  ))
-}
-
-function applyContent(config, options = {}) {
-  classroomEnabled.value = normalizeMiniappLearn(config).classroom.enabled
-  const preserveMissing = !!options.preserveMissing
-  if (!preserveMissing || hasTeacherSection(config)) {
-    teachers.value = normalizeTeachers(config)
-  }
-  syncContentImages()
-}
-
-function onTeacherImageError() {
-  if (teacherImageFallbackUsed.value) return
-  teacherImageFallbackUsed.value = true
-  teacherImage.value = TEACHER_FALLBACK
-}
-
-function previewTeacherAvatar() {
-  previewImage(teacherImage.value)
-}
-
-function onCourseImageError(index) {
-  if (courseImageFallbackUsed.value[index]) return
-  courseImageFallbackUsed.value = {
-    ...courseImageFallbackUsed.value,
-    [index]: true,
-  }
-  courseImages.value[index] = courseFallback(index)
-}
-
-function activateAction(action, event) {
-  const eventType = event?.type || ''
-  const now = Date.now()
-  if (eventType === 'keydown') {
-    if (event?.repeat) return
-    keyboardActivationAt = now
-    keyboardActivationTarget = event?.currentTarget || null
-    action()
-    return
-  }
-  if (
-    eventType === 'click'
-    && keyboardActivationTarget === (event?.currentTarget || null)
-    && now - keyboardActivationAt < 500
-  ) {
-    keyboardActivationTarget = null
-    return
-  }
-  keyboardActivationTarget = null
-  action()
-}
-
-function onActionKeydown(event, action) {
-  if (!['Enter', ' ', 'Spacebar'].includes(event?.key)) return
-  event.preventDefault?.()
-  event.stopPropagation?.()
-  activateAction(action, event)
-}
-
-async function loadContent() {
-  const ticket = ++loadTicket
+const isLaohan = computed(() => ['韩常青', '韩常青（老韩）', '韩常青(老韩)', '老韩'].includes(teacher.value?.name))
+const portrait = computed(() => {
+  const avatar = teacher.value?.avatar || ''
+  if (isLaohan.value && (!avatar || /\/avatars\/|teacher-poster/.test(avatar))) return '/static/teacher/hero-portrait.jpg'
+  return /\/avatars\//.test(avatar) ? '' : avatar
+})
+const teacherDisplayName = computed(() => (teacher.value?.name || '').replace(/[（(]老韩[）)]/, ''))
+const courses = computed(() => UI_PREVIEW ? STUDIO_COURSES : normalizeCoursewareItems(config.value))
+const featuredCourse = computed(() => courses.value[0])
+const dailyVideos = computed(() => videos.value.filter(item => item.itemType !== 'series').slice(0, 2))
+let ticket = 0
+async function load() {
+  const current = ++ticket
   loading.value = true
-  loadError.value = ''
-  try {
-    const [config, classroom] = await Promise.all([
-      refreshSiteConfig(),
-      listClassroomRecentApi({ limit: 6, offset: 0 }),
-    ])
-    if (ticket !== loadTicket) return
-    applyContent(config, { preserveMissing: true })
-    courses.value = mapPublishedClassroomItems(classroom?.items)
-    syncContentImages()
-  } catch (error) {
-    if (ticket !== loadTicket) return
-    loadError.value = userErrorMessage(error, '内容更新失败，当前仍可继续浏览')
-  } finally {
-    if (ticket === loadTicket) loading.value = false
-  }
+  error.value = ''
+  const results = await Promise.allSettled([refreshSiteConfig(), listClassroomRecentApi({ limit: 6 })])
+  if (current !== ticket) return
+  if (results[0].status === 'fulfilled') { config.value = getStoredSiteConfig() || results[0].value || {}; portraitFailed.value = false }
+  if (results[1].status === 'fulfilled') videos.value = results[1].value?.items || []
+  else error.value = '视频暂未更新，稍后可以再试一次'
+  loading.value = false
 }
-
-onMounted(() => {
-  const cached = getStoredSiteConfig()
-  if (cached) applyContent(cached)
-  else syncContentImages()
-  loadContent()
-})
-
-function toggleTeacher() {
-  teacherExpanded.value = !teacherExpanded.value
-}
-
-function goCourse() {
-  setLearningNavIntent('course')
-  uni.switchTab({
-    url: '/pages/learn/learn',
-    fail() {
-      clearLearningNavIntent()
-    },
-  })
-}
-
-function goMaterial() {
-  setLearningNavIntent('material')
-  uni.switchTab({
-    url: '/pages/learn/learn',
-    fail() {
-      clearLearningNavIntent()
-    },
-  })
-}
-
-function startTest() {
-  uni.navigateTo({ url: '/pages/test/test' })
-}
-
-function goRelation() {
-  uni.navigateTo({ url: '/pages/relation/relation' })
-}
-
-function goBooking() {
-  uni.switchTab({ url: '/pages/booking/booking' })
-}
-
-function goEnneagram() {
-  uni.navigateTo({ url: '/pages/enneagram/enneagram' })
-}
+onMounted(load)
+function navigate(url) { uni.navigateTo({ url }) }
+function daily() { uni.switchTab({ url: '/pages/learn/learn' }) }
+function booking(kind = 'course') { setBookingIntent({ kind, intentText: '' }); uni.switchTab({ url: '/pages/booking/booking', fail: clearBookingIntent }) }
+function openCourse() { if (featuredCourse.value) navigate(`/pages/course-detail/course-detail?id=${UI_PREVIEW ? featuredCourse.value.id : 'course-0'}`); else booking() }
+function openVideo(item) { const url = classroomContentRoute(item); if (url) navigate(url) }
+function duration(value) { return `${String(Math.floor((value || 0) / 60)).padStart(2, '0')}:${String((value || 0) % 60).padStart(2, '0')}` }
 </script>
 
 <template>
-  <view class="home nx-page page-stack ios-page ios-safe-bottom">
-    <main class="home__content">
-      <view v-if="loading" class="sync-note" role="status">{{ classroomEnabled ? '正在更新老师与课程资料…' : '正在更新老师资料…' }}</view>
+  <view class="studio-home">
+    <view class="studio-topbar">
+      <view class="brand"><view class="brand-seal">芯</view><view><text class="brand-name">九型芯之力</text><text class="brand-sub">看见自己 · 理解彼此</text></view></view>
+      <text v-if="UI_PREVIEW" class="preview-label">体验版</text>
+      <button v-else class="top-about" aria-label="了解老师" @click="navigate('/pages/teacher/teacher')"><NxIcon name="user" :size="21" color="#282A27" /></button>
+    </view>
 
-      <view v-if="loadError" class="home-error" role="status">
-        <text>{{ loadError }}</text>
-        <view
-          class="home-retry"
-          role="button"
-          tabindex="0"
-          hover-class="control--pressed"
-          @tap="loadContent"
-          @keydown="onActionKeydown($event, loadContent)"
-        >重试更新</view>
+    <view class="home-body">
+      <view class="opening"><view class="opening-line" /><text>一段向内探索的旅程</text><text class="opening-en">A LITTLE CLOSER TO YOURSELF</text></view>
+      <view v-if="teacher" class="mentor-hero">
+        <image v-if="portrait && !portraitFailed" class="mentor-portrait" :src="portrait" mode="aspectFill" :aria-label="`${teacher.name}老师肖像`" @error="portraitFailed = true" />
+        <view class="mentor-shade" />
+        <view class="mentor-content">
+          <view class="mentor-label"><view class="mentor-dot" /><text>{{ teacher.title || '九型芯之力首席导师' }}</text></view>
+          <text class="mentor-title">{{ '懂自己，\n也懂你。' }}</text>
+          <text class="mentor-name">{{ teacherDisplayName }}<text v-if="isLaohan" class="mentor-nickname"> / 老韩</text></text>
+          <text class="mentor-desc">{{ '把对性格的理解，\n带回真实的生活。' }}</text>
+          <button class="mentor-button" @click="navigate('/pages/teacher/teacher')">认识老师<NxIcon name="arrow" :size="17" color="#FFFFFF" /></button>
+        </view>
+        <text class="mentor-bottom">ENNEAGRAM · LIFE & GROWTH</text>
+      </view>
+      <view v-else class="teacher-empty">老师介绍正在整理中</view>
+
+      <view class="welcome-note"><text class="quote-sign">“</text><text>成长，从看见自己开始。<text class="welcome-muted">在这里，和老韩一起，慢慢读懂生活。</text></text></view>
+
+      <view class="quick-links">
+        <button v-if="classroomEnabled" class="quick-link" @click="daily"><view class="quick-icon"><NxIcon name="video" :size="23" /></view><text>老师日常</text><text class="quick-note">听一段分享</text></button>
+        <button class="quick-link" @click="booking()"><view class="quick-icon"><NxIcon name="book" :size="23" /></view><text>课程报名</text><text class="quick-note">走近一堂课</text></button>
+        <button class="quick-link" @click="booking('consult')"><view class="quick-icon"><NxIcon name="message" :size="23" /></view><text>预约咨询</text><text class="quick-note">认真聊一聊</text></button>
+        <button class="quick-link" @click="navigate('/pages/test/test')"><view class="quick-icon"><NxIcon name="spark" :size="23" /></view><text>认识自己</text><text class="quick-note">九型小探索</text></button>
       </view>
 
-      <section class="expert-hero" aria-labelledby="home-hero-title">
-        <text class="expert-hero__eyebrow">YOUR INNER MAP</text>
-        <text id="home-hero-title" class="expert-hero__title">读懂自己，<br />也读懂重要的人</text>
-        <text class="expert-hero__lead">把复杂的性格，变成清晰可用的生活地图</text>
-        <view class="expert-hero__feature">
-          <text class="expert-hero__tag">今日推荐 · 3分钟</text>
-          <text class="expert-hero__feature-title">九型性格深度测试</text>
-          <text class="expert-hero__feature-copy">不是给你贴标签，而是帮你发现更多选择。</text>
-          <button class="expert-hero__primary" hover-class="expert-hero__primary--pressed" @tap="startTest">开始探索</button>
-        </view>
-      </section>
-
-      <section class="teacher-welcome" aria-labelledby="teacher-heading">
-        <template v-if="teacher">
-          <button
-            v-if="teacherImage"
-            class="teacher-card__avatar-action"
-            type="button"
-            :aria-label="`预览${teacherImageLabel}`"
-            hover-class="teacher-card__avatar-action--pressed"
-            @click="previewTeacherAvatar"
-          >
-            <image
-              class="teacher-hero__image"
-              :src="teacherImage"
-              mode="aspectFill"
-              role="img"
-              :aria-label="teacherImageLabel"
-              @error="onTeacherImageError"
-            />
+      <view v-if="classroomEnabled" class="home-section">
+        <view class="section-head"><view><text class="section-kicker">MOMENTS WITH LAOHAN</text><text class="section-title">日常里的小小启发</text></view><button class="section-more" @click="daily">更多<NxIcon name="arrow" :size="17" color="#72746B" /></button></view>
+        <view v-if="loading && !dailyVideos.length" class="video-loading" aria-live="polite">正在整理老师的分享…</view>
+        <view v-else-if="error" class="quiet-state"><text>{{ error }}</text><button @click="load">重新加载</button></view>
+        <view v-else-if="!dailyVideos.length" class="quiet-state"><text>新的分享正在路上，先来认识老师吧。</text></view>
+        <view v-else class="video-grid">
+          <button v-for="item in dailyVideos" :key="item.id" class="video-card" @click="openVideo(item)">
+            <view class="video-cover"><image v-if="item.coverUrl && !coverErrors[item.id]" :src="item.coverUrl" mode="aspectFill" @error="coverErrors[item.id] = true" /><view v-else class="video-cover-fallback">老韩 · 日常</view><view class="video-scrim" /><view class="video-play"><NxIcon name="play" :size="15" color="#FFFFFF" /></view><text class="video-duration">{{ duration(item.durationSeconds) }}</text></view>
+            <text class="video-title">{{ item.title }}</text><text class="video-author">老韩的分享 <text class="author-dot">·</text> {{ item.category || '日常短讲' }}</text>
           </button>
-          <view v-else class="teacher-hero__image teacher-hero__image--placeholder" aria-hidden="true">韩</view>
-          <view class="teacher-copy">
-            <text class="teacher-eyebrow">你好，我是</text>
-            <text id="teacher-heading" class="teacher-name">{{ teacher.name }}</text>
-            <text class="teacher-identity">{{ teacher.title }}</text>
-          </view>
-          <text id="teacher-bio" class="teacher-bio" :class="{ 'teacher-bio--expanded': teacherExpanded }">{{ teacher.bio }}</text>
-          <view
-            class="teacher-toggle"
-            role="button"
-            tabindex="0"
-            :aria-expanded="teacherExpanded"
-            aria-controls="teacher-bio"
-            hover-class="control--pressed"
-            @tap="toggleTeacher"
-            @keydown="onActionKeydown($event, toggleTeacher)"
-          >{{ teacherExpanded ? '收起介绍' : '了解老师' }} <text aria-hidden="true">{{ teacherExpanded ? '↑' : '↓' }}</text></view>
-        </template>
-        <view v-else class="home-empty teacher-empty">
-          <text id="teacher-heading" class="home-empty__title">老师资料整理中</text>
-          <text>课程团队正在完善主讲老师介绍，稍后再来看看。</text>
-        </view>
-      </section>
-
-      <section class="service-section" aria-labelledby="service-heading">
-        <view class="section-heading">
-          <text id="service-heading" class="section-title">探索工具</text>
-          <text class="section-note">看见 · 理解 · 成长</text>
-        </view>
-        <nav class="service-grid" aria-label="常用服务">
-          <view v-if="classroomEnabled" class="service-entry service-entry--course" role="button" tabindex="0" hover-class="control--pressed" @tap="goCourse" @keydown="onActionKeydown($event, goCourse)">
-            <text class="service-index" aria-hidden="true">01</text>
-            <text class="service-title">成长课堂</text>
-            <text class="service-desc">按自己的节奏学习</text>
-          </view>
-          <view v-if="classroomEnabled" class="service-entry service-entry--material" role="button" tabindex="0" hover-class="control--pressed" @tap="goMaterial" @keydown="onActionKeydown($event, goMaterial)">
-            <text class="service-index" aria-hidden="true">02</text>
-            <text class="service-title">课件资料</text>
-            <text class="service-desc">随时复习课程重点</text>
-          </view>
-          <view class="service-entry service-entry--test" role="button" tabindex="0" hover-class="control--pressed" @tap="startTest" @keydown="onActionKeydown($event, startTest)">
-            <text class="service-index" aria-hidden="true">03</text>
-            <text class="service-title">性格测试</text>
-            <text class="service-desc">{{ total }} 道题认识自己</text>
-          </view>
-          <view class="service-entry service-entry--relation" role="button" tabindex="0" hover-class="control--pressed" @tap="goRelation" @keydown="onActionKeydown($event, goRelation)">
-            <text class="service-index" aria-hidden="true">04</text>
-            <text class="service-title">关系合盘</text>
-            <text class="service-desc">看懂彼此相处模式</text>
-          </view>
-          <view class="service-entry service-entry--booking" role="button" tabindex="0" hover-class="control--pressed" @tap="goBooking" @keydown="onActionKeydown($event, goBooking)">
-            <text class="service-index" aria-hidden="true">05</text>
-            <text class="service-title">预约咨询</text>
-            <text class="service-desc">获得专业陪伴</text>
-          </view>
-          <view class="service-entry service-entry--enneagram" role="button" tabindex="0" hover-class="control--pressed" @tap="goEnneagram" @keydown="onActionKeydown($event, goEnneagram)">
-            <text class="service-index" aria-hidden="true">06</text>
-            <text class="service-title">认识九型</text>
-            <text class="service-desc">先理解地图，再理解自己</text>
-          </view>
-        </nav>
-      </section>
-
-      <section v-if="classroomEnabled" class="content-section" aria-labelledby="course-heading">
-        <view class="section-heading section-heading--row">
-          <text id="course-heading" class="section-title">推荐课程</text>
-          <view
-            class="section-link section-link--course"
-            role="button"
-            tabindex="0"
-            hover-class="control--pressed"
-            @tap="goCourse"
-            @keydown="onActionKeydown($event, goCourse)"
-          >更多课程</view>
-        </view>
-        <view
-          v-if="featuredCourse"
-          class="featured-course"
-          role="button"
-          tabindex="0"
-          :aria-label="`查看课程：${featuredCourse.title}`"
-          hover-class="control--pressed"
-          @tap="goCourse"
-          @keydown="onActionKeydown($event, goCourse)"
-        >
-          <image class="featured-course__cover" :src="courseImages[0]" mode="aspectFill" aria-hidden="true" @error="onCourseImageError(0)" />
-          <view class="course-copy">
-            <text class="course-title">{{ featuredCourse.title }}</text>
-            <text class="course-desc">{{ featuredCourse.description }}</text>
-            <text class="course-meta">{{ featuredCourse.badge }} · {{ featuredCourse.duration }}</text>
-          </view>
-          <text class="row-arrow" aria-hidden="true">›</text>
-        </view>
-        <view v-else class="home-empty">
-          <text class="home-empty__title">课程正在准备中</text>
-          <text>新一期课程正在准备，稍后再来看看。</text>
-        </view>
-      </section>
-
-      <section v-if="classroomEnabled" class="content-section" aria-labelledby="material-heading">
-        <view class="section-heading section-heading--row">
-          <text id="material-heading" class="section-title">最新课件</text>
-          <view
-            class="section-link section-link--material"
-            role="button"
-            tabindex="0"
-            hover-class="control--pressed"
-            @tap="goMaterial"
-            @keydown="onActionKeydown($event, goMaterial)"
-          >全部资料</view>
-        </view>
-        <view
-          v-if="latestMaterial"
-          class="latest-material"
-          role="button"
-          tabindex="0"
-          :aria-label="`查看课件：${latestMaterial.course.title}`"
-          hover-class="control--pressed"
-          @tap="goMaterial"
-          @keydown="onActionKeydown($event, goMaterial)"
-        >
-          <view class="material-icon" aria-hidden="true">文</view>
-          <view class="material-copy">
-            <text class="material-title">{{ latestMaterial.course.title }}</text>
-            <text class="material-meta">{{ latestMaterial.type }} · {{ latestMaterial.course.duration }}</text>
-          </view>
-          <text class="row-arrow" aria-hidden="true">›</text>
-        </view>
-        <view v-else class="home-empty">
-          <text class="home-empty__title">学习资料整理中</text>
-          <text>老师正在整理新的学习资料。</text>
-        </view>
-      </section>
-
-      <view class="booking-prompt" role="button" tabindex="0" hover-class="control--pressed" @tap="goBooking" @keydown="onActionKeydown($event, goBooking)">
-        <view class="booking-copy">
-          <text class="booking-title">预约咨询</text>
-          <text class="booking-desc">有具体困惑？和老师一对一聊聊</text>
-        </view>
-        <text class="booking-action">去预约 <text aria-hidden="true">›</text></text>
-      </view>
-
-      <view class="daily-guidance" role="note">
-        <view class="daily-guidance__mark">光</view>
-        <view class="daily-guidance__copy">
-          <text class="daily-guidance__title">今日成长引导</text>
-          <text class="daily-guidance__text">你此刻最需要被理解的，是什么？</text>
         </view>
       </view>
-    </main>
+
+      <view class="home-section course-section">
+        <view class="section-head"><view><text class="section-kicker">LEARN & GROW TOGETHER</text><text class="section-title">下一次，课堂见</text></view><button class="section-more" @click="booking()">全部<NxIcon name="arrow" :size="17" color="#72746B" /></button></view>
+        <button v-if="featuredCourse" class="course-feature" @click="openCourse">
+          <view class="course-image"><image :src="featuredCourse.cover || '/static/editorial/course-intro.webp'" mode="aspectFill" /><text class="course-image-label">{{ featuredCourse.tag || '成长课堂' }}</text></view>
+          <view class="course-feature-body"><view class="course-tag-row"><text>{{ UI_PREVIEW ? featuredCourse.format : '韩常青老师主讲' }}</text><text v-if="UI_PREVIEW" class="sample-label">演示排期</text></view><text class="course-title">{{ featuredCourse.title }}</text><text class="course-desc">{{ featuredCourse.subtitle || featuredCourse.description }}</text><view class="course-bottom"><text class="course-schedule">{{ UI_PREVIEW ? `${featuredCourse.schedule} · ${featuredCourse.location}` : '了解课程内容与参与方式' }}</text><view class="course-arrow"><NxIcon name="arrow" :size="20" color="#FFFFFF" /></view></view></view>
+        </button>
+        <button v-else class="course-invitation" @click="booking()"><text>找到适合自己的成长方向</text><text>和老师聊聊课程安排 <text>→</text></text></button>
+      </view>
+
+      <button class="consult-invitation" @click="booking('consult')"><view class="consult-symbol"><NxIcon name="message" :size="27" /></view><view><text class="consult-title">有些心事，值得好好聊聊</text><text class="consult-copy">一对一沟通，从你的真实困惑开始</text></view><NxIcon name="arrow" :size="20" /></button>
+      <view class="home-footer"><text>向内看见，向外生长</text><text class="home-footer-en">GROW AT YOUR OWN PACE</text></view>
+    </view>
   </view>
 </template>
 
 <style scoped>
-.home {
-  min-width: 0;
-  overflow-x: hidden;
-  background: var(--nx-mist-bg);
-  color: var(--nx-text);
-}
-
-.home__content {
-  width: 100%;
-  max-width: 900rpx;
-  margin: 0 auto;
-  padding: 24rpx 24rpx 48rpx;
-  box-sizing: border-box;
-}
-
-.sync-note,
-.home-error {
-  min-height: 72rpx;
-  display: flex;
-  align-items: center;
-  gap: 16rpx;
-  color: #66706B;
-  font-size: 24rpx;
-  line-height: 1.5;
-}
-
-.home-error {
-  justify-content: space-between;
-  margin-bottom: 16rpx;
-  color: #8C3C30;
-}
-
-.home-retry,
-.teacher-toggle {
-  min-height: 88rpx;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: #335B4A;
-  font-size: 24rpx;
-  font-weight: 700;
-}
-
-.home-retry {
-  flex: 0 0 auto;
-  padding: 0 20rpx;
-}
-
-.teacher-welcome {
-  display: grid;
-  grid-template-columns: 128rpx minmax(0, 1fr);
-  column-gap: 20rpx;
-  padding: 24rpx;
-  border: 2rpx solid #E6EAE6;
-  border-radius: 20rpx;
-  background: #FFFFFF;
-}
-
-.teacher-hero__image {
-  width: 112rpx;
-  height: 112rpx;
-  border-radius: 16rpx;
-  background: #EEF1EE;
-}
-
-.teacher-card__avatar-action {
-  grid-row: 1 / span 2;
-  width: 128rpx;
-  height: 128rpx;
-  padding: 0;
-  border: 0;
-  border-radius: 22rpx;
-  background: var(--nx-surface-soft);
-  overflow: hidden;
-  box-shadow: 0 10rpx 24rpx rgba(32, 42, 55, .12);
-}
-
-.teacher-card__avatar-action::after { border: 0; }
-.teacher-card__avatar-action--pressed { opacity: .78; transform: scale(.97); }
-.teacher-card__avatar-action .teacher-hero__image { width: 128rpx; height: 128rpx; display: block; }
-
-.teacher-hero__image--placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #335B4A;
-  font-size: 48rpx;
-  font-weight: 800;
-}
-
-.teacher-copy {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 3rpx;
-}
-
-.teacher-eyebrow,
-.teacher-identity {
-  color: #68716C;
-  font-size: 24rpx;
-  line-height: 1.4;
-}
-
-.teacher-name {
-  color: #20252B;
-  font-size: 32rpx;
-  font-weight: 800;
-  line-height: 1.3;
-}
-
-.teacher-identity {
-  color: #335B4A;
-}
-
-.teacher-bio {
-  grid-column: 1 / -1;
-  margin-top: 20rpx;
-  overflow: hidden;
-  color: #59615D;
-  font-size: 25rpx;
-  line-height: 1.65;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.teacher-bio--expanded {
-  display: block;
-  overflow: visible;
-}
-
-.teacher-toggle {
-  grid-column: 1 / -1;
-  justify-self: start;
-  gap: 8rpx;
-}
-
-.teacher-empty {
-  grid-column: 1 / -1;
-}
-
-.service-section,
-.content-section {
-  margin-top: 32rpx;
-}
-
-.section-heading {
-  margin-bottom: 16rpx;
-  display: flex;
-  flex-direction: column;
-  gap: 4rpx;
-}
-
-.section-heading--row {
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.section-title {
-  color: #20252B;
-  font-size: 30rpx;
-  font-weight: 800;
-  line-height: 1.4;
-}
-
-.section-note,
-.section-link {
-  color: #4F5A54;
-  font-size: 24rpx;
-  line-height: 1.4;
-}
-
-.section-link {
-  min-height: 88rpx;
-  display: inline-flex;
-  align-items: center;
-  color: #335B4A;
-}
-
-.service-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14rpx;
-}
-
-.service-entry {
-  min-width: 0;
-  min-height: 168rpx;
-  padding: 20rpx;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  box-sizing: border-box;
-  border: 2rpx solid #E6EAE6;
-  border-radius: 18rpx;
-  background: #FFFFFF;
-  touch-action: manipulation;
-}
-
-.service-index {
-  margin-bottom: 12rpx;
-  color: #335B4A;
-  font-size: 21rpx;
-  font-weight: 800;
-  line-height: 1;
-}
-
-.service-title {
-  color: #20252B;
-  font-size: 27rpx;
-  font-weight: 800;
-  line-height: 1.4;
-}
-
-.service-desc {
-  margin-top: 4rpx;
-  color: #4F5A54;
-  font-size: 24rpx;
-  line-height: 1.45;
-}
-
-.featured-course,
-.latest-material,
-.booking-prompt {
-  width: 100%;
-  min-width: 0;
-  min-height: 88rpx;
-  padding: 18rpx;
-  display: flex;
-  align-items: center;
-  gap: 18rpx;
-  box-sizing: border-box;
-  border: 2rpx solid #E6EAE6;
-  border-radius: 18rpx;
-  background: #FFFFFF;
-  color: inherit;
-  touch-action: manipulation;
-}
-
-.featured-course__cover {
-  flex: 0 0 auto;
-  width: 144rpx;
-  height: 108rpx;
-  border-radius: 14rpx;
-  background: #EEF1EE;
-}
-
-.course-copy,
-.material-copy,
-.booking-copy {
-  min-width: 0;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 5rpx;
-}
-
-.course-title,
-.material-title,
-.booking-title {
-  color: #20252B;
-  font-size: 26rpx;
-  font-weight: 800;
-  line-height: 1.4;
-}
-
-.course-desc {
-  overflow: hidden;
-  color: #4F5A54;
-  font-size: 24rpx;
-  line-height: 1.45;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.course-meta,
-.material-meta,
-.booking-desc {
-  color: #4F5A54;
-  font-size: 24rpx;
-  line-height: 1.45;
-}
-
-.course-meta {
-  color: #335B4A;
-}
-
-.row-arrow {
-  flex: 0 0 auto;
-  color: #9BA19E;
-  font-size: 38rpx;
-}
-
-.material-icon {
-  flex: 0 0 auto;
-  width: 72rpx;
-  height: 72rpx;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 16rpx;
-  background: #EDF3EF;
-  color: #335B4A;
-  font-size: 24rpx;
-  font-weight: 800;
-}
-
-.booking-prompt {
-  margin-top: 32rpx;
-  padding: 22rpx 24rpx;
-  border-color: #DDE5DF;
-}
-
-.booking-action {
-  flex: 0 0 auto;
-  color: #335B4A;
-  font-size: 24rpx;
-  font-weight: 700;
-}
-
-.home-empty {
-  padding: 24rpx;
-  display: flex;
-  flex-direction: column;
-  gap: 8rpx;
-  border: 2rpx solid #E6EAE6;
-  border-radius: 18rpx;
-  background: #FFFFFF;
-  color: #66706B;
-  font-size: 24rpx;
-  line-height: 1.55;
-}
-
-.home-empty__title {
-  color: #20252B;
-  font-size: 27rpx;
-  font-weight: 800;
-}
-
-.control--pressed {
-  opacity: .72;
-}
-
-.home-retry:focus-visible,
-.teacher-toggle:focus-visible,
-.section-link:focus-visible,
-.service-entry:focus-visible,
-.featured-course:focus-visible,
-.latest-material:focus-visible,
-.booking-prompt:focus-visible {
-  outline: 4rpx solid #176B58;
-  outline-offset: 4rpx;
-}
-
-@media screen and (min-width: 768px) {
-  .home__content {
-    max-width: 1120rpx;
-    padding-left: 40rpx;
-    padding-right: 40rpx;
-  }
-}
-
-.expert-hero {
-  position: relative;
-  overflow: hidden;
-  margin-bottom: 28rpx;
-  padding: 28rpx;
-  border-radius: 28rpx;
-  background: var(--nx-mist-brand-soft);
-  box-shadow: 0 18rpx 42rpx rgba(31, 102, 99, .14);
-}
-.expert-hero::after {
-  position: absolute;
-  content: '';
-  width: 220rpx;
-  height: 220rpx;
-  top: -54rpx;
-  right: -42rpx;
-  border-radius: 50%;
-  background: var(--nx-mist-gold);
-  opacity: .58;
-  box-shadow: 0 0 0 42rpx rgba(242, 189, 90, .13);
-}
-.expert-hero__eyebrow,
-.expert-hero__title,
-.expert-hero__lead,
-.expert-hero__feature { position: relative; z-index: 1; display: block; }
-.expert-hero__eyebrow { color: #467D7B; font-size: 22rpx; font-weight: 900; letter-spacing: 4rpx; }
-.expert-hero__title { margin-top: 14rpx; color: #183439; font-size: 48rpx; font-weight: 900; line-height: 1.25; }
-.expert-hero__lead { margin-top: 10rpx; color: rgba(24, 52, 57, .7); font-size: 24rpx; line-height: 1.6; }
-.expert-hero__feature { margin-top: 24rpx; padding: 22rpx; border-radius: 22rpx; background: rgba(255, 255, 255, .52); border: 2rpx solid rgba(255, 255, 255, .7); }
-.expert-hero__tag { display: inline-flex; padding: 8rpx 16rpx; border-radius: 999rpx; background: var(--nx-mist-surface); color: #39716E; font-size: 20rpx; font-weight: 900; }
-.expert-hero__feature-title { display: block; margin-top: 22rpx; color: #183439; font-size: 34rpx; font-weight: 900; line-height: 1.35; }
-.expert-hero__feature-copy { display: block; margin: 8rpx 0 22rpx; color: rgba(24, 52, 57, .68); font-size: 22rpx; line-height: 1.55; }
-.expert-hero__primary { width: auto; min-width: 220rpx; min-height: 88rpx; margin: 0; padding: 0 28rpx; border: 0; border-radius: 16rpx; background: var(--nx-mist-brand); color: #FFF; font-size: 25rpx; font-weight: 900; line-height: 88rpx; }
-.expert-hero__primary::after { border: 0; }
-.expert-hero__primary--pressed { opacity: .78; transform: translateY(2rpx); }
-.teacher-welcome,
-.service-entry,
-.featured-course,
-.latest-material,
-.booking-prompt,
-.home-empty { border-color: var(--nx-mist-border); background: var(--nx-mist-surface); }
-.teacher-welcome { box-shadow: 0 10rpx 28rpx rgba(35, 75, 75, .06); }
-.service-entry { min-height: 176rpx; border-radius: 20rpx; box-shadow: 0 8rpx 22rpx rgba(35, 75, 75, .05); }
-.service-entry--booking { grid-column: span 2; min-height: 132rpx; flex-direction: row; align-items: center; gap: 20rpx; }
-.service-entry--booking .service-index { margin: 0; }
-.service-entry--booking .service-desc { margin-left: auto; }
-.service-index { color: var(--nx-mist-brand); }
-.service-title, .course-title, .material-title, .booking-title, .home-empty__title { color: #183439; }
-.service-desc, .course-desc, .course-meta, .material-meta, .booking-desc { color: rgba(24, 52, 57, .64); }
-.course-meta { color: var(--nx-mist-brand); }
-.material-icon { background: var(--nx-mist-soft); color: var(--nx-mist-brand); }
-.booking-prompt { border-color: var(--nx-mist-border); background: var(--nx-mist-soft); }
-.booking-action, .section-link { color: var(--nx-mist-brand); }
-.daily-guidance { display: flex; align-items: center; gap: 18rpx; margin-top: 24rpx; padding: 20rpx; border-radius: 20rpx; background: var(--nx-mist-soft); }
-.daily-guidance__mark { display: flex; align-items: center; justify-content: center; width: 68rpx; height: 68rpx; flex: 0 0 68rpx; border-radius: 22rpx; background: var(--nx-mist-brand); color: #FFF; font-size: 26rpx; font-weight: 900; }
-.daily-guidance__copy { min-width: 0; display: flex; flex-direction: column; gap: 5rpx; }
-.daily-guidance__title { color: #183439; font-size: 25rpx; font-weight: 900; }
-.daily-guidance__text { color: rgba(24, 52, 57, .68); font-size: 22rpx; line-height: 1.5; }
-
-/* Distinct entry accents keep the tool grid scannable without introducing a new palette. */
-.service-entry {
-  position: relative;
-  overflow: hidden;
-  align-items: flex-start;
-  border-color: var(--nx-border);
-  box-shadow: 0 14rpx 30rpx -26rpx rgba(32, 42, 55, .58);
-}
-.service-entry::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 8rpx;
-  background: var(--nx-accent-gold);
-}
-.service-entry--course { background: #F1F3F1; }
-.service-entry--course::before { background: var(--nx-brand-700); }
-.service-entry--material { background: #F8F1E5; }
-.service-entry--test { background: #F4ECE7; }
-.service-entry--test::before { background: #7A6253; }
-.service-entry--relation { background: #EDF0F2; }
-.service-entry--relation::before { background: #66798A; }
-.service-entry--booking { background: var(--nx-surface-soft); }
-.service-entry--booking::before { background: var(--nx-brand-900); }
-.service-entry--enneagram { background: #F5EDDF; }
-.service-entry--course,
-.service-entry--test,
-.service-entry--booking { grid-column: span 1; min-height: 176rpx; flex-direction: column; align-items: flex-start; gap: 0; }
-.service-entry--course .service-index,
-.service-entry--test .service-index,
-.service-entry--booking .service-index { margin: 0 0 14rpx; }
-.service-entry--course .service-desc,
-.service-entry--test .service-desc,
-.service-entry--booking .service-desc { margin-left: 0; text-align: left; }
-.service-index {
-  min-width: 54rpx;
-  min-height: 38rpx;
-  padding: 7rpx 10rpx;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 14rpx;
-  border-radius: 10rpx;
-  background: var(--nx-accent-gold);
-  color: var(--nx-surface);
-  font-size: 20rpx;
-  letter-spacing: 1rpx;
-}
-.service-title { color: var(--nx-brand-900); font-size: 29rpx; font-weight: 900; }
-.service-desc { color: var(--nx-text-muted); }
-.service-entry--booking .service-index { margin: 0 0 14rpx; }
-.service-entry--booking { align-items: flex-start; }
-.service-entry--booking .service-title { font-size: 28rpx; }
-.service-entry:focus-visible { outline-color: var(--nx-accent-gold); }
-
-/* Keep the existing card language, but make the home page breathe better on
- * smaller phones and keep the teacher portrait a clear interactive anchor. */
-.home__content { padding-bottom: 12rpx; }
-.teacher-welcome { grid-template-columns: 128rpx minmax(0, 1fr); gap: 20rpx; padding: 26rpx; border-radius: 24rpx; }
-.service-section,
-.content-section { margin-top: 28rpx; }
-.service-grid { gap: 16rpx; }
-.featured-course,
-.latest-material { border-radius: 22rpx; }
-
-@media screen and (max-width: 600rpx) {
-  .service-entry--course,
-  .service-entry--test,
-  .service-entry--booking { min-height: 164rpx; }
-  .service-entry--course .service-desc,
-  .service-entry--test .service-desc,
-  .service-entry--booking .service-desc { max-width: none; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .expert-hero__primary--pressed { transform: none; }
-}
+.studio-home{min-height:100vh;background:#F7F5F0;color:#282A27;padding-top:env(safe-area-inset-top);padding-bottom:32rpx;}
+.studio-topbar{height:144rpx;max-width:900rpx;padding:24rpx 36rpx;display:flex;align-items:center;justify-content:space-between;margin:0 auto;}
+.brand{display:flex;align-items:center;gap:16rpx}.brand-seal{width:66rpx;height:66rpx;display:flex;align-items:center;justify-content:center;background:#A55C3B;color:#fff;border-radius:19rpx 19rpx 7rpx 19rpx;font-family:"Songti SC",STSong,serif;font-size:39rpx}.brand-name{display:block;font-size:31rpx;font-weight:650;letter-spacing:2rpx}.brand-sub{display:block;font-size:19rpx;color:#77786F;letter-spacing:3rpx;margin-top:3rpx}.preview-label{font-size:20rpx;color:#8B6A52;border:1rpx solid #E5D7C8;border-radius:30rpx;padding:6rpx 16rpx}.top-about{margin:0;width:88rpx;height:88rpx;display:flex;align-items:center;justify-content:center;background:transparent;padding:0}
+.home-body{max-width:900rpx;margin:0 auto;padding:0 36rpx}.opening{display:flex;gap:12rpx;align-items:center;color:#77786F;font-size:20rpx;margin:6rpx 0 22rpx}.opening-line{height:1rpx;width:25rpx;background:#A55C3B}.opening-en{margin-left:auto;font-size:13rpx;letter-spacing:1rpx}
+.mentor-hero{position:relative;height:610rpx;border-radius:26rpx;overflow:hidden;background:#151C24;color:#fff}.mentor-portrait{position:absolute;width:100%;height:100%;right:0;top:0}.mentor-shade{position:absolute;inset:0;background:linear-gradient(90deg,#151C24 0%,rgba(21,28,36,.95) 12%,rgba(21,28,36,.66) 41%,rgba(21,28,36,0) 70%),linear-gradient(0deg,rgba(10,15,20,.45),transparent 35%)}.mentor-content{position:relative;padding:40rpx 32rpx}.mentor-label{display:flex;gap:9rpx;align-items:center;font-size:19rpx;letter-spacing:1rpx;color:#E8D6BC}.mentor-dot{width:7rpx;height:7rpx;border-radius:50%;background:#D5AD85}.mentor-title{white-space:pre-line;display:block;font-family:"Songti SC","Noto Serif SC",STSong,serif;font-size:74rpx;line-height:1.34;letter-spacing:5rpx;margin:27rpx 0 18rpx}.mentor-name{font-size:29rpx;letter-spacing:3rpx}.mentor-nickname{font-size:21rpx;letter-spacing:2rpx;color:#D5D2CC}.mentor-desc{white-space:pre-line;display:block;font-size:23rpx;line-height:1.75;margin-top:16rpx;color:#E1DED6}.mentor-button{display:flex;align-items:center;justify-content:center;gap:20rpx;min-height:88rpx;width:215rpx;border-radius:10rpx;border:1rpx solid rgba(255,255,255,.45);background:rgba(255,255,255,.07);color:#fff;font-size:23rpx;margin:27rpx 0 0;padding:0 17rpx}.mentor-bottom{position:absolute;bottom:24rpx;right:26rpx;font-size:12rpx;letter-spacing:2rpx;color:#D0C3AD}
+.welcome-note{display:flex;gap:17rpx;padding:28rpx 7rpx 27rpx;font-size:24rpx;line-height:1.8;align-items:flex-start}.quote-sign{font-family:Georgia,serif;font-size:61rpx;line-height:1;color:#B58165}.welcome-muted{display:block;font-size:21rpx;color:#72746B}.quick-links{display:flex;border-top:1rpx solid #E6E1D8;border-bottom:1rpx solid #E6E1D8;padding:28rpx 0 30rpx;gap:2rpx}.quick-link{flex:1;min-width:0;margin:0;padding:0;background:transparent;display:flex;align-items:center;flex-direction:column;font-size:24rpx;line-height:1.5;min-height:145rpx}.quick-icon{width:77rpx;height:77rpx;border-radius:24rpx;background:#EEE8DD;display:flex;align-items:center;justify-content:center;margin-bottom:13rpx}.quick-note{font-size:19rpx;color:#77786F;margin-top:4rpx}
+.home-section{margin-top:44rpx}.section-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:22rpx}.section-kicker{display:block;letter-spacing:2rpx;font-size:15rpx;color:#999081;margin-bottom:8rpx}.section-title{font-size:36rpx;font-weight:600;letter-spacing:1rpx;font-family:"Songti SC",STSong,serif}.section-more{display:flex;gap:8rpx;align-items:center;min-height:88rpx;font-size:22rpx;background:transparent;color:#72746B;margin:0;padding:0 0 0 16rpx}.video-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22rpx}.video-card{text-align:left;margin:0;padding:0;background:transparent;border-radius:0;line-height:1.5}.video-cover{height:231rpx;position:relative;border-radius:17rpx;overflow:hidden;background:#E9E3D8}.video-cover image{width:100%;height:100%}.video-cover-fallback{display:flex;align-items:center;justify-content:center;height:100%;font-family:serif}.video-scrim{position:absolute;inset:50% 0 0;background:linear-gradient(transparent,rgba(0,0,0,.5))}.video-play{position:absolute;bottom:15rpx;left:17rpx;width:44rpx;height:44rpx;border-radius:50%;background:rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center}.video-duration{position:absolute;bottom:17rpx;right:17rpx;color:#fff;font-size:19rpx;font-variant-numeric:tabular-nums}.video-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:27rpx;margin-top:16rpx;line-height:1.55;min-height:84rpx;font-weight:550}.video-author{display:block;color:#77786F;font-size:19rpx;margin-top:8rpx}.author-dot{padding:0 5rpx;color:#BCA78F}.quiet-state,.video-loading{padding:35rpx 22rpx;background:#F0ECE5;border-radius:18rpx;color:#72746B;font-size:24rpx}.quiet-state button{font-size:24rpx;background:transparent;color:#A55C3B;min-height:88rpx}
+.course-feature{display:block;text-align:left;padding:0;margin:0;background:#fff;border-radius:21rpx;overflow:hidden;line-height:1.5}.course-image{height:233rpx;position:relative}.course-image image{width:100%;height:100%}.course-image-label{position:absolute;left:24rpx;top:22rpx;padding:8rpx 17rpx;background:#F9F5ED;color:#665B49;border-radius:7rpx;font-size:20rpx}.course-feature-body{padding:23rpx 26rpx 25rpx}.course-tag-row{display:flex;justify-content:space-between;font-size:19rpx;color:#A55C3B;letter-spacing:1rpx}.sample-label{color:#858276;font-size:18rpx}.course-title{display:block;font-size:33rpx;font-weight:600;margin-top:9rpx}.course-desc{display:block;color:#72746B;font-size:23rpx;margin-top:7rpx}.course-bottom{display:flex;align-items:center;justify-content:space-between;margin-top:22rpx;padding-top:19rpx;border-top:1rpx solid #EEEAE2;gap:12rpx}.course-schedule{font-size:20rpx;color:#72746B}.course-arrow{width:54rpx;height:54rpx;border-radius:50%;background:#A55C3B;display:flex;align-items:center;justify-content:center;flex-shrink:0}.course-invitation{background:#EDE6DB;padding:28rpx;font-size:27rpx;text-align:left;line-height:2}.course-invitation text{display:block}
+.consult-invitation{display:flex;align-items:center;gap:19rpx;padding:29rpx 23rpx;background:#EEE9DE;margin:32rpx 0 0;text-align:left;line-height:1.6;border-radius:20rpx}.consult-invitation>view:nth-child(2){flex:1}.consult-symbol{width:66rpx;height:70rpx;display:flex;align-items:center;justify-content:center}.consult-title{display:block;font-size:26rpx;font-weight:500}.consult-copy{display:block;font-size:20rpx;color:#72746B;margin-top:6rpx}.home-footer{display:flex;flex-direction:column;align-items:center;padding:43rpx 0 25rpx;color:#8B897D;font-family:"Songti SC",STSong,serif;font-size:24rpx;letter-spacing:4rpx}.home-footer-en{font-family:Arial,sans-serif;font-size:13rpx;letter-spacing:3rpx;color:#A9A498;margin-top:11rpx}.teacher-empty{padding:80rpx 30rpx;text-align:center;background:#EDE6DB;border-radius:24rpx;color:#72746B}
+button::after{border:0}button:active{opacity:.76}button:focus-visible{outline:3px solid #A55C3B;outline-offset:3px}
+@media(min-width:700px){.studio-topbar,.home-body{max-width:470px}.opening-en{font-size:9px}}
 </style>

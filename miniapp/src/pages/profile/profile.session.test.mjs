@@ -11,7 +11,7 @@ for (const [pageName, pageSource] of [
   ['profile', source],
   ['profile edit', profileEditSource],
 ]) {
-  for (const token of [
+  const expectedTokens = pageName === 'profile' ? ['--nx-page-bg'] : [
     '--nx-brand-900',
     '--nx-brand-700',
     '--nx-accent-gold',
@@ -21,8 +21,12 @@ for (const [pageName, pageSource] of [
     '--nx-text',
     '--nx-text-muted',
     '--nx-border',
-  ]) {
-    assert.ok(pageSource.includes(`var(${token})`), `${pageName} page should use ${token}`)
+  ]
+  for (const token of expectedTokens) {
+    assert.ok(
+      pageSource.includes(`var(${token})`) || pageSource.includes(`var(${token},`),
+      `${pageName} page should use ${token}`,
+    )
   }
   assert.doesNotMatch(
     pageSource,
@@ -37,7 +41,7 @@ assert.match(source, /v-if="!logged"/, 'profile login state should remain availa
 assert.match(source, /v-if="profileLoading"/, 'profile record loading state should remain available')
 assert.match(source, /v-else-if="recordsError"/, 'profile record error state should remain available')
 assert.match(source, /v-else-if="records\.length === 0"/, 'profile record empty state should remain available')
-assert.match(source, /@click="loadAll">重试/, 'profile record errors should keep a retry action')
+assert.match(source, /@click="loadAll">(?:重试|重新加载)/, 'profile record errors should keep a retry action')
 assert.match(profileEditSource, /v-if="profileLoading"/, 'profile edit loading state should remain available')
 assert.match(profileEditSource, /v-else-if="loadError"/, 'profile edit error state should remain available')
 assert.match(profileEditSource, /@click="loadProfile">重新加载/, 'profile edit errors should keep a retry action')

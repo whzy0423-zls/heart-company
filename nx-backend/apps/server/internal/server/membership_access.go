@@ -555,6 +555,44 @@ func (s *Server) currentAppMembershipPlan(ctx context.Context, appUserID int64) 
 	return plan
 }
 
+// problemFollowupEnabled uses the canonical SVIP switch for every billing
+// cycle. Callers must resolve current membership first; resolveMembershipPlan
+// preserves legacy perpetual `svip` but rejects expiry-less `svip_*` SKUs.
+// Missing canonical rows/keys retain the default; malformed data or database
+// failures fail closed for this capability without affecting other rights.
+func (s *Server) problemFollowupEnabled(ctx context.Context, plan resolvedMembershipPlan) (bool, error) {
+	if !plan.Active || plan.PlanLevel != "svip" {
+		return false, nil
+	}
+	if s == nil || s.db == nil {
+		return false, errMembershipPlanUnavailable
+	}
+	var raw []byte
+	err := s.db.QueryRowContext(ctx, `SELECT feature_flags FROM app_plans WHERE code='svip'`).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("problem followup plan lookup: %w", err)
+	}
+	return configuredProblemFollowupEnabled(raw)
+}
+
+func configuredProblemFollowupEnabled(raw []byte) (bool, error) {
+	var flags map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &flags); err != nil {
+		return false, fmt.Errorf("problem followup plan decode: %w", err)
+	}
+	if flags == nil {
+		return false, errors.New("problem followup plan must be an object")
+	}
+	flag, exists := flags["problemFollowup"]
+	if !exists {
+		return true, nil
+	}
+	return string(flag) == "true", nil
+}
+
 func (s *Server) currentAppMembershipPlanWithError(ctx context.Context, appUserID int64) (resolvedMembershipPlan, error) {
 	fallback := resolvedMembershipPlan{PlanLevel: "free", BillingCycle: "none", SKU: "free", Active: true}
 	if s == nil || s.db == nil || appUserID <= 0 {

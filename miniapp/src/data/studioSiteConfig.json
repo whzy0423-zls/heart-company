@@ -1,0 +1,545 @@
+{
+  "home": {
+    "appDownload": {
+      "androidButtonText": "下载 Android 版",
+      "eyebrow": "官方 App",
+      "features": [
+        "官方安装包，版本信息清晰可查",
+        "课程与成长内容随时随地学习",
+        "持续更新，陪伴你的长期成长"
+      ],
+      "installSteps": [
+        "下载 APK 后打开安装文件",
+        "如系统提示，请允许本次安装来源",
+        "按提示完成安装并打开 App"
+      ],
+      "iosComingSoonText": "iOS 敬请期待",
+      "lead": "把九型学习、练习与成长内容装进口袋，随时回到自己的成长节奏。",
+      "retryText": "重新加载",
+      "title": "九型芯之力 App",
+      "unavailableText": "Android 版本暂未开放下载"
+    },
+    "courses": {
+      "eyebrow": "课程方向",
+      "items": [
+        {
+          "badge": "A",
+          "bullets": [
+            "九型人格与生命关系",
+            "性格情绪与亲子关系",
+            "语言解码"
+          ],
+          "description": "认识自己的性格能量，理解反应模式与关系模式，找到成长方向。",
+          "title": "个人成长 · 关系疗愈"
+        },
+        {
+          "badge": "B",
+          "bullets": [
+            "九型人格与领导力",
+            "企业团队训练",
+            "组织文化建设"
+          ],
+          "description": "把九型应用于领导力开发，理解团队成员动机，提升协作与凝聚力。",
+          "title": "领导力 · 团队协作"
+        },
+        {
+          "badge": "C",
+          "bullets": [
+            "夫妻与亲子关系",
+            "家庭系统排列工作坊",
+            "个案疏导"
+          ],
+          "description": "面向婚姻、亲子、夫妻关系，提供咨询培训与一对一个案咨询治疗经验。",
+          "title": "家庭关系 · 系统排列"
+        }
+      ],
+      "title": "线上授课与成长课程"
+    },
+    "enterprise": {
+      "buttonHref": "#signup",
+      "buttonText": "了解企业课程",
+      "eyebrow": "企业课程",
+      "lead": "面向企业组织提供以九型为底层的团队建设、团队疏导、组织文化建设与管理沟通，帮助团队提升协作与积极性。",
+      "moduleTitle": "工作坊模块",
+      "modules": [
+        "团队角色与动机解读",
+        "跨性格沟通与协作",
+        "冲突疏导与凝聚力提升",
+        "组织文化共识与落地"
+      ],
+      "title": "团队士气及凝聚力教练工作坊"
+    },
+    "game": {
+      "buttonHref": "#signup",
+      "buttonText": "进入小游戏体验",
+      "eyebrow": "趣味体验",
+      "lead": "用轻松、互动的小测试，先感受一下自己的性格底色与能量倾向，再进入系统的九型学习。",
+      "placeholderTitle": "小游戏 / 视频位置",
+      "title": "你的人设出厂设置"
+    },
+    "hero": {
+      "actions": [
+        {
+          "label": "开始观看 →",
+          "to": "/watch",
+          "type": "route",
+          "variant": "red"
+        },
+        {
+          "label": "九型的三阶段",
+          "to": "/stages",
+          "type": "route",
+          "variant": "ghost"
+        },
+        {
+          "label": "企业课程",
+          "to": "#enterprise",
+          "type": "anchor",
+          "variant": "ghost"
+        },
+        {
+          "label": "下载 App",
+          "to": "/app",
+          "type": "route",
+          "variant": "ghost"
+        }
+      ],
+      "eyebrow": "基础介绍",
+      "lead": "九种内在动力的观察、理解与成长。认识自己，把性格模式转化为内在的能量与成长力量。",
+      "stats": [
+        {
+          "label": "种性格芯片",
+          "value": "9"
+        },
+        {
+          "label": "年一线导师经验",
+          "suffix": "+",
+          "value": "20"
+        },
+        {
+          "label": "个演变阶段",
+          "value": "3"
+        }
+      ],
+      "title": "九型芯之力"
+    },
+    "miniappCarousel": {
+      "autoplay": false,
+      "interval": 4000,
+      "items": []
+    },
+    "miniappHome": {
+      "brand": {
+        "enabled": true,
+        "name": "九型芯之力",
+        "tagline": "看见动机，找到成长方向"
+      },
+      "entriesSection": {
+        "description": "从测试、关系、课程到成长档案，选择此刻最需要的一步。",
+        "enabled": true,
+        "items": [
+          {
+            "description": "找到你的核心动机",
+            "enabled": true,
+            "icon": "compass",
+            "key": "test",
+            "theme": "blue",
+            "title": "人格测试"
+          },
+          {
+            "description": "看见彼此的互动模式",
+            "enabled": true,
+            "icon": "relation",
+            "key": "relation",
+            "theme": "purple",
+            "title": "关系合盘"
+          },
+          {
+            "description": "跟着课件系统学习",
+            "enabled": true,
+            "icon": "book",
+            "key": "learn",
+            "theme": "cyan",
+            "title": "老师课程"
+          },
+          {
+            "description": "记录你的探索轨迹",
+            "enabled": true,
+            "icon": "growth",
+            "key": "profile",
+            "theme": "orange",
+            "title": "成长档案"
+          }
+        ],
+        "title": "探索你的九型能量"
+      },
+      "growth": {
+        "description": "跟随老师的课程与课件，让理解沉淀为真实的成长行动。",
+        "enabled": true,
+        "eyebrow": "老师陪伴 · 持续成长",
+        "title": "把测试发现带进课程练习"
+      },
+      "hero": {
+        "buttonText": "开始人格测试",
+        "description": "从核心动机出发，在老师课程中理解自己，也更从容地走进关系与成长。",
+        "enabled": true,
+        "kicker": "老师导学 · 课程配套 · 18 题自测",
+        "title": "读懂自己内在的能量地图"
+      }
+    },
+    "miniappLearn": {
+      "bottomCtaText": "先完成测试，建立你的学习地图",
+      "classroom": {
+        "ctaText": "进入老师课堂",
+        "emptyActionText": "进入课堂看看",
+        "emptyDescription": "可以先浏览老师介绍和课程方向，新的视频与音频课件会在这里持续更新。",
+        "emptyTitle": "老师课堂正在准备中",
+        "enabled": true,
+        "eyebrow": "课堂精选",
+        "heroEyebrow": "随时回看 · 反复练习",
+        "heroLead": "支持视频和音频；先看独立课件，也可以进入系列课程循序学习。",
+        "heroTitle": "把老师以往开课内容，整理成可以持续学习的专业课件",
+        "moreText": "查看全部",
+        "title": "视频与音频课件"
+      },
+      "hero": {
+        "eyebrow": "老师课堂",
+        "lead": "从视频与音频课件开始，理解自己、改善关系，也为团队协作建立更清晰的共同语言。",
+        "meta": [
+          "视频课程",
+          "音频精讲",
+          "九型实践"
+        ],
+        "title": "跟着老师，把九型真正用进工作与生活"
+      },
+      "sections": {
+        "courses": {
+          "emptyDescription": "更多面向个人成长、关系沟通与企业团队的学习主题会持续补充。",
+          "emptyTitle": "课程方向正在整理中",
+          "eyebrow": "课程方向",
+          "title": "循序建立九型视角"
+        },
+        "quotes": {
+          "emptyTitle": "课堂语录即将上线",
+          "eyebrow": "课堂一念",
+          "title": "把觉察带回当下"
+        },
+        "teacher": {
+          "eyebrow": "老师简介",
+          "title": "认识你的学习向导"
+        },
+        "types": {
+          "eyebrow": "九型内容",
+          "title": "九种性格，九条成长路径"
+        }
+      }
+    },
+    "quotes": {
+      "eyebrow": "老韩语录",
+      "items": [
+        "性格不评判好坏，能量没有对错。看见，就是改变的开始。",
+        "你以为的缺点，可能只是你芯片里没被照亮的那一面。",
+        "理解他人，先理解自己；看见动机，才能看见关系。"
+      ],
+      "lead": "选择一句喜欢的语录，写下你的理解或共鸣，和大家一起留下学习的回声。",
+      "title": "老韩语录互动区"
+    },
+    "signup": {
+      "bullets": [
+        "个人成长 / 家庭关系 / 企业团队",
+        "一对一咨询与团体工作坊",
+        "线上课程试看与活动回放"
+      ],
+      "eyebrow": "用户互动",
+      "interestOptions": [
+        "感兴趣的方向：个人成长",
+        "家庭关系",
+        "企业团队",
+        "九型基础学习"
+      ],
+      "lead": "留下你的信息，我们会安排课程顾问与你联系，了解你的成长需求并推荐合适的课程或工作坊。",
+      "successText": "已收到，我们会尽快与你联系 ✓",
+      "title": "注册体验与课程咨询"
+    },
+    "stages": {
+      "eyebrow": "系统演变",
+      "items": [
+        {
+          "description": "公元 9 世纪苏菲教派把九型作为纯粹的灵修工具，口传心授，不分析性格、不讲能量。",
+          "kicker": "第 01 阶段",
+          "subtitle": "灵修起源，无能量概念",
+          "title": "第一阶段：苏菲灵修期",
+          "to": "/stage1"
+        },
+        {
+          "description": "上世纪六七十年代起，九型被系统化用于心理分析，从外在行为反推动机，形成测评与标签。",
+          "kicker": "第 02 阶段",
+          "subtitle": "行为分析，标签化性格",
+          "title": "第二阶段：西方心理学期",
+          "to": "/stage2"
+        },
+        {
+          "description": "芯之力视角提出性格是能量的呈现，是天生自带的生命芯片，强调看见天性、提升情商与能力。",
+          "kicker": "第 03 阶段",
+          "subtitle": "性格 = 能量呈现",
+          "title": "第三阶段：芯之力能量体系",
+          "to": "/stage3"
+        }
+      ],
+      "lead": "从苏菲灵修工具，到西方心理学分类，再到芯之力视角下的性格能量体系。",
+      "title": "九型人格演变的三阶段"
+    },
+    "teacherTeaser": {
+      "buttonText": "进入老师简介",
+      "buttonTo": "/teacher",
+      "eyebrow": "老师简介",
+      "fallbackImage": "/assets/teacher.svg",
+      "image": "/assets/teacher-poster.jpg",
+      "lead": "北京九型成长平台、芯之力创始人。师从 Dr. Unico 陈伟志（陈博士）。国家二级心理咨询师、NLP 教练技术资深教练、系统排列导师、萨提亚家庭治疗师，长期从事九型人格、教练技术、心理疏导治疗、企业团队建设与家庭关系培训。",
+      "title": "韩常青（老韩）｜九型芯之力首席导师"
+    },
+    "typesSection": {
+      "eyebrow": "九种芯片模式",
+      "lead": "每一型都是一种内在动力 —— 一块天生自带的生命芯片。",
+      "title": "九型概览"
+    },
+    "miniappPayment": {
+      "enabled": false
+    }
+  },
+  "navigation": {
+    "drawer": [
+      {
+        "label": "首页",
+        "to": "/",
+        "type": "route"
+      },
+      {
+        "label": "老师简介",
+        "to": "/teacher",
+        "type": "route"
+      },
+      {
+        "label": "九型的三阶段",
+        "to": "/stages",
+        "type": "route"
+      },
+      {
+        "label": "课件",
+        "to": "/course",
+        "type": "route"
+      },
+      {
+        "label": "课程",
+        "to": "/courses",
+        "type": "route"
+      },
+      {
+        "label": "小游戏",
+        "to": "/game",
+        "type": "route"
+      },
+      {
+        "label": "下载 App",
+        "to": "/app",
+        "type": "route"
+      },
+      {
+        "label": "企业",
+        "to": "/#enterprise",
+        "type": "hash"
+      },
+      {
+        "label": "老韩语录",
+        "to": "/quotes",
+        "type": "route"
+      },
+      {
+        "label": "九种芯片模式",
+        "to": "/types",
+        "type": "route"
+      },
+      {
+        "label": "注册/互动",
+        "to": "/signup",
+        "type": "route"
+      },
+      {
+        "label": "开始观看",
+        "to": "/watch",
+        "type": "route"
+      }
+    ],
+    "main": [
+      {
+        "label": "首页",
+        "to": "/",
+        "type": "route"
+      },
+      {
+        "label": "老师简介",
+        "to": "/teacher",
+        "type": "route"
+      },
+      {
+        "label": "九型的三阶段",
+        "to": "/stages",
+        "type": "route"
+      },
+      {
+        "label": "课件",
+        "to": "/course",
+        "type": "route"
+      },
+      {
+        "label": "课程",
+        "to": "/courses",
+        "type": "route"
+      },
+      {
+        "label": "小游戏",
+        "to": "/game",
+        "type": "route"
+      },
+      {
+        "label": "下载 App",
+        "to": "/app",
+        "type": "route"
+      },
+      {
+        "label": "企业",
+        "to": "/#enterprise",
+        "type": "hash"
+      },
+      {
+        "label": "老韩语录",
+        "to": "/quotes",
+        "type": "route"
+      },
+      {
+        "label": "成长心语",
+        "to": "/mind-quotes",
+        "type": "route"
+      },
+      {
+        "label": "九种芯片",
+        "to": "/types",
+        "type": "route"
+      },
+      {
+        "label": "注册/互动",
+        "to": "/signup",
+        "type": "route"
+      }
+    ],
+    "tabs": [
+      {
+        "label": "首页",
+        "to": "/",
+        "type": "route",
+        "icon": "home",
+        "match": "/"
+      },
+      {
+        "label": "老师",
+        "to": "/teacher",
+        "type": "route",
+        "icon": "user",
+        "match": "/teacher"
+      },
+      {
+        "label": "三阶段",
+        "to": "/stages",
+        "type": "route",
+        "icon": "layers",
+        "match": "/stages"
+      },
+      {
+        "label": "游戏",
+        "to": "/game",
+        "type": "route",
+        "icon": "play",
+        "match": "/game"
+      },
+      {
+        "label": "报名",
+        "to": "/signup",
+        "type": "route",
+        "icon": "edit",
+        "match": "/signup"
+      }
+    ]
+  },
+  "site": {
+    "brandName": "芯之力",
+    "copyright": "© 2026 芯之力 · 九型成长平台",
+    "footerTagline": "九型人格 · 性格能量 · 成长教练",
+    "logo": "/assets/logo.svg",
+    "customerServiceQr": "https://xinzhili-2026.oss-cn-beijing.aliyuncs.com/uploads/site/customer-service/20260707/image-1-77345ae12834aee2.png"
+  },
+  "types": [
+    {
+      "avatar": "/assets/avatars/1.webp",
+      "description": "希望把事情做对，对自己和世界有内在标准。",
+      "id": "1",
+      "keywords": "原则、自律、追求正确",
+      "name": "完美型"
+    },
+    {
+      "avatar": "/assets/avatars/2.webp",
+      "description": "通过给予与关怀建立连接，渴望被需要。",
+      "id": "2",
+      "keywords": "热情、付出、看见他人需要",
+      "name": "助人型"
+    },
+    {
+      "avatar": "/assets/avatars/3.webp",
+      "description": "追求成功与认可，擅长达成目标。",
+      "id": "3",
+      "keywords": "目标、效率、形象",
+      "name": "成就型"
+    },
+    {
+      "avatar": "/assets/avatars/4.webp",
+      "description": "重视内在体验与真实，渴望与众不同。",
+      "id": "4",
+      "keywords": "感受、独特、深度",
+      "name": "自我型"
+    },
+    {
+      "avatar": "/assets/avatars/5.webp",
+      "description": "以知识与思考理解世界，珍惜独处空间。",
+      "id": "5",
+      "keywords": "理性、求知、边界",
+      "name": "观察型"
+    },
+    {
+      "avatar": "/assets/avatars/6.webp",
+      "description": "重视信任与稳定，提前预判风险。",
+      "id": "6",
+      "keywords": "谨慎、责任、安全感",
+      "name": "忠诚型"
+    },
+    {
+      "avatar": "/assets/avatars/7.webp",
+      "description": "追求自由与快乐，热爱新鲜与可能。",
+      "id": "7",
+      "keywords": "乐观、可能性、体验",
+      "name": "活跃型"
+    },
+    {
+      "avatar": "/assets/avatars/8.webp",
+      "description": "直接而有力量，保护在意的人与事。",
+      "id": "8",
+      "keywords": "力量、掌控、保护",
+      "name": "领袖型"
+    },
+    {
+      "avatar": "/assets/avatars/9.webp",
+      "description": "追求内外和谐，善于看见各方立场。",
+      "id": "9",
+      "keywords": "包容、稳定、调和",
+      "name": "和平型"
+    }
+  ]
+}

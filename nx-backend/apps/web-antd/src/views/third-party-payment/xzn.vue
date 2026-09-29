@@ -1,5 +1,8 @@
 <script setup lang="ts">
+import { computed, onMounted, reactive, ref } from 'vue';
+
 import { Page } from '@vben/common-ui';
+
 import {
   Alert,
   Button,
@@ -7,12 +10,11 @@ import {
   Descriptions,
   Form,
   Input,
+  message,
   Select,
   Switch,
   Tag,
-  message,
 } from 'ant-design-vue';
-import { computed, onMounted, reactive, ref } from 'vue';
 
 import { requestClient } from '#/api/request';
 
@@ -72,6 +74,7 @@ const paymentConfig = reactive({
   notifyURL: defaultNotifyURL,
   pid: '',
   returnURL: '',
+  webReturnURL: '',
   secret: '',
   signType: 'MD5',
 });
@@ -93,6 +96,7 @@ function applyConfig(data: Record<string, any>) {
     paymentConfig.wechatEnabled = false;
   paymentConfig.alipayGatewayId ||= '34';
   paymentConfig.wechatGatewayId ||= '';
+  paymentConfig.webReturnURL ||= '';
   configured.value = Boolean(data.configured);
 }
 
@@ -171,46 +175,74 @@ async function createOrder() {
       <Card :bordered="false" class="section-card" title="商户配置">
         <Form class="config-form" layout="vertical">
           <div class="config-grid">
-            <Form.Item label="商户号 PID" required
-              ><Input
+            <Form.Item label="商户号 PID" required>
+              <Input
                 v-model:value="paymentConfig.pid"
                 placeholder="2088 开头的商户号"
-            /></Form.Item>
-            <Form.Item label="商户密钥" required
-              ><Input.Password
+              />
+            </Form.Item>
+            <Form.Item label="商户密钥" required>
+              <Input.Password
                 v-model:value="paymentConfig.secret"
                 :placeholder="
                   configured ? '已配置，留空表示不修改' : '请输入商户密钥'
                 "
-            /></Form.Item>
+              />
+            </Form.Item>
             <Form.Item
               label="商户签名模式"
               extra="星之柠接口固定使用 MD5 签名。"
             >
               <Input value="MD5" disabled />
             </Form.Item>
-            <Form.Item label="默认网关 ID"
-              ><Input
+            <Form.Item label="默认网关 ID">
+              <Input
                 v-model:value="paymentConfig.channelID"
                 placeholder="可选，测试下单时可单独选择"
-            /></Form.Item>
-            <Form.Item label="异步回调地址" required
-              ><Input
+              />
+            </Form.Item>
+            <Form.Item label="异步回调地址" required>
+              <Input
                 v-model:value="paymentConfig.notifyURL"
                 placeholder="https://.../api/xzn-pay/notify"
-            /></Form.Item>
-            <Form.Item label="同步返回地址"
-              ><Input
+              />
+            </Form.Item>
+            <Form.Item
+              label="App 同步返回地址"
+              extra="保留原有 App 返回配置，H5 使用下方独立返回地址，不复用 App 深链。"
+            >
+              <Input
                 v-model:value="paymentConfig.returnURL"
-                placeholder="https://.../payment/result"
-            /></Form.Item>
+                placeholder="保留已有 App 支付返回地址"
+              />
+            </Form.Item>
+            <Form.Item
+              label="H5 支付返回地址"
+              extra="必须使用 HTTPS 和 #/billing 路由，仅可携带 payment_return=1。清空后保存将移除该独立 H5 返回地址配置；原生 App 返回地址不受影响。支付结果仍由服务端确认。"
+            >
+              <Input
+                v-model:value="paymentConfig.webReturnURL"
+                placeholder="https://.../h5/index.html#/billing?payment_return=1"
+              />
+            </Form.Item>
           </div>
-          <Button type="primary" :loading="configLoading" @click="saveConfig"
-            >保存商户配置</Button
-          >
+          <Button type="primary" :loading="configLoading" @click="saveConfig">
+            保存商户配置
+          </Button>
         </Form>
       </Card>
-      <Card :bordered="false" class="section-card" title="App 支付开关与网关">
+      <Card
+        :bordered="false"
+        class="section-card"
+        title="XZN 支付开关与网关（H5 / App 共用）"
+      >
+        <Alert
+          class="gateway-warning"
+          message="H5 与 App 支付入口独立"
+          description="H5 会员购买直接使用 XZN 商户与通道配置。App 继续按独立支付模式配置运行，保存这里的配置不会把 App 的客服微信模式切换为在线支付。"
+          show-icon
+          type="info"
+        />
         <Alert
           v-if="wechatGatewayInvalid"
           class="gateway-warning"
@@ -222,8 +254,8 @@ async function createOrder() {
         <Form class="config-form" layout="vertical">
           <div class="config-grid">
             <Form.Item
-              label="App 支付总开关"
-              extra="关闭后 App 不会展示在线支付入口。"
+              label="XZN 支付总开关"
+              extra="关闭后 H5 在线支付不可用；App 仅在已选择 XZN 模式时受此开关影响，客服微信模式不变。"
             >
               <Switch
                 v-model:checked="paymentConfig.enabled"
@@ -232,7 +264,7 @@ async function createOrder() {
               />
             </Form.Item>
             <Form.Item
-              label="支付宝 App 支付"
+              label="支付宝支付"
               extra="当前建议使用支付宝手机 H5 网关 34。"
             >
               <Switch
@@ -242,7 +274,7 @@ async function createOrder() {
                 un-checked-children="关闭"
               />
             </Form.Item>
-            <Form.Item label="支付宝 App 网关 ID">
+            <Form.Item label="支付宝网关 ID">
               <Select
                 v-model:value="paymentConfig.alipayGatewayId"
                 :disabled="!paymentConfig.enabled"
@@ -251,8 +283,8 @@ async function createOrder() {
               />
             </Form.Item>
             <Form.Item
-              label="微信 App 支付"
-              extra="仅允许平台提供 App 兼容的微信网关。"
+              label="微信支付"
+              extra="使用共用通道，仍仅允许平台提供 App 兼容的微信网关。"
             >
               <Switch
                 v-model:checked="paymentConfig.wechatEnabled"
@@ -261,7 +293,7 @@ async function createOrder() {
                 un-checked-children="关闭"
               />
             </Form.Item>
-            <Form.Item label="微信 App 网关 ID">
+            <Form.Item label="微信网关 ID">
               <Input
                 v-model:value="paymentConfig.wechatGatewayId"
                 :disabled="!paymentConfig.enabled"
@@ -285,54 +317,64 @@ async function createOrder() {
       <Card :bordered="false" class="section-card" title="接口信息">
         <Descriptions :column="1" bordered size="small">
           <Descriptions.Item label="接口地址">{{ apiBase }}</Descriptions.Item>
-          <Descriptions.Item label="统一下单"
-            >POST /pay/create</Descriptions.Item
-          >
-          <Descriptions.Item label="订单查询"
-            >POST /pay/query</Descriptions.Item
-          >
-          <Descriptions.Item label="订单退款"
-            >POST /pay/refund</Descriptions.Item
-          >
-          <Descriptions.Item label="异步回调"
-            >服务端接收 notify_url，并返回 success</Descriptions.Item
-          >
+          <Descriptions.Item label="统一下单">
+            POST /pay/create
+          </Descriptions.Item>
+          <Descriptions.Item label="订单查询">
+            POST /pay/query
+          </Descriptions.Item>
+          <Descriptions.Item label="订单退款">
+            POST /pay/refund
+          </Descriptions.Item>
+          <Descriptions.Item label="异步回调">
+            服务端接收 notify_url，并返回 success
+          </Descriptions.Item>
           <Descriptions.Item label="签名方式">MD5</Descriptions.Item>
         </Descriptions>
       </Card>
       <Card :bordered="false" class="section-card" title="测试下单">
-        <Form class="order-form" layout="vertical"
-          ><div class="form-grid">
-            <Form.Item label="商户订单号"
-              ><Input v-model:value="form.outTradeNo" placeholder="请输入商户订单号"
-            /></Form.Item>
-            <Form.Item label="金额（元）"
-              ><Input v-model:value="form.totalAmount" placeholder="请输入订单金额"
-            /></Form.Item>
-            <Form.Item label="支付通道"
-              ><Select
+        <Form class="order-form" layout="vertical">
+          <div class="form-grid">
+            <Form.Item label="商户订单号">
+              <Input
+                v-model:value="form.outTradeNo"
+                placeholder="请输入商户订单号"
+              />
+            </Form.Item>
+            <Form.Item label="金额（元）">
+              <Input
+                v-model:value="form.totalAmount"
+                placeholder="请输入订单金额"
+              />
+            </Form.Item>
+            <Form.Item label="支付通道">
+              <Select
                 v-model:value="form.channelID"
                 :options="gatewayOptions"
                 placeholder="请选择支付通道"
                 @change="selectGateway"
-            /></Form.Item>
-            <Form.Item label="订单标题"
-              ><Input v-model:value="form.subject" placeholder="请输入订单标题"
-            /></Form.Item>
+              />
+            </Form.Item>
+            <Form.Item label="订单标题">
+              <Input
+                v-model:value="form.subject"
+                placeholder="请输入订单标题"
+              />
+            </Form.Item>
           </div>
-          <Button type="primary" :loading="loading" @click="createOrder"
-            >发起测试下单</Button
-          ></Form
-        >
+          <Button type="primary" :loading="loading" @click="createOrder">
+            发起测试下单
+          </Button>
+        </Form>
         <pre v-if="result" class="result">{{ result }}</pre>
       </Card>
       <Card :bordered="false" class="section-card" title="接入工具">
         <p class="tool-description">
           先在星之柠后台创建商户并获取商户号、商户密钥，再按通道配置回调地址。
         </p>
-        <Button type="primary" :href="docsUrl" target="_blank"
-          >打开星之柠 SDK 调试</Button
-        >
+        <Button type="primary" :href="docsUrl" target="_blank">
+          打开星之柠 SDK 调试
+        </Button>
       </Card>
     </div>
   </Page>

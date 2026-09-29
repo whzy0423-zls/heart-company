@@ -158,6 +158,13 @@ func (s *Server) adminAppOrderGrant(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Manual receipts use the same paid-amount commission snapshot as online
+	// payments. Keep it in this transaction so a ledger failure cannot leave a
+	// paid order and granted membership without its referral commissions.
+	if err := generateDistributionCommissionsTx(r.Context(), tx, before.ID, before.AppUserID, int64(before.Amount)); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "记录代理分成失败，请重试")
+		return
+	}
 	if err := tx.Commit(); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return

@@ -3419,6 +3419,18 @@ ALTER TABLE app_user_cards ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEF
 CREATE INDEX IF NOT EXISTS idx_app_user_cards_user ON app_user_cards(app_user_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_app_user_cards_primary ON app_user_cards(app_user_id) WHERE card_type = 'primary' AND status = 'active';
 
+-- ----- 成长画像：按人物卡持久化七天快照 -----
+CREATE TABLE IF NOT EXISTS app_growth_portrait_snapshots (
+  card_id           BIGINT PRIMARY KEY REFERENCES app_user_cards(id) ON DELETE CASCADE,
+  app_user_id       BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  source_update_time TEXT NOT NULL DEFAULT '',
+  payload           JSONB NOT NULL DEFAULT '{}'::jsonb,
+  generated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_growth_portrait_snapshots_user
+  ON app_growth_portrait_snapshots(app_user_id, generated_at DESC);
+
 -- ----- 九型测试与卡片：增量迁移（幂等，老库补列）-----
 ALTER TABLE app_quiz_questions   ADD COLUMN IF NOT EXISTS quiz_version  TEXT        NOT NULL DEFAULT 'v1';
 ALTER TABLE app_quiz_questions   ADD COLUMN IF NOT EXISTS update_time   TIMESTAMPTZ NOT NULL DEFAULT now();
@@ -3908,6 +3920,7 @@ CREATE TABLE IF NOT EXISTS app_orders (
   provider_trade_no TEXT,
   provider_status  TEXT,
   pay_url          TEXT,
+  web_return_url   TEXT NOT NULL DEFAULT '',
   last_query_at    TIMESTAMPTZ,
   payment_error    TEXT,
   duration_days    INT NOT NULL DEFAULT 0,
@@ -3937,6 +3950,7 @@ ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS gateway_id TEXT;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS provider_trade_no TEXT;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS provider_status TEXT;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS pay_url TEXT;
+ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS web_return_url TEXT NOT NULL DEFAULT '';
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS last_query_at TIMESTAMPTZ;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS payment_error TEXT;
 ALTER TABLE app_orders ADD COLUMN IF NOT EXISTS duration_days INT NOT NULL DEFAULT 0;
@@ -5596,3 +5610,65 @@ ALTER TABLE distribution_settlements ADD COLUMN IF NOT EXISTS payment_reference 
 ALTER TABLE distribution_settlements ADD COLUMN IF NOT EXISTS action_reason TEXT NOT NULL DEFAULT '';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_distribution_payment_reference ON distribution_settlements(payment_reference) WHERE payment_reference<>'';
 ALTER TABLE distribution_commission_records ADD COLUMN IF NOT EXISTS reversal_reason TEXT NOT NULL DEFAULT '';
+
+-- SVIP problem-solving follow-up: durable activity and one-time tasks.
+ALTER TABLE app_chat_messages ADD COLUMN IF NOT EXISTS problem_followup_revision BIGINT NOT NULL DEFAULT 0;
+-- Account-wide activity cancels older primary-session reminders even when a
+-- different session or device starts the next user turn.
+CREATE TABLE IF NOT EXISTS app_problem_followup_activity (
+  app_user_id BIGINT PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
+  session_id BIGINT NOT NULL REFERENCES app_chat_sessions(id) ON DELETE CASCADE,
+  revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0),
+  last_activity_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS app_problem_followup_jobs (
+  id BIGSERIAL PRIMARY KEY,
+  app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+  session_id BIGINT NOT NULL REFERENCES app_chat_sessions(id) ON DELETE CASCADE,
+  card_id BIGINT NOT NULL REFERENCES app_user_cards(id) ON DELETE CASCADE,
+  assistant_message_id BIGINT NOT NULL UNIQUE REFERENCES app_chat_messages(id) ON DELETE CASCADE,
+  activity_revision BIGINT NOT NULL CHECK (activity_revision > 0),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','classifying','waiting','delivering','sent','skipped','cancelled','failed')),
+  due_at TIMESTAMPTZ NOT NULL,
+  problem_summary TEXT NOT NULL DEFAULT '',
+  followup_text TEXT NOT NULL DEFAULT '',
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  claim_token TEXT NOT NULL DEFAULT '',
+  lease_until TIMESTAMPTZ,
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  followup_message_id BIGINT UNIQUE REFERENCES app_chat_messages(id) ON DELETE SET NULL,
+  notification_id BIGINT REFERENCES app_notifications(id) ON DELETE SET NULL,
+  sent_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_app_problem_followup_due
+  ON app_problem_followup_jobs(status,next_attempt_at,due_at,id)
+  WHERE status IN ('pending','classifying','waiting','delivering');
+CREATE INDEX IF NOT EXISTS idx_app_problem_followup_user_active
+  ON app_problem_followup_jobs(app_user_id,activity_revision)
+  WHERE status IN ('pending','classifying','waiting','delivering');
+
+-- Add the SVIP-only followup capability without rewriting prices, quotas,
+-- custom feature text, or an explicit administrator false. The canonical
+-- svip row is the runtime switch inherited by every SVIP billing cycle.
+UPDATE app_plans
+SET feature_flags = feature_flags || jsonb_build_object(
+      'problemFollowup', plan_level = 'svip'
+    ),
+    update_time = now()
+WHERE NOT (feature_flags ? 'problemFollowup');
+
+UPDATE app_plans
+SET features = features || '["问题解决跟进（30 分钟未回复，跟进一次）"]'::jsonb,
+    update_time = now()
+WHERE plan_level = 'svip'
+  AND feature_flags->'problemFollowup' = 'true'::jsonb
+  AND COALESCE((SELECT CASE WHEN feature_flags ? 'problemFollowup'
+      THEN feature_flags->'problemFollowup' = 'true'::jsonb ELSE true END
+      FROM app_plans WHERE code = 'svip'), true)
+  AND jsonb_array_length(features) < 8
+  AND NOT EXISTS (
+    SELECT 1 FROM jsonb_array_elements_text(features) AS feature(value)
+    WHERE feature.value LIKE '%问题解决跟进%'
+  );

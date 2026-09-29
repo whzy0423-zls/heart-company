@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { formatYuan } from './distribution-format';
+import { distributionAnalyticsScope } from './distribution-analytics-scope';
+import { useDistributionAnalytics } from './distribution-analytics-loader';
 import type { Dayjs } from 'dayjs';
 
 import type { AppCustomer } from '#/api';
@@ -7,7 +9,6 @@ import type {
   DistributionAgent,
   DistributionAnalytics,
   DistributionAnalyticsAgentRanking,
-  AgentDistributionAnalytics,
 } from '#/api/core/distribution';
 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
@@ -86,13 +87,24 @@ const emptyAnalytics: DistributionAnalytics = {
 };
 
 const agents = ref<DistributionAgent[]>([]);
-const analytics = ref<DistributionAnalytics>(emptyAnalytics);
-const agentAnalytics = ref<AgentDistributionAnalytics | null>(null);
 const currentAgent = ref<DistributionAgent | null>(null);
 const datePreset = ref<'custom' | 'last7' | 'today' | 'yesterday'>('last7');
 const customDateRange = ref<[Dayjs, Dayjs]>([dayjs().subtract(6, 'day'), dayjs()]);
+const {
+  analytics,
+  agentAnalytics,
+  analyticsScope,
+  analyticsLoading,
+  load: fetchAnalytics,
+  dispose: disposeAnalytics,
+} = useDistributionAnalytics({
+  initialAnalytics: emptyAnalytics,
+  initialScope: queryAnalyticsScope(),
+  loadAdmin: getDistributionAnalyticsApi,
+  loadAgent: getAgentDistributionAnalyticsApi,
+  onError: () => message.error('经营分析加载失败'),
+});
 const loading = ref(false);
-const analyticsLoading = ref(false);
 const creating = ref(false);
 const actionLoadingId = ref<number | null>(null);
 const createAgentModalOpen = ref(false);
@@ -176,16 +188,13 @@ const childAgentsForSelectedParent = computed(() => {
     (item) => item.parentAgentId === selectedParentAgent.value?.id,
   );
 });
-const generatedAgentCodePreview = computed(() =>
-  selectedCustomerId.value ? `A${selectedCustomerId.value}` : '选择客户后由后台自动生成',
-);
 const analyticsSummary = computed(() => agentAnalytics.value?.summary ?? analytics.value.summary);
 const userConsumptionRows = computed(() => agentAnalytics.value?.users ?? []);
 const orderRows = computed(() => agentAnalytics.value?.orders ?? []);
 const businessMetricCards = computed(() => [
   {
     color: '#2563EB',
-    title: '累计分成金额',
+    title: analyticsScope.value.commissionTitle,
     value: formatYuan(analyticsSummary.value.totalCommissionAmount),
   },
   {
@@ -232,12 +241,12 @@ const trendChartOption = computed(() => ({
     {
       barMaxWidth: 28,
       data: (agentAnalytics.value?.trend ?? analytics.value.trend).map((item) => item.orderAmount / 100),
-      name: '订单金额(元)',
+      name: '订单金额',
       type: 'bar',
     },
     {
       data: (agentAnalytics.value?.trend ?? analytics.value.trend).map((item) => item.commissionAmount / 100),
-      name: '分成金额(元)',
+      name: '分成金额',
       smooth: true,
       type: 'line',
     },
@@ -335,21 +344,13 @@ function exportDistributionExcel(kind: 'orders' | 'users') {
   ]);
 }
 
-function dateFilterParams() {
-  const today = dayjs();
-  if (datePreset.value === 'today') {
-    const date = today.format('YYYY-MM-DD');
-    return { endDate: date, startDate: date };
-  }
-  if (datePreset.value === 'yesterday') {
-    const date = today.subtract(1, 'day').format('YYYY-MM-DD');
-    return { endDate: date, startDate: date };
-  }
-  if (datePreset.value === 'custom') {
-    const [start, end] = customDateRange.value;
-    return { endDate: end.format('YYYY-MM-DD'), startDate: start.format('YYYY-MM-DD') };
-  }
-  return { endDate: today.format('YYYY-MM-DD'), startDate: today.subtract(6, 'day').format('YYYY-MM-DD') };
+function queryAnalyticsScope() {
+  return distributionAnalyticsScope(
+    isAgentBackoffice.value,
+    datePreset.value,
+    customDateRange.value,
+    dayjs(),
+  );
 }
 
 function isRankingMoneyColumn(dataIndex: unknown) {
@@ -464,10 +465,9 @@ async function searchAppCustomers(keyword = '') {
   customerSearching.value = true;
   try {
     if (isAgentBackoffice.value) {
-      if (!agentAnalytics.value) {
-        agentAnalytics.value = await getAgentDistributionAnalyticsApi(dateFilterParams());
-      }
-      customerOptions.value = (agentAnalytics.value?.users ?? [])
+      const result = agentAnalytics.value ?? await getAgentDistributionAnalyticsApi(queryAnalyticsScope().params);
+      if (currentRequestId !== customerSearchRequestId) return;
+      customerOptions.value = result.users
         .filter((item) => item.directAgentId === currentAgent.value?.id && !customerIsExistingAgent(item.id))
         .map((item) => ({
           account: '',
@@ -526,18 +526,7 @@ async function load() {
 }
 
 async function loadAnalytics() {
-  analyticsLoading.value = true;
-  try {
-    if (isAgentBackoffice.value) {
-      agentAnalytics.value = await getAgentDistributionAnalyticsApi(dateFilterParams());
-    } else {
-      analytics.value = await getDistributionAnalyticsApi();
-      agentAnalytics.value = null;
-    }
-  } catch {
-    message.error('经营分析加载失败');
-  } finally {
-    analyticsLoading.value = false;
+  if (await fetchAnalytics(queryAnalyticsScope())) {
     await nextTick();
     requestAnimationFrame(renderTrendChart);
   }
@@ -601,6 +590,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  disposeAnalytics();
   window.removeEventListener('resize', handleResize);
   trendChart?.dispose();
   trendChart = undefined;
@@ -639,18 +629,21 @@ onBeforeUnmount(() => {
         <template #title>经营数据分析</template>
         <template #extra>
           <Space wrap>
-            <Button :type="datePreset === 'today' ? 'primary' : 'default'" @click="datePreset = 'today'; loadAnalytics()">今日</Button>
-            <Button :type="datePreset === 'yesterday' ? 'primary' : 'default'" @click="datePreset = 'yesterday'; loadAnalytics()">昨日</Button>
-            <Button :type="datePreset === 'last7' ? 'primary' : 'default'" @click="datePreset = 'last7'; loadAnalytics()">近7天</Button>
-            <DatePicker.RangePicker
-              v-model:value="customDateRange"
-              :allow-clear="false"
-              :placeholder="['开始日期', '结束日期']"
-              @change="datePreset = 'custom'; loadAnalytics()"
-            />
+            <template v-if="isAgentBackoffice">
+              <Button :type="datePreset === 'today' ? 'primary' : 'default'" @click="datePreset = 'today'; loadAnalytics()">今日</Button>
+              <Button :type="datePreset === 'yesterday' ? 'primary' : 'default'" @click="datePreset = 'yesterday'; loadAnalytics()">昨日</Button>
+              <Button :type="datePreset === 'last7' ? 'primary' : 'default'" @click="datePreset = 'last7'; loadAnalytics()">近7天</Button>
+              <DatePicker.RangePicker
+                v-model:value="customDateRange"
+                :allow-clear="false"
+                :placeholder="['开始日期', '结束日期']"
+                @change="datePreset = 'custom'; loadAnalytics()"
+              />
+            </template>
             <Button :loading="analyticsLoading" @click="loadAnalytics">刷新数据</Button>
           </Space>
         </template>
+        <Typography.Paragraph type="secondary">{{ analyticsScope.description }}</Typography.Paragraph>
         <Row :gutter="[16, 16]">
           <Col v-for="item in businessMetricCards" :key="item.title" :lg="6" :md="12" :xs="24">
             <div class="business-metric" :style="{ '--metric-color': item.color }">
@@ -661,7 +654,7 @@ onBeforeUnmount(() => {
         </Row>
         <Row :gutter="[16, 16]" class="analytics-content">
           <Col :lg="15" :xs="24">
-            <Card :bordered="false" class="inner-card" title="近 30 天经营趋势">
+            <Card :bordered="false" class="inner-card" :title="analyticsScope.trendTitle">
               <div class="trend-chart-wrap">
                 <div ref="trendChartRef" class="trend-chart"></div>
                 <div v-if="analyticsLoading" class="chart-mask">正在更新经营数据...</div>
@@ -1000,7 +993,7 @@ onBeforeUnmount(() => {
 
             <Form.Item label="代理号由后台自动生成">
               <Space>
-                <Tag color="green">{{ generatedAgentCodePreview }}</Tag>
+                <Tag color="green">创建后由后台生成</Tag>
                 <Typography.Text type="secondary">
                   开通成功后以列表返回的代理号为准。
                 </Typography.Text>

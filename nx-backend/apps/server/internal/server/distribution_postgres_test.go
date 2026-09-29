@@ -40,7 +40,13 @@ func distributionDatabase(t *testing.T) *sql.DB {
 	if start < 0 {
 		t.Fatal("distribution schema missing")
 	}
-	if _, err = db.Exec(string(raw[start:])); err != nil {
+	// This focused fixture supplies only distribution dependencies. Later
+	// feature migrations in schema.sql must not pull chat/knowledge tables in.
+	end := strings.Index(string(raw[start:]), "-- SVIP problem-solving follow-up:")
+	if end < 0 {
+		t.Fatal("distribution schema end marker missing")
+	}
+	if _, err = db.Exec(string(raw[start : start+end])); err != nil {
 		t.Fatal(err)
 	}
 	_, err = db.Exec(`INSERT INTO distribution_agents(id,app_user_id,agent_code,level,parent_agent_id,root_agent_id,agent_path) VALUES

@@ -588,6 +588,9 @@ func (c *appBillingTestConn) ExecContext(_ context.Context, query string, args [
 }
 
 func (c *appBillingTestConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if strings.Contains(query, "SELECT id FROM app_users") && strings.Contains(query, "FOR UPDATE") {
+		return &appBillingTestRows{columns: []string{"id"}, values: [][]driver.Value{{int64(7)}}}, nil
+	}
 	if strings.Contains(query, "FROM site_configs") {
 		return &appBillingTestRows{columns: []string{"config"}}, nil
 	}

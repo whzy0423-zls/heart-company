@@ -6,7 +6,7 @@ from PIL import Image, ImageDraw
 SIZE = 81
 STROKE = 5
 RADIUS = 3
-COLORS = {"default": "#7A828C", "active": "#202A37"}
+COLORS = {"default": "#85877D", "active": "#A55C3B"}
 OUTPUT = Path(__file__).resolve().parent.parent / "src/static/tabbar"
 
 
@@ -55,6 +55,16 @@ def enterprise(color):
     return image
 
 
+def booking(color):
+    image, draw, color = canvas(color)
+    rounded_outline(draw, (15, 21, 66, 67), color, 7, STROKE)
+    line(draw, [(28, 15), (28, 29)], color, 4)
+    line(draw, [(53, 15), (53, 29)], color, 4)
+    line(draw, [(15, 36), (66, 36)], color, 4)
+    line(draw, [(28, 48), (34, 54), (51, 44)], color, 4)
+    return image
+
+
 def profile(color):
     image, draw, color = canvas(color)
     # Person silhouette rendered as two outline contours.
@@ -69,6 +79,7 @@ ICONS = {
     "classroom": classroom,
     "enterprise": enterprise,
     "profile": profile,
+    "booking": booking,
 }
 
 

@@ -285,6 +285,11 @@ func (s *Server) appBillingEntitlements(w http.ResponseWriter, r *http.Request) 
 		plan.CompanionEnabled = canonical.CompanionEnabled
 		plan.MemberPosterEnabled = canonical.MemberPosterEnabled
 	}
+	// Keep the historical canonical overlay for all existing capabilities;
+	// this additive SVIP feature alone honors the administrator's level switch.
+	problemFollowup, _ := s.problemFollowupEnabled(r.Context(), resolvedPlan)
+	plan.FeatureFlags["problemFollowup"] = problemFollowup
+	plan.Features = normalizeProblemFollowupFeatureCopy(plan.Features, problemFollowup)
 	storyQuota := s.lifeStoryQuotaForPlan(r.Context(), userInfo.ID, planCode)
 	chatQuota := newAppChatQuotaSnapshot(plan.DailyChatLimit, 0, 0)
 	if s.appChatQuota != nil {
@@ -294,6 +299,7 @@ func (s *Server) appBillingEntitlements(w http.ResponseWriter, r *http.Request) 
 	}
 	var pendingOrder *appOrderResp
 	if order, found, err := s.findPendingAppOrder(r.Context(), userInfo.ID); err == nil && found {
+		order.BillingSurface = appBillingSurface(r)
 		enriched, enrichErr := s.enrichCustomerServiceOrder(r.Context(), userInfo.ID, order)
 		if enrichErr == nil {
 			pendingOrder = &enriched
@@ -367,7 +373,8 @@ func (s *Server) appBillingEntitlements(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) appBillingProducts(w http.ResponseWriter, r *http.Request) {
-	mode, err := s.loadAppPaymentMode(r.Context())
+	surface := appBillingSurface(r)
+	mode, err := s.appBillingMode(r.Context(), surface)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "读取支付模式失败")
 		return
@@ -376,6 +383,9 @@ func (s *Server) appBillingProducts(w http.ResponseWriter, r *http.Request) {
 	plans, err := s.loadAppPlans(r.Context())
 	if err != nil {
 		plans = defaultAppPlans()
+		if !errors.Is(err, sql.ErrNoRows) {
+			plans = applyProblemFollowupPlanAvailability(plans, false)
+		}
 	}
 	products := make([]appProductResp, 0, 3)
 	for _, plan := range plans {
@@ -384,7 +394,11 @@ func (s *Server) appBillingProducts(w http.ResponseWriter, r *http.Request) {
 		if plan.Code == "free" || plan.Code == "svip" {
 			continue
 		}
-		products = append(products, appProductForPaymentMode(mode, cfg, appProductFromPlan(plan)))
+		product := appProductForPaymentMode(mode, cfg, appProductFromPlan(plan))
+		if surface == appBillingSurfaceWeb && product.Enabled && !s.webBillingReturnConfigured(cfg) {
+			product = appXZNProductWithStatus(product, "web_return_not_configured", "H5 支付返回地址尚未配置，请联系管理员")
+		}
+		products = append(products, product)
 	}
 	httpx.OK(w, products)
 }
@@ -467,6 +481,7 @@ type appOrderCreateReq struct {
 	UpgradeFromPlan     string `json:"upgradeFromPlan"`
 	AgentCode           string `json:"agentCode"`
 	ExpectedAmountCents *int   `json:"expectedAmountCents"`
+	WebReturnURL        string `json:"webReturnUrl"`
 }
 
 type appOrderResp struct {
@@ -491,6 +506,8 @@ type appOrderResp struct {
 	LastQueryAt          string         `json:"lastQueryAt,omitempty"`
 	PaymentError         string         `json:"paymentError,omitempty"`
 	Payment              map[string]any `json:"payment,omitempty"`
+	BillingSurface       string         `json:"-"`
+	WebReturnURL         string         `json:"-"`
 	PayParams            map[string]any `json:"payParams,omitempty"`
 	Message              string         `json:"message"`
 	PurchaseMode         string         `json:"purchaseMode"`
@@ -809,14 +826,25 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusConflict, "优惠价格已变化，请刷新后重试")
 		return
 	}
+	surface := appBillingSurface(r)
+	mode, err := s.appBillingMode(r.Context(), surface)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "读取支付模式失败")
+		return
+	}
 	if existing, found, err := s.findPendingAppOrder(r.Context(), userInfo.ID); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	} else if found {
+		if !appOrderCheckoutCompatible(surface, mode, existing) {
+			httpx.Fail(w, http.StatusConflict, appCrossSurfacePendingMessage)
+			return
+		}
 		if !appOrderMatchesPricing(existing, productID, pricing.PayableCents, pricing.UpgradeFromPlan, pricing.DiscountAgentCode) {
 			httpx.Fail(w, http.StatusConflict, "已有待支付订单，请先取消后重新下单")
 			return
 		}
+		existing.BillingSurface = surface
 		enriched, enrichErr := s.enrichCustomerServiceOrder(r.Context(), userInfo.ID, existing)
 		if enrichErr != nil {
 			httpx.Fail(w, http.StatusInternalServerError, "server error")
@@ -825,16 +853,11 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 		httpx.OK(w, enriched)
 		return
 	}
-	mode, err := s.loadAppPaymentMode(r.Context())
-	if err != nil {
-		httpx.Fail(w, http.StatusInternalServerError, "读取支付模式失败")
-		return
-	}
+	cfg, _ := s.loadXZNConfig(r.Context())
 	if mode == appPurchaseModeCustomerService {
 		s.createCustomerServiceAppOrder(w, r, userInfo.ID, productID, title, durationDays, pricing)
 		return
 	}
-	cfg, _ := s.loadXZNConfig(r.Context())
 	if strings.TrimSpace(body.PayChannel) == "" && cfg.Enabled && xznCredentialsConfigured(cfg) {
 		httpx.Fail(w, http.StatusBadRequest, "请选择支付渠道")
 		return
@@ -857,13 +880,28 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	outTradeNo := fmt.Sprintf("app%d-%s-%d", userInfo.ID, productID, time.Now().UnixNano())
+	returnURL := appXZNOrderReturnURL(cfg.ReturnURL, outTradeNo)
+	webReturnURL := ""
+	if surface == appBillingSurfaceWeb {
+		webReturnURL, err = s.webBillingOrderReturnURL(cfg, body.WebReturnURL, outTradeNo)
+		if err != nil {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		returnURL = webReturnURL
+	}
 	if online {
-		if _, err := s.db.ExecContext(r.Context(), `
-				INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, base_price_cents, discount_cents, discount_snapshot, duration_days, status, purchase_mode, payment_provider, pay_channel, gateway_id, upgrade_from_plan, upgrade_credit_cents, upgrade_quote_snapshot)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8::jsonb, '{}'::jsonb), $9, 'pending', 'xzn', 'xzn', $10, $11, $12, $13, COALESCE($14::jsonb, '{}'::jsonb))`,
-			outTradeNo, userInfo.ID, productID, title, pricing.PayableCents, pricing.BasePriceCents, pricing.DiscountCents, nullableJSONArgument(pricing.DiscountSnapshot), durationDays, payChannel, gatewayID, pricing.UpgradeFromPlan, pricing.UpgradeCreditCents, nullableJSONArgument(pricing.UpgradeQuoteSnapshot)); err != nil {
+		if err := s.reserveAppBillingOrder(r.Context(), userInfo.ID, `
+				INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, base_price_cents, discount_cents, discount_snapshot, duration_days, status, purchase_mode, payment_provider, pay_channel, gateway_id, upgrade_from_plan, upgrade_credit_cents, upgrade_quote_snapshot, web_return_url)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8::jsonb, '{}'::jsonb), $9, 'pending', 'xzn', 'xzn', $10, $11, $12, $13, COALESCE($14::jsonb, '{}'::jsonb), $15)`,
+			outTradeNo, userInfo.ID, productID, title, pricing.PayableCents, pricing.BasePriceCents, pricing.DiscountCents, nullableJSONArgument(pricing.DiscountSnapshot), durationDays, payChannel, gatewayID, pricing.UpgradeFromPlan, pricing.UpgradeCreditCents, nullableJSONArgument(pricing.UpgradeQuoteSnapshot), webReturnURL); err != nil {
 			if existing, found, findErr := s.findPendingAppOrder(r.Context(), userInfo.ID); findErr == nil && found {
+				if !appOrderCheckoutCompatible(surface, mode, existing) {
+					httpx.Fail(w, http.StatusConflict, appCrossSurfacePendingMessage)
+					return
+				}
 				if appOrderMatchesPricing(existing, productID, pricing.PayableCents, pricing.UpgradeFromPlan, pricing.DiscountAgentCode) {
+					existing.BillingSurface = surface
 					if enriched, enrichErr := s.enrichCustomerServiceOrder(r.Context(), userInfo.ID, existing); enrichErr == nil {
 						httpx.OK(w, enriched)
 						return
@@ -890,7 +928,7 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 			Attach:      strconv.FormatInt(userInfo.ID, 10),
 			ClientIP:    s.clientIP(r),
 			NotifyURL:   cfg.NotifyURL,
-			ReturnURL:   appXZNOrderReturnURL(cfg.ReturnURL, outTradeNo),
+			ReturnURL:   returnURL,
 		})
 		if createErr != nil {
 			_, _ = s.db.ExecContext(r.Context(), `UPDATE app_orders SET status='failed', payment_error=$2, update_time=now() WHERE out_trade_no=$1`, outTradeNo, createErr.Error())
@@ -922,6 +960,8 @@ func (s *Server) appBillingCreateOrder(w http.ResponseWriter, r *http.Request) {
 			ProviderTradeNo:    created.TradeNo,
 			ProviderStatus:     "WAIT_BUYER_PAY",
 			PayURL:             created.PayURL,
+			BillingSurface:     surface,
+			WebReturnURL:       webReturnURL,
 		})
 		if err != nil {
 			httpx.Fail(w, http.StatusInternalServerError, "读取支付订单失败")
@@ -942,10 +982,14 @@ func nullableJSONArgument(value []byte) any {
 
 func (s *Server) createCustomerServiceAppOrder(w http.ResponseWriter, r *http.Request, appUserID int64, productID, title string, durationDays int, pricing appOrderPricing) {
 	outTradeNo := fmt.Sprintf("app%d-%s-%d", appUserID, productID, time.Now().UnixNano())
-	if _, err := s.db.ExecContext(r.Context(),
+	if err := s.reserveAppBillingOrder(r.Context(), appUserID,
 		`INSERT INTO app_orders (out_trade_no, app_user_id, product_id, title, amount, base_price_cents, discount_cents, discount_snapshot, duration_days, status, purchase_mode, payment_provider, upgrade_from_plan, upgrade_credit_cents, upgrade_quote_snapshot)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8::jsonb, '{}'::jsonb), $9, 'pending_confirmation', 'customer_service', 'manual', $10, $11, COALESCE($12::jsonb, '{}'::jsonb))`,
 		outTradeNo, appUserID, productID, title, pricing.PayableCents, pricing.BasePriceCents, pricing.DiscountCents, nullableJSONArgument(pricing.DiscountSnapshot), durationDays, pricing.UpgradeFromPlan, pricing.UpgradeCreditCents, nullableJSONArgument(pricing.UpgradeQuoteSnapshot)); err != nil {
+		if errors.Is(err, errAppOrderAlreadyPending) {
+			httpx.Fail(w, http.StatusConflict, appCrossSurfacePendingMessage)
+			return
+		}
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
@@ -961,6 +1005,7 @@ func (s *Server) createCustomerServiceAppOrder(w http.ResponseWriter, r *http.Re
 		UpgradeCreditCents: pricing.UpgradeCreditCents,
 		DurationDays:       durationDays,
 		Status:             appOrderPendingConfirmation,
+		BillingSurface:     appBillingSurface(r),
 	})
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
@@ -1003,6 +1048,7 @@ func (s *Server) appBillingOrderStatus(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusNotFound, "order not found")
 		return
 	}
+	resp.BillingSurface = appBillingSurface(r)
 	s.loadAppOrderPaymentMeta(r.Context(), userInfo.ID, outTradeNo, &resp)
 	if resp.PaymentProvider == appPaymentProviderXZN && (resp.Status == "pending" || resp.Status == "paying") {
 		if _, reconcileErr := s.reconcileXZNAppOrder(r.Context(), outTradeNo); reconcileErr != nil {
@@ -1010,6 +1056,7 @@ func (s *Server) appBillingOrderStatus(w http.ResponseWriter, r *http.Request) {
 		}
 		if refreshed, refreshErr := s.loadAppOrderByOutTradeNo(r.Context(), userInfo.ID, outTradeNo); refreshErr == nil {
 			resp = refreshed
+			resp.BillingSurface = appBillingSurface(r)
 		}
 	}
 	enriched, err := s.enrichCustomerServiceOrder(r.Context(), userInfo.ID, resp)
@@ -1076,7 +1123,8 @@ func (s *Server) appBillingCancelOrder(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
-	enriched, err := s.enrichOnlineOrder(r.Context(), userInfo.ID, order)
+	order.BillingSurface = appBillingSurface(r)
+	enriched, err := s.enrichCustomerServiceOrder(r.Context(), userInfo.ID, order)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
@@ -1084,12 +1132,7 @@ func (s *Server) appBillingCancelOrder(w http.ResponseWriter, r *http.Request) {
 	httpx.OK(w, enriched)
 }
 
-func (s *Server) findPendingAppOrder(ctx context.Context, appUserID int64) (appOrderResp, bool, error) {
-	if err := s.expireStaleAppOrders(ctx, appUserID); err != nil {
-		return appOrderResp{}, false, err
-	}
-	var resp appOrderResp
-	err := s.db.QueryRowContext(ctx, `
+const appPendingOrderQuery = `
 		SELECT p.out_trade_no, p.product_id, p.title, p.amount, p.status
 		FROM app_orders p
 		WHERE p.app_user_id=$1 AND (p.status='pending_confirmation' OR (p.payment_provider='xzn' AND p.status IN ('pending','paying')))
@@ -1097,8 +1140,15 @@ func (s *Server) findPendingAppOrder(ctx context.Context, appUserID int64) (appO
 			SELECT 1 FROM app_orders resolved
 			WHERE resolved.app_user_id=p.app_user_id AND resolved.status='paid'
 			  AND (resolved.create_time>p.create_time OR (resolved.create_time=p.create_time AND resolved.id>p.id))
-		  )
-		ORDER BY p.create_time DESC, p.id DESC LIMIT 1`, appUserID).Scan(
+			)
+		ORDER BY p.create_time DESC, p.id DESC LIMIT 1`
+
+func (s *Server) findPendingAppOrder(ctx context.Context, appUserID int64) (appOrderResp, bool, error) {
+	if err := s.expireStaleAppOrders(ctx, appUserID); err != nil {
+		return appOrderResp{}, false, err
+	}
+	var resp appOrderResp
+	err := s.db.QueryRowContext(ctx, appPendingOrderQuery, appUserID).Scan(
 		&resp.OutTradeNo, &resp.ProductID, &resp.Title, &resp.Amount, &resp.Status,
 	)
 	if err == sql.ErrNoRows {
@@ -1138,6 +1188,16 @@ func (s *Server) enrichCustomerServiceOrder(ctx context.Context, appUserID int64
 		return s.enrichOnlineOrder(ctx, appUserID, resp)
 	}
 	resp = appCustomerServiceOrder(resp)
+	if resp.BillingSurface == appBillingSurfaceWeb {
+		// Keep the order visible and cancellable, but never turn a Web purchase
+		// into an accidental native customer-service checkout.
+		resp.CustomerServiceQRURL = ""
+		if resp.Status == appOrderPendingConfirmation {
+			resp.ConfigurationStatus = "checkout_surface_mismatch"
+			resp.DisabledReason = appCrossSurfacePendingMessage
+			resp.Message = appCrossSurfacePendingMessage
+		}
+	}
 	if resp.DurationDays <= 0 {
 		resp.DurationDays, _ = membershipDurationDays(resp.ProductID)
 	}
@@ -1180,6 +1240,10 @@ func (s *Server) enrichOnlineOrder(ctx context.Context, appUserID int64, resp ap
 		resp.DisabledReason = "在线支付暂不可用"
 	}
 	if resp.PayURL != "" {
+		returnURL := resp.WebReturnURL
+		if returnURL == "" && resp.BillingSurface != appBillingSurfaceWeb {
+			returnURL = appXZNOrderReturnURL(cfg.ReturnURL, resp.OutTradeNo)
+		}
 		resp.Payment = map[string]any{
 			"type":       "web",
 			"mode":       "h5",
@@ -1187,7 +1251,7 @@ func (s *Server) enrichOnlineOrder(ctx context.Context, appUserID int64, resp ap
 			"payChannel": resp.PayChannel,
 			"url":        resp.PayURL,
 			"payUrl":     resp.PayURL,
-			"returnUrl":  appXZNOrderReturnURL(cfg.ReturnURL, resp.OutTradeNo),
+			"returnUrl":  returnURL,
 		}
 	}
 	switch {
@@ -1209,6 +1273,16 @@ func (s *Server) enrichOnlineOrder(ctx context.Context, appUserID int64, resp ap
 		resp.Message = "请在支付页面完成付款"
 	default:
 		resp.Message = "支付未完成，请稍后重试"
+	}
+	if !appOrderCheckoutCompatible(resp.BillingSurface, appPurchaseModeXZN, resp) {
+		resp.PayEnabled = false
+		resp.PayURL = ""
+		resp.Payment = nil
+		if resp.Status == "pending" || resp.Status == "paying" {
+			resp.ConfigurationStatus = "checkout_surface_mismatch"
+			resp.DisabledReason = appCrossSurfacePendingMessage
+			resp.Message = appCrossSurfacePendingMessage
+		}
 	}
 	return s.enrichOrderDates(ctx, appUserID, resp)
 }
@@ -1251,6 +1325,12 @@ func (s *Server) loadAppOrderPaymentMeta(ctx context.Context, appUserID int64, o
 	resp.PurchaseMode = resolveAppOrderPurchaseMode(purchaseMode, provider)
 	resp.PaymentProvider, resp.PayChannel, resp.GatewayID = provider, displayAppPayChannel(channel), gateway
 	resp.ProviderTradeNo, resp.ProviderStatus, resp.PayURL, resp.PaymentError = tradeNo, providerStatus, payURL, paymentError
+	// Separate read preserves the legacy payment metadata contract. A Web
+	// order's verified return is immutable once sent to the payment provider.
+	var webReturnURL string
+	if err := s.db.QueryRowContext(ctx, `SELECT web_return_url FROM app_orders WHERE app_user_id=$1 AND out_trade_no=$2`, appUserID, outTradeNo).Scan(&webReturnURL); err == nil {
+		resp.WebReturnURL = webReturnURL
+	}
 	if lastQueryAt.Valid {
 		resp.LastQueryAt = lastQueryAt.Time.Format(time.RFC3339)
 	}

@@ -27,6 +27,7 @@ type portraitResp struct {
 	GuidingQuestions     []string `json:"guidingQuestions,omitempty"`     // 引导问题
 	MainType             int      `json:"mainType,omitempty"`             // 主型 id
 	UpdatedAt            string   `json:"updatedAt,omitempty"`            // 更新时间，格式 YYYY/MM/DD HH:mm:ss
+	NextUpdateAt         string   `json:"nextUpdateAt,omitempty"`         // 下次自动刷新时间，格式 YYYY/MM/DD HH:mm:ss
 	membershipResourceMetadata
 	CareLevel       *int   `json:"careLevel,omitempty"`
 	CareLabel       string `json:"careLabel,omitempty"`
@@ -59,16 +60,19 @@ func (s *Server) appCardPortrait(w http.ResponseWriter, r *http.Request, userID 
 		httpx.Fail(w, http.StatusInternalServerError, "query failed")
 		return
 	}
-	resp := buildPortrait(card)
-	access, accessErr := s.cardMembershipResourceMetadata(
+	access, accessErr := s.portraitTrendMembershipResourceMetadata(
 		r.Context(), userID, id, "历史画像已保留，请升级后继续使用",
 	)
 	if accessErr != nil {
 		httpx.Fail(w, http.StatusInternalServerError, "membership access unavailable")
 		return
 	}
+	resp, portraitErr := s.portraitForCard(r.Context(), userID, card)
+	if portraitErr != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "portrait snapshot unavailable")
+		return
+	}
 	resp.membershipResourceMetadata = access
-	redactPortraitContent(&resp, access)
 	if s.appUsers != nil {
 		if care, careErr := s.appUsers.CareSnapshot(r.Context(), userID); careErr == nil {
 			resp.CareLevel = care.CareLevel
@@ -79,6 +83,8 @@ func (s *Server) appCardPortrait(w http.ResponseWriter, r *http.Request, userID 
 			resp.CareEvaluatedAt = care.CareEvaluatedAt
 		}
 	}
+	// Redact after all generated/snapshot/care fields have been assembled.
+	redactPortraitContent(&resp, access)
 	httpx.OK(w, resp)
 }
 
@@ -103,6 +109,12 @@ func redactPortraitContent(resp *portraitResp, access membershipResourceMetadata
 	resp.GrowthAdvice = nil
 	resp.AwarenessPrompts = nil
 	resp.GuidingQuestions = nil
+	resp.CareLevel = nil
+	resp.CareLabel = ""
+	resp.CareSummary = ""
+	resp.CareTrend = ""
+	resp.CareDataStatus = ""
+	resp.CareEvaluatedAt = ""
 }
 
 // buildPortrait 依据人物卡的主型，组装成长状态画像。

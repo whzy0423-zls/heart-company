@@ -12,8 +12,8 @@ const pageTitles = Object.fromEntries(
 )
 assert.equal(pageTitles['pages/index/index'], '首页', 'home navigation title should use the primary navigation label')
 assert.equal(pageTitles['pages/learn/learn'], '学习中心', 'learn navigation title should describe the learning center')
-assert.equal(pagesConfig.tabBar?.selectedColor, '#314052', 'selected tabs should use the current brand color')
-assert.equal(pagesConfig.tabBar?.backgroundColor, '#FFFDF8', 'native tab bar should use the warm surface color')
+assert.equal(pagesConfig.tabBar?.selectedColor, '#A55C3B', 'selected tabs should use the current brand color')
+assert.equal(pagesConfig.tabBar?.backgroundColor, '#FFFFFF', 'native tab bar should use the warm surface color')
 assert.equal(
   Object.hasOwn(pagesConfig.tabBar || {}, 'custom'),
   false,
@@ -25,26 +25,26 @@ assert.deepEqual(
     {
       pagePath: 'pages/index/index',
       text: '首页',
-      iconPath: 'static/tabbar/test.png',
-      selectedIconPath: 'static/tabbar/test-active-green.png',
+      iconPath: 'static/tabbar/home.png',
+      selectedIconPath: 'static/tabbar/home-active.png',
     },
     {
       pagePath: 'pages/learn/learn',
-      text: '学习',
-      iconPath: 'static/tabbar/learn.png',
-      selectedIconPath: 'static/tabbar/learn-active-green.png',
+      text: '日常',
+      iconPath: 'static/tabbar/classroom.png',
+      selectedIconPath: 'static/tabbar/classroom-active.png',
     },
     {
       pagePath: 'pages/booking/booking',
-      text: '预约',
+      text: '报名',
       iconPath: 'static/tabbar/booking.png',
-      selectedIconPath: 'static/tabbar/booking-active-green.png',
+      selectedIconPath: 'static/tabbar/booking-active.png',
     },
     {
       pagePath: 'pages/profile/profile',
       text: '我的',
       iconPath: 'static/tabbar/profile.png',
-      selectedIconPath: 'static/tabbar/profile-active-green.png',
+      selectedIconPath: 'static/tabbar/profile-active.png',
     },
   ],
   'native tab bar should expose the exact four primary destinations and icon assets',

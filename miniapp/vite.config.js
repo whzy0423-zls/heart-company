@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import uni from '@dcloudio/vite-plugin-uni'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { studioPreviewMedia } from './scripts/studio-preview-media.mjs'
 
 import {
   createWechatCustomPropertiesPlugin,
@@ -19,7 +20,7 @@ function loadSharedThemeTokens() {
 }
 
 export default defineConfig({
-  plugins: [uni()],
+  plugins: [uni(), studioPreviewMedia()],
   css: {
     postcss: {
       plugins: process.env.UNI_PLATFORM === 'mp-weixin'

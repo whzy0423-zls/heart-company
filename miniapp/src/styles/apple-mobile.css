@@ -1,12 +1,12 @@
 :root {
-  --nx-brand-900: #202A37;
-  --nx-brand-700: #314052;
-  --nx-accent-gold: #DFBC7F;
-  --nx-page-bg: #F5F3ED;
-  --nx-surface-soft: #FAF8F2;
-  --nx-text: #1D2733;
-  --nx-text-muted: #64748B;
-  --nx-border: #E0DDD4;
+  --nx-brand-900: #282A27;
+  --nx-brand-700: #A55C3B;
+  --nx-accent-gold: #D5AD85;
+  --nx-page-bg: #F7F5F0;
+  --nx-surface-soft: #F2EFE8;
+  --nx-text: #282A27;
+  --nx-text-muted: #72746B;
+  --nx-border: #E6E1D8;
   --nx-danger: #B42318;
   --nx-success: #157A55;
   --nx-mist-bg: var(--nx-page-bg);
@@ -22,7 +22,7 @@
   --booking-brand-shadow: rgba(32, 42, 55, 0.28);
 
   --nx-bg: var(--nx-page-bg);
-  --nx-surface: #FFFDF8;
+  --nx-surface: #FFFFFF;
   --nx-ink: var(--nx-text);
   --nx-muted: var(--nx-text-muted);
   --nx-blue: var(--nx-brand-700);

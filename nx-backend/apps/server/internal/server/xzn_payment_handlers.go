@@ -34,6 +34,7 @@ type xznPaymentConfig struct {
 	SignType        string `json:"signType"`
 	NotifyURL       string `json:"notifyURL"`
 	ReturnURL       string `json:"returnURL"`
+	WebReturnURL    string `json:"webReturnURL"`
 	ChannelID       string `json:"channelID"`
 	Enabled         bool   `json:"enabled"`
 	AlipayEnabled   bool   `json:"alipayEnabled"`
@@ -48,11 +49,15 @@ func (s *Server) xznPayConfig(w http.ResponseWriter, r *http.Request) {
 		cfg, _ := s.loadXZNConfig(r.Context())
 		httpx.OK(w, xznConfigResponse(cfg))
 	case http.MethodPut:
-		var input xznPaymentConfig
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&input) != nil {
+		var payload struct {
+			xznPaymentConfig
+			WebReturnURL *string `json:"webReturnURL"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&payload) != nil {
 			httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
 			return
 		}
+		input := payload.xznPaymentConfig
 		current, _ := s.loadXZNConfig(r.Context())
 		if strings.TrimSpace(input.Secret) == "" {
 			input.Secret = current.Secret
@@ -62,6 +67,13 @@ func (s *Server) xznPayConfig(w http.ResponseWriter, r *http.Request) {
 		input.ChannelID = strings.TrimSpace(input.ChannelID)
 		input.NotifyURL = strings.TrimSpace(input.NotifyURL)
 		input.ReturnURL = strings.TrimSpace(input.ReturnURL)
+		if payload.WebReturnURL == nil {
+			// Older admin clients omit this newly added field. An explicit empty
+			// value instead revokes the H5 return destination without touching App.
+			input.WebReturnURL = current.WebReturnURL
+		} else {
+			input.WebReturnURL = strings.TrimSpace(*payload.WebReturnURL)
+		}
 		input.AlipayGatewayID = strings.TrimSpace(input.AlipayGatewayID)
 		input.WechatGatewayID = strings.TrimSpace(input.WechatGatewayID)
 		if input.BaseURL == "" {
@@ -103,6 +115,12 @@ func (s *Server) xznPayConfig(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusBadRequest, "同步返回地址格式不正确")
 			return
 		}
+		if input.WebReturnURL != "" {
+			if _, err := parseXZNWebReturnURL(input.WebReturnURL); err != nil || !strings.HasPrefix(input.WebReturnURL, "https://") {
+				httpx.Fail(w, http.StatusBadRequest, "H5 返回地址必须是 HTTPS 地址且使用 #/billing 路由")
+				return
+			}
+		}
 		encrypted, err := encryptXZNSecret(input.Secret, s.env.JWTSecret)
 		if err != nil {
 			httpx.Fail(w, http.StatusInternalServerError, "保存密钥失败")
@@ -140,6 +158,7 @@ func xznConfigResponse(cfg xznPaymentConfig) map[string]any {
 		"signType":        cfg.SignType,
 		"notifyURL":       cfg.NotifyURL,
 		"returnURL":       cfg.ReturnURL,
+		"webReturnURL":    cfg.WebReturnURL,
 		"channelID":       cfg.ChannelID,
 		"enabled":         cfg.Enabled,
 		"alipayEnabled":   cfg.AlipayEnabled,
@@ -560,6 +579,7 @@ func (s *Server) loadXZNConfig(ctx context.Context) (xznPaymentConfig, error) {
 		SignType:        getenvDefault("XZN_SIGN_TYPE", "MD5"),
 		NotifyURL:       os.Getenv("XZN_NOTIFY_URL"),
 		ReturnURL:       os.Getenv("XZN_RETURN_URL"),
+		WebReturnURL:    os.Getenv("XZN_WEB_RETURN_URL"),
 		ChannelID:       os.Getenv("XZN_CHANNEL_ID"),
 		Enabled:         parseEnvBool("XZN_ENABLED"),
 		AlipayEnabled:   parseEnvBool("XZN_ALIPAY_ENABLED"),
