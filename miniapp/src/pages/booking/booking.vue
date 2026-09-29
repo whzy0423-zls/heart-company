@@ -2,6 +2,7 @@
 import { computed, ref, watch, nextTick } from 'vue'
 import { onShow, onHide, onUnload } from '@dcloudio/uni-app'
 import NxIcon from '../../components/NxIcon.vue'
+import NxImagePreview from '../../components/NxImagePreview.vue'
 import { ensureLogin } from '../../utils/auth'
 import { createBookingApi } from '../../api'
 import { userErrorMessage } from '../../utils/userMessage'
@@ -14,6 +15,7 @@ import { normalizeMiniappLearn } from '../../utils/miniappPages'
 import { STUDIO_COURSES, STUDIO_TEACHER } from '../../data/teacherStudio'
 import { UI_PREVIEW } from '../../utils/uiPreview'
 import { previewImage } from '../../utils/imagePreview'
+import { isWechatDevtools } from '../../utils/imagePreview'
 
 const kinds = [
   { value: 'course', label: '课程报名' },
@@ -41,6 +43,7 @@ const teacherAvatar = computed(() => {
   return /\/avatars\//i.test(avatar) ? '' : avatar
 })
 const teacherAvatarFailed = ref(false)
+const teacherAvatarPreviewVisible = ref(false)
 const serviceModes = computed(() => enterpriseView.value.serviceModes || [])
 const processSteps = computed(() => enterpriseView.value.processSteps || [])
 const formTitle = computed(() => ({ course: '为下一次成长，留一个位置', consult: '从你正在经历的事，聊起', enterprise: '一起找到团队的共学方向' }[currentKind.value]))
@@ -108,7 +111,15 @@ function selectKind(index) {
   kindIndex.value = index
 }
 function viewCourse(course) { uni.navigateTo({ url: `/pages/course-detail/course-detail?id=${encodeURIComponent(course.id)}` }) }
-function previewTeacherAvatar() { if (!teacherAvatarFailed.value) previewImage(teacherAvatar.value) }
+function previewTeacherAvatar() {
+  if (teacherAvatarFailed.value) return
+  if (isWechatDevtools()) {
+    teacherAvatarPreviewVisible.value = true
+    return
+  }
+  previewImage(teacherAvatar.value)
+}
+function closeTeacherAvatarPreview() { teacherAvatarPreviewVisible.value = false }
 function selectServiceMode(mode) {
   form.value = { ...form.value, intent: mode.title }
   scrollToForm()
@@ -257,6 +268,13 @@ function submitAnother() { resetForm(); submitted.value = false }
       </view>
       <view class="page-ending"><text>每一步靠近，都是成长。</text><text class="ending-en">GROW, AT YOUR OWN PACE.</text></view>
     </block>
+    <NxImagePreview
+      v-if="teacherAvatar && !teacherAvatarFailed"
+      :visible="teacherAvatarPreviewVisible"
+      :src="teacherAvatar"
+      :alt="`${teacher?.name || '老师'}头像`"
+      @close="closeTeacherAvatarPreview"
+    />
   </view>
 </template>
 

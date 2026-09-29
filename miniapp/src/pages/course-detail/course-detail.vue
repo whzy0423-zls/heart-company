@@ -2,12 +2,14 @@
 import { computed, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import NxIcon from '../../components/NxIcon.vue'
+import NxImagePreview from '../../components/NxImagePreview.vue'
 import { STUDIO_COURSES, STUDIO_TEACHER } from '../../data/teacherStudio'
 import { UI_PREVIEW } from '../../utils/uiPreview'
 import { getCachedSiteConfig, getStoredSiteConfig } from '../../utils/siteConfig'
 import { normalizeCoursewareItems, normalizeTeachers } from '../../utils/teacherCourseware'
 import { setBookingIntent } from '../../utils/bookingIntent'
 import { previewImage } from '../../utils/imagePreview'
+import { isWechatDevtools } from '../../utils/imagePreview'
 
 const courseId = ref('')
 const config = ref(getStoredSiteConfig() || {})
@@ -24,6 +26,7 @@ const teacherAvatar = computed(() => {
   return /\/avatars\//i.test(avatar) ? '' : avatar
 })
 const teacherAvatarFailed = ref(false)
+const teacherAvatarPreviewVisible = ref(false)
 const highlights = computed(() => Array.isArray(course.value?.highlights) ? course.value.highlights : [])
 const outline = computed(() => Array.isArray(course.value?.outline) ? course.value.outline : [])
 onLoad(async (query) => {
@@ -50,7 +53,15 @@ function enroll() {
   uni.switchTab({ url: '/pages/booking/booking' })
 }
 function teacherDetail() { uni.navigateTo({ url: '/pages/teacher/teacher' }) }
-function previewTeacherAvatar() { if (!teacherAvatarFailed.value) previewImage(teacherAvatar.value) }
+function previewTeacherAvatar() {
+  if (teacherAvatarFailed.value) return
+  if (isWechatDevtools()) {
+    teacherAvatarPreviewVisible.value = true
+    return
+  }
+  previewImage(teacherAvatar.value)
+}
+function closeTeacherAvatarPreview() { teacherAvatarPreviewVisible.value = false }
 function outlineTitle(item) { return typeof item === 'string' ? item : item.title || item.name || '主题练习' }
 function outlineDescription(item) { return typeof item === 'object' && item ? item.description || item.content || '' : '' }
 </script>
@@ -72,6 +83,13 @@ function outlineDescription(item) { return typeof item === 'object' && item ? it
         <view class="page-ending"><view /><text>期待，与你在课堂相遇</text><view /></view>
       </view>
       <view class="enroll-bar"><view class="enroll-price"><view v-if="course.price !== undefined"><text class="currency">¥</text><text class="price">{{ course.price.toLocaleString() }}</text><text class="price-unit"> / 人</text></view><text v-else class="consult-price">预约了解课程</text><text class="price-caption">{{ UI_PREVIEW ? '演示价格 · 无需在线支付' : '提交意向后确认安排' }}</text></view><button class="enroll-button" @click="enroll">报名这门课程 <NxIcon name="arrow" :size="18" color="#FFFFFF" /></button></view>
+      <NxImagePreview
+        v-if="teacherAvatar && !teacherAvatarFailed"
+        :visible="teacherAvatarPreviewVisible"
+        :src="teacherAvatar"
+        :alt="`${teacher?.name || '老师'}头像`"
+        @close="closeTeacherAvatarPreview"
+      />
     </block>
   </view>
 </template>
