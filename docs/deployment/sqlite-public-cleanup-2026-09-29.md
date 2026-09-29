@@ -19,6 +19,11 @@ sources from the public catalog.
 - Deleted source/document residuals: 0.
 - Knowledge service and PostgreSQL containers: healthy.
 
-The remaining five review sources are mostly readable bodies with isolated OCR
-markers and remain excluded from retrieval. The targeted rollback archive is
-stored on the server at `/opt/heart-company/.deploy/cleanup-targets.dump`.
+The remaining five review sources were subsequently removed after explicit
+approval to delete uncertain material. The final catalog contains only
+`ready` sources. The rollback archive for that second cleanup is stored at
+`/opt/heart-company/.deploy/cleanup-review-targets.dump` with SHA-256
+`70151a4b6027c124cde0165390e430495f7975adb617bb28f42f40222fae0ff5`.
+
+Final verification: 4,666 sources, 4,666 `ready`, 0 `pending`, 0
+`needs_review`, and 3,631,004 managed public documents.
