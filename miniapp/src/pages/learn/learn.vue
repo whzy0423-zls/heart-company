@@ -444,7 +444,7 @@ onMounted(() => {
 .learn-teacher__details { margin-top: 18rpx; padding-top: 18rpx; display: flex; flex-direction: column; gap: 14rpx; border-top: 2rpx solid rgba(32, 37, 43, .1); }
 .learn-teacher__bio { color: rgba(32, 37, 43, .76); font-size: 26rpx; line-height: 1.65; }
 .learn-teacher__tags { display: flex; flex-wrap: wrap; gap: 10rpx; }
-.learn-teacher__tag { padding: 6rpx 12rpx; border-radius: 16rpx; background: rgba(51, 91, 74, .08); color: #335B4A; font-size: 22rpx; line-height: 1.4; }
+.learn-teacher__tag { max-width: 100%; box-sizing: border-box; padding: 6rpx 12rpx; border-radius: 16rpx; background: rgba(51, 91, 74, .08); color: #335B4A; font-size: 22rpx; line-height: 1.4; overflow-wrap: anywhere; word-break: break-all; }
 
 .learn-tabs { margin-top: 20rpx; padding: 6rpx; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4rpx; border: 2rpx solid rgba(32, 37, 43, .1); border-radius: 18rpx; background: #FFFDF8; }
 .learn-tab { min-width: 0; min-height: 88rpx; display: flex; align-items: center; justify-content: center; border-radius: 14rpx; color: rgba(32, 37, 43, .62); font-size: 26rpx; font-weight: 700; touch-action: manipulation; }

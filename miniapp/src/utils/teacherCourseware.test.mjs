@@ -39,6 +39,16 @@ assert.deepEqual(
   { name: '韩老师', title: '九型导师', avatar: '/static/a.png', bio: '十年咨询经验', tags: ['课程研发'] },
   'root teacher object should be normalized',
 )
+assert.deepEqual(
+  normalizeTeachers({
+    teacher: {
+      name: '完整标签老师',
+      expertise: ['九型入门', '关系沟通', '成长练习', '团队协作', '家庭关系', '超长标签不会被裁切'],
+    },
+  })[0].tags,
+  ['九型入门', '关系沟通', '成长练习', '团队协作', '家庭关系', '超长标签不会被裁切'],
+  'teacher expertise should preserve every tag instead of truncating after four items',
+)
 assert.equal(
   normalizeTeachers({ home: { teachers: [{ name: 'A' }, { nickname: 'B', role: '讲师' }] } }).length,
   2,

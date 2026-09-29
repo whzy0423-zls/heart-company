@@ -66,8 +66,16 @@ function firstAsset(source, keys, fallback) {
 }
 
 function normalizeTags(value) {
-  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean).slice(0, 4)
-  if (typeof value === 'string') return value.split(/[、,，/\s]+/).map((item) => item.trim()).filter(Boolean).slice(0, 4)
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean)
+  if (typeof value === 'string') return value.split(/[、,，/\s]+/).map((item) => item.trim()).filter(Boolean)
+  return []
+}
+
+function teacherTags(source) {
+  for (const value of [source?.tags, source?.expertise, source?.badges, source?.specialties, source?.skills]) {
+    const tags = normalizeTags(value)
+    if (tags.length) return tags
+  }
   return []
 }
 
@@ -106,7 +114,7 @@ function hasTeacherContent(source) {
   return !!firstText(source, [
     'name', 'teacherName', 'nickname',
     'avatar', 'photo', 'image', 'cover', 'fallbackImage', 'bio', 'description', 'desc', 'intro', 'summary', 'lead',
-  ]) || /[|｜（）()]/.test(title) || normalizeTags(source.tags || source.badges || source.specialties || source.skills).length > 0
+  ]) || /[|｜（）()]/.test(title) || teacherTags(source).length > 0
 }
 
 function uniqueByTitle(items) {
@@ -134,7 +142,7 @@ export function normalizeTeachers(config) {
       title: identity.title,
       avatar: firstAsset(source, ['avatar', 'photo', 'image', 'cover', 'fallbackImage'], '/static/avatars/9.png'),
       bio: firstText(source, ['bio', 'description', 'desc', 'intro', 'summary', 'lead']) || '带你用九型人格看见真实动机，把课程内容落到每天可练习的沟通与成长里。',
-      tags: normalizeTags(source.tags || source.badges || source.specialties || source.skills),
+      tags: teacherTags(source),
     }
   }
 
