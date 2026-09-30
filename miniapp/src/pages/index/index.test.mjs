@@ -7,6 +7,8 @@ import { pathToFileURL } from 'node:url'
 const source = await readFile(new URL('./index.vue', import.meta.url), 'utf8')
 const script = source.match(/<script setup>([\s\S]*?)<\/script>/)?.[1]
 assert.ok(script, 'home should expose executable page state')
+assert.match(source, /class="brand-logo"[^>]+src="\/static\/brand\/logo\.png"/, 'home should use the matching enneagram brand logo')
+assert.match(source, /padding-top:var\(--status-bar-height, env\(safe-area-inset-top\)\)/, 'home custom navigation should clear the WeChat status bar')
 const executable = script.replace(/^import[\s\S]*?from\s+['"][^'"]+['"]\s*;?\s*$/gm, '')
 const dir = await mkdtemp(join(tmpdir(), 'nx-studio-home-'))
 const modulePath = join(dir, 'home-state.mjs')
