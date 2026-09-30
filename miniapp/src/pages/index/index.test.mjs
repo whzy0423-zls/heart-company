@@ -8,19 +8,40 @@ const source = await readFile(new URL('./index.vue', import.meta.url), 'utf8')
 const script = source.match(/<script setup>([\s\S]*?)<\/script>/)?.[1]
 assert.ok(script, 'home should expose executable page state')
 assert.match(source, /class="brand-logo"[^>]+src="\/static\/brand\/logo\.png"/, 'home should use the matching enneagram brand logo')
-assert.match(source, /padding-top:var\(--status-bar-height, env\(safe-area-inset-top\)\)/, 'home custom navigation should clear the WeChat status bar')
+assert.match(source, /var\(--status-bar-height, env\(safe-area-inset-top, 0px\)\)/, 'home custom navigation should always resolve a valid status-bar fallback')
+assert.match(source, /class="studio-header"[^>]+:style="\{ paddingTop: `\$\{statusBarHeight\}px` \}"/, 'the fixed header should own the full status-bar background')
+assert.match(source, /\.studio-header\{position:fixed;top:0;/, 'the fixed header background should start at the physical screen top')
+assert.match(source, /\.studio-home\{[^}]*padding-top:calc\(var\(--status-bar-height, env\(safe-area-inset-top, 0px\)\) \+ 144rpx\)/, 'fixed navigation should reserve its status bar and header height')
+assert.match(source, /class="studio-home"[^>]+:style="\{ paddingTop: `calc\(\$\{statusBarHeight\}px \+ 144rpx\)` \}\"/, 'home should reserve the native status bar height before rendering content')
+assert.match(source, /const\s+ORIGINAL_TEACHER_PORTRAIT\s*=\s*['"]\/static\/teacher\/portrait\.jpg['"]/, 'home should retain the original teacher portrait for previews')
+assert.match(source, /:src="portraitPreview\s*\|\|\s*portrait"/, 'home preview should use the original portrait source')
+assert.match(source, /resolveClassroomItems/, 'home should share the classroom data fallback with the learning page')
 const executable = script.replace(/^import[\s\S]*?from\s+['"][^'"]+['"]\s*;?\s*$/gm, '')
 const dir = await mkdtemp(join(tmpdir(), 'nx-studio-home-'))
 const modulePath = join(dir, 'home-state.mjs')
 await writeFile(modulePath, `
 const ref = value => ({ value })
 const computed = getter => ({ get value() { return getter() } })
+import { resolveHomeNavigation } from '${new URL('../../utils/homeNavigation.js', import.meta.url).href}'
 const onMounted = handler => { globalThis.__homeHarness.mount = handler }
+const onResize = handler => { globalThis.__homeHarness.resize = handler }
 const getStoredSiteConfig = () => globalThis.__homeHarness.cache
 const refreshSiteConfig = () => globalThis.__homeHarness.refresh()
 const listClassroomRecentApi = query => globalThis.__homeHarness.list(query)
+const resolveClassroomItems = (remoteItems, bundledItems, options = {}) => {
+  if (Array.isArray(remoteItems) && remoteItems.length > 0) return { items: remoteItems, usedFallback: false }
+  if (!options.allowFallback) return { items: Array.isArray(remoteItems) ? remoteItems : [], usedFallback: false }
+  const fallback = Array.isArray(bundledItems) ? bundledItems : []
+  return { items: fallback, usedFallback: fallback.length > 0 }
+}
+const studioVideos = [{ id: 21, itemType: 'content', title: '本地日常视频', contentType: 'video', coverUrl: '/static/studio-preview/posters/laohan-22.jpg', durationSeconds: 49 }]
+const isWechatDevtools = () => globalThis.__homeHarness.devtools === true
 const normalizeTeachers = config => config.teachers || (config.home?.teacherTeaser ? [config.home.teacherTeaser] : [])
 const normalizeCoursewareItems = config => config.home?.courses?.items || []
+const normalizeMiniappCourses = config => {
+  const items = config.home?.miniappCourses?.items || normalizeCoursewareItems(config)
+  return items.map((item, index) => ({ id: item.id || 'course-' + (index + 1), title: item.title, ...item }))
+}
 const normalizeMiniappLearn = config => ({ classroom: { enabled: config?.home?.miniappLearn?.classroom?.enabled !== false } })
 const classroomContentRoute = item => /^[1-9]\\d*$/.test(String(item?.id || '')) ? '/pages/classroom-detail/classroom-detail?id=' + item.id + '&type=' + (item.contentType === 'audio' ? 'audio' : 'video') : ''
 const setBookingIntent = value => { globalThis.__homeHarness.intent = value }
@@ -29,13 +50,13 @@ const STUDIO_TEACHER = { name: '韩老师', avatar: '/static/teacher/portrait.jp
 const STUDIO_COURSES = [{ id: 'preview-course', title: '演示课程' }]
 const UI_PREVIEW = globalThis.__homeHarness.preview
 ${executable}
-export { config, videos, loading, error, teacher, portrait, isLaohan, courses, classroomEnabled, dailyVideos, load, daily, booking, openVideo, openCourse }
+export { config, videos, loading, error, teacher, portrait, portraitPreview, isLaohan, courses, classroomEnabled, dailyVideos, load, daily, booking, openVideo, openCourse, statusBarHeight, topbarStyle }
 `)
 
 let counter = 0
-async function harness({ preview = false, cache = null } = {}) {
+async function harness({ preview = false, devtools = false, cache = null, windowInfo = null, systemInfo = null, menuButton = null } = {}) {
   const state = {
-    preview, cache, intent: null, navigations: [], tabs: [],
+    preview, devtools, cache, intent: null, navigations: [], tabs: [],
     refresh: async () => state.cache || {},
     list: async () => ({ items: [] }),
   }
@@ -43,6 +64,9 @@ async function harness({ preview = false, cache = null } = {}) {
   globalThis.uni = {
     navigateTo: options => state.navigations.push(options),
     switchTab: options => state.tabs.push(options),
+    ...(windowInfo === null ? {} : { getWindowInfo: () => windowInfo }),
+    ...(systemInfo === null ? {} : { getSystemInfoSync: () => systemInfo }),
+    ...(menuButton === null ? {} : { getMenuButtonBoundingClientRect: () => menuButton }),
   }
   const page = await import(`${pathToFileURL(modulePath).href}?case=${++counter}`)
   return { page, state }
@@ -55,16 +79,44 @@ function deferred() {
 
 try {
   {
+    const { page } = await harness({ windowInfo: { statusBarHeight: 0 }, systemInfo: { statusBarHeight: 44 } })
+    assert.equal(page.statusBarHeight.value, 44, 'a zero modern status-bar value should fall back to the legacy API')
+  }
+  {
+    const { page } = await harness({ windowInfo: { statusBarHeight: 0, safeArea: { top: 44 } }, systemInfo: { statusBarHeight: 0 } })
+    assert.equal(page.statusBarHeight.value, 44, 'a zero status-bar API should fall back to the native safe-area top')
+  }
+  {
+    const { page } = await harness()
+    assert.equal(page.statusBarHeight.value, 44, 'the custom navigation should keep a visible iPhone fallback in devtools')
+  }
+  {
+    const { page } = await harness({
+      windowInfo: { statusBarHeight: 44, windowWidth: 375 },
+      menuButton: { left: 278, top: 48 },
+    })
+    assert.equal(page.topbarStyle.value.paddingRight, '109px', 'the WeChat header should leave room for the capsule')
+  }
+  {
     const cached = { teachers: [{ name: '已缓存老师' }], home: { courses: { items: [{ title: '正式课程' }] }, miniappLearn: { classroom: { enabled: false } } } }
     const { page } = await harness({ cache: cached })
     assert.equal(page.teacher.value.name, '已缓存老师', 'cached teacher should render before refresh')
     assert.equal(page.classroomEnabled.value, false, 'cached classroom.enabled=false should hide published video entries')
     assert.equal(page.courses.value[0].title, '正式课程', 'production should render configured courses rather than demo schedules')
+    assert.equal(page.courses.value[0].id, 'course-1', 'legacy courseware should receive the same normalized ID used by the detail page')
     assert.deepEqual(page.videos.value, [], 'production should not invent a published video list')
   }
   {
     const { page } = await harness({ preview: true })
     assert.equal(page.courses.value[0].id, 'preview-course', 'explicit preview may display the isolated sample schedule')
+  }
+  {
+    const { page, state } = await harness({ cache: {
+      home: { miniappCourses: { items: [{ id: 'paid-intro', title: '付费入门课', paymentMode: 'paid', priceCents: 19800 }] } },
+    } })
+    assert.equal(page.courses.value[0].id, 'paid-intro', 'home should use the managed mini-app course catalog')
+    page.openCourse()
+    assert.equal(state.navigations.at(-1).url, '/pages/course-detail/course-detail?id=paid-intro', 'home should pass the managed course ID to detail')
   }
   {
     const { page, state } = await harness({ cache: { teachers: [{ name: '原老师' }] } })
@@ -81,6 +133,21 @@ try {
     assert.deepEqual(page.dailyVideos.value.map(item => item.id), [21, 20], 'home should show two actual content entries, not misroute series as videos')
     assert.equal(page.loading.value, false)
     assert.equal(page.error.value, '')
+  }
+  {
+    const { page, state } = await harness({ devtools: true })
+    state.list = async () => ({ items: [] })
+    await page.load()
+    assert.deepEqual(page.dailyVideos.value.map(item => item.id), [21], 'developer tools should keep bundled daily videos visible when the API response is empty')
+    assert.equal(page.dailyVideos.value[0].coverUrl, '/static/studio-preview/posters/laohan-22.jpg')
+    assert.equal(page.error.value, '', 'bundled daily videos should clear the transient API error')
+  }
+  {
+    const { page, state } = await harness({ devtools: true })
+    state.list = async () => { throw new Error('network offline') }
+    await page.load()
+    assert.deepEqual(page.dailyVideos.value.map(item => item.id), [21], 'developer tools should keep bundled daily videos visible when the API request fails')
+    assert.equal(page.error.value, '', 'bundled daily videos should replace the transient API error')
   }
   {
     const { page, state } = await harness({ cache: { teachers: [{ name: '保留老师' }] } })
@@ -155,6 +222,9 @@ try {
     page.config.value = { teachers: [{ name: '韩常青（老韩）', avatar: 'https://site.example/assets/teacher-poster.jpg' }] }
     assert.equal(page.isLaohan.value, true)
     assert.equal(page.portrait.value, '/static/teacher/hero-portrait.jpg', 'verified Laohan uses the clean portrait instead of cropping a text poster')
+    page.config.value = { teachers: [{ name: '韩常青', avatar: '/static/teacher/portrait.jpg' }] }
+    assert.equal(page.portrait.value, '/static/teacher/hero-portrait.jpg', 'home should use the wide teacher composition for the portrait avatar')
+    assert.equal(page.portraitPreview.value, '/static/teacher/portrait.jpg', 'home preview should keep the original portrait instead of the wide composition')
   }
   console.log('teacher studio home state tests passed')
 } finally {

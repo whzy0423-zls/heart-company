@@ -229,3 +229,28 @@ func TestMiniappPaymentEnabledIgnoresMalformedLegacyValues(t *testing.T) {
 		}
 	}
 }
+
+func TestMiniappCoursesFallbackAndExplicitEmpty(t *testing.T) {
+	cfg := SiteConfig{Home: map[string]any{"courses": map[string]any{"items": []any{map[string]any{"title": "课程一", "description": "介绍"}}}}}
+	EnsureMiniappCourses(&cfg)
+	items, err := MiniappCourses(cfg)
+	if err != nil || len(items) != 1 || items[0].ID == "" || items[0].PaymentMode != "consult" || items[0].PriceCents != 0 {
+		t.Fatalf("fallback=%+v err=%v", items, err)
+	}
+	empty := SiteConfig{Home: map[string]any{"courses": map[string]any{"items": []any{map[string]any{"title": "旧课"}}}, "miniappCourses": map[string]any{"items": []any{}}}}
+	got, err := MiniappCourses(empty)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("explicit empty got=%+v err=%v", got, err)
+	}
+}
+
+func TestMiniappCoursesValidatePaidPriceAndIDs(t *testing.T) {
+	base := SiteConfig{Home: map[string]any{"miniappCourses": map[string]any{"items": []any{map[string]any{"id": "c1", "title": "课", "enabled": true, "paymentMode": "paid", "priceCents": 100}}}}}
+	if _, err := MiniappCourses(base); err != nil {
+		t.Fatal(err)
+	}
+	base.Home["miniappCourses"].(map[string]any)["items"] = []any{map[string]any{"id": "c1", "title": "课", "paymentMode": "paid", "priceCents": 0}}
+	if _, err := MiniappCourses(base); err == nil {
+		t.Fatal("expected paid zero price rejection")
+	}
+}

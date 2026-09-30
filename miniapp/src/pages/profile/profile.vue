@@ -13,7 +13,16 @@ import { getStoredSiteConfig, refreshSiteConfig } from '../../utils/siteConfig'
 import { previewImage } from '../../utils/imagePreview'
 import { bookingKindLabel, bookingStatusLabel } from '../../utils/bookingDisplay'
 import NxIcon from '../../components/NxIcon.vue'
+import NxStudioHeader from '../../components/NxStudioHeader.vue'
 import { UI_PREVIEW } from '../../utils/uiPreview'
+import { useStudioNavigation } from '../../utils/studioNavigation'
+
+// Keep session tests independent from the SFC-only navigation import while
+// preserving the shared fixed header in the compiled app.
+const studioNavigation = typeof useStudioNavigation === 'function'
+  ? useStudioNavigation()
+  : { pageStyle: computed(() => ({})), refreshNavigation: () => {} }
+const { pageStyle, refreshNavigation } = studioNavigation
 
 const logged = ref(false)
 const user = ref(null)
@@ -50,6 +59,7 @@ async function refreshPaymentAvailability() {
 }
 
 onShow(() => {
+  refreshNavigation()
   paymentEnabled.value = normalizeMiniappPayment(getStoredSiteConfig()).enabled
   void refreshPaymentAvailability()
   logged.value = !!getToken()
@@ -254,7 +264,8 @@ async function testWechatPayment() {
 
 <template>
   <view class="wrap profile page-stack ios-page ios-safe-bottom">
-    <view class="profile-content">
+    <NxStudioHeader />
+    <view class="profile-content" :style="pageStyle">
       <view class="profile-header">
         <view class="eyebrow-row"><text class="eyebrow">MY GROWTH</text><text v-if="UI_PREVIEW" class="preview-badge">演示体验</text></view>
         <text class="profile-header__title">我的成长手记</text>
@@ -342,7 +353,7 @@ async function testWechatPayment() {
 </template>
 
 <style scoped>
-.profile { padding: 0; padding-bottom: calc(24rpx + env(safe-area-inset-bottom) + var(--window-bottom, 0px)); overflow-x: hidden; background: var(--nx-page-bg, #F7F5F0); color: #282A27; }
+.profile { padding: 0 0 calc(24rpx + env(safe-area-inset-bottom) + var(--window-bottom, 0px)); overflow-x: hidden; background: var(--nx-page-bg, #F7F5F0); color: #282A27; }
 .profile-content { width: 100%; max-width: 980rpx; margin: 0 auto; padding: 36rpx 36rpx 48rpx; box-sizing: border-box; }
 button { margin: 0; padding: 0; border-radius: 0; background: transparent; color: inherit; font-size: inherit; line-height: 1.5; text-align: left; box-sizing: border-box; }
 button::after { border: 0; }

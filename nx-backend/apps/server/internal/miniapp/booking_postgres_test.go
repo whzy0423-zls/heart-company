@@ -176,6 +176,11 @@ func openMiniappBookingPostgres(t *testing.T) *sql.DB {
 		  status TEXT NOT NULL DEFAULT 'pending', signup_id BIGINT NOT NULL REFERENCES signups(id),
 		  create_time TIMESTAMPTZ NOT NULL DEFAULT now()
 		);
+		ALTER TABLE bookings ADD COLUMN course_id TEXT NOT NULL DEFAULT '';
+		ALTER TABLE bookings ADD COLUMN course_title TEXT NOT NULL DEFAULT '';
+		ALTER TABLE bookings ADD COLUMN price_cents INT NOT NULL DEFAULT 0;
+		ALTER TABLE bookings ADD COLUMN payment_mode TEXT NOT NULL DEFAULT 'consult';
+		ALTER TABLE bookings ADD COLUMN payment_status TEXT NOT NULL DEFAULT 'none';
 		CREATE TABLE messages (
 		  id BIGSERIAL PRIMARY KEY, type TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL,
 		  platform TEXT NOT NULL, event_key TEXT NOT NULL, business_id TEXT NOT NULL,

@@ -1191,6 +1191,7 @@ func (s *Server) routes() {
 	registerClassroomAdminRoutes(s.mux, s.requirePermission, s)
 	registerClassroomPublicRoutes(s.mux, s)
 	registerClassroomOrderRoutes(s.mux, s.requireMiniapp, s)
+	registerCourseOrderRoutes(s.mux, s.requireMiniapp, s)
 	registerClassroomProgressRoutes(s.mux, s.requireMiniapp, s)
 	// 付费解锁：下单（鉴权）→ 微信回调（公开）→ 解锁状态/报告正文（鉴权）
 	s.mux.HandleFunc("/api/miniapp/report/order", s.method(http.MethodPost, s.requireMiniapp(s.createReportOrder)))
@@ -1879,6 +1880,7 @@ func (s *Server) siteConfig(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		siteconfig.EnsureMiniappCourses(&config)
 		// 配置已落盘，异步触发官网重新构建+发布（非阻塞）。
 		s.builder.Trigger()
 		httpx.OK(w, config)

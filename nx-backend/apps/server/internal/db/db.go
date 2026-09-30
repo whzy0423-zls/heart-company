@@ -175,6 +175,9 @@ func seed(ctx context.Context, database *sql.DB, adminUser, adminPassword string
 	if err := seedCustomerMiniappMenuBindings(ctx, database); err != nil {
 		return err
 	}
+	if err := seedMiniappCustomerManagementMenuBindings(ctx, database); err != nil {
+		return err
+	}
 	if err := seedMindQuotes(ctx, database); err != nil {
 		return err
 	}
@@ -224,6 +227,8 @@ var defaultMenus = []seedMenu{
 	{ID: 1301, PID: 1300, Name: "MiniappHome", Path: "/miniapp/home", Component: "/miniapp/home", AuthCode: "Website:Write", Type: "menu", Sort: 1, Icon: "lucide:images", Title: "首页管理"},
 	{ID: 1302, PID: 1300, Name: "MiniappLearn", Path: "/miniapp/learn", Component: "/miniapp/learn", AuthCode: "Website:Write", Type: "menu", Sort: 2, Icon: "lucide:book-open", Title: "学习页管理"},
 	{ID: 1303, PID: 1300, Name: "MiniappPayment", Path: "/miniapp/payment", Component: "/miniapp/payment", AuthCode: "Website:Write", Type: "menu", Sort: 3, Icon: "lucide:credit-card", Title: "支付设置"},
+	{ID: 1304, PID: 1300, Name: "MiniappCourses", Path: "/miniapp/courses", Component: "/miniapp/courses", AuthCode: "Website:Write", Type: "menu", Sort: 5, Icon: "lucide:graduation-cap", Title: "课程配置"},
+	{ID: 1305, PID: 1300, Name: "MiniappCustomers", Path: "/miniapp/customers", Component: "/customer/miniapp-users", AuthCode: "Customer:Miniapp:List", Type: "menu", Sort: 6, Icon: "lucide:users-round", Title: "客户信息"},
 	{ID: 1400, PID: 0, Name: "MiniappClassroom", Path: "/miniapp/classroom", Type: "catalog", Sort: 13, Icon: "lucide:graduation-cap", Title: "老师课堂"},
 	{ID: 1401, PID: 1400, Name: "MiniappClassroomContent", Path: "/miniapp/classroom/content", Component: "/classroom/index", AuthCode: "Miniapp:Classroom:List", Type: "menu", Sort: 1, Icon: "lucide:play-square", Title: "课件管理"},
 	{ID: 1402, PID: 1400, Name: "MiniappClassroomSeries", Path: "/miniapp/classroom/series", Component: "/classroom/series", AuthCode: "Miniapp:Classroom:List", Type: "menu", Sort: 2, Icon: "lucide:layers", Title: "老师视频系列"},
@@ -442,6 +447,42 @@ func seedCustomerMiniappMenuBindings(ctx context.Context, database *sql.DB) erro
 		 SELECT DISTINCT role_id, 511
 		   FROM role_menus
 		  WHERE menu_id IN (501,502,504,505,507,508)
+		 ON CONFLICT (role_id, menu_id) DO NOTHING`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// seedMiniappCustomerManagementMenuBindings 为已有小程序客户权限角色补齐
+// 「小程序管理 > 客户信息」入口。旧的「客户管理 > 小程序客户」入口继续保留，
+// 因此升级不会改变已有后台使用路径。
+func seedMiniappCustomerManagementMenuBindings(ctx context.Context, database *sql.DB) error {
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const migrationKey = "seed.miniapp_customer_management_menu_bindings.v1"
+	var insertedKey string
+	err = tx.QueryRowContext(ctx,
+		`INSERT INTO migration_logs (key, detail)
+		 VALUES ($1, '{"description":"为已有小程序客户权限角色补齐小程序管理客户入口"}'::jsonb)
+		 ON CONFLICT (key) DO NOTHING
+		 RETURNING key`, migrationKey,
+	).Scan(&insertedKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return tx.Rollback()
+	}
+	if err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO role_menus (role_id, menu_id)
+		 SELECT DISTINCT role_id, 1305
+		   FROM role_menus
+		  WHERE menu_id = 511
 		 ON CONFLICT (role_id, menu_id) DO NOTHING`); err != nil {
 		return err
 	}

@@ -1,10 +1,12 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { onResize } from '@dcloudio/uni-app'
 import NxIcon from '../../components/NxIcon.vue'
 import NxImagePreview from '../../components/NxImagePreview.vue'
 import { listClassroomRecentApi } from '../../api'
+import studioVideos from '../../data/studioVideos.json'
 import { getStoredSiteConfig, refreshSiteConfig } from '../../utils/siteConfig'
-import { normalizeTeachers, normalizeCoursewareItems } from '../../utils/teacherCourseware'
+import { normalizeTeachers, normalizeMiniappCourses } from '../../utils/teacherCourseware'
 import { normalizeMiniappLearn } from '../../utils/miniappPages'
 import { classroomContentRoute } from '../../utils/classroomDisplay'
 import { setBookingIntent, clearBookingIntent } from '../../utils/bookingIntent'
@@ -12,8 +14,11 @@ import { STUDIO_TEACHER, STUDIO_COURSES } from '../../data/teacherStudio'
 import { UI_PREVIEW } from '../../utils/uiPreview'
 import { previewImage } from '../../utils/imagePreview'
 import { isWechatDevtools } from '../../utils/imagePreview'
+import { resolveClassroomItems } from '../../utils/classroomCourseware'
+import { resolveHomeNavigation } from '../../utils/homeNavigation'
 
-const LOCAL_TEACHER_PORTRAIT = '/static/teacher/portrait.jpg'
+const LOCAL_TEACHER_PORTRAIT = '/static/teacher/hero-portrait.jpg'
+const ORIGINAL_TEACHER_PORTRAIT = '/static/teacher/portrait.jpg'
 const config = ref(getStoredSiteConfig() || {})
 const videos = ref([])
 const loading = ref(true)
@@ -22,6 +27,18 @@ const portraitFailed = ref(false)
 const portraitPreviewVisible = ref(false)
 const coverErrors = ref({})
 const classroomEnabled = computed(() => normalizeMiniappLearn(config.value).classroom.enabled)
+const BUNDLED_CLASSROOM_ITEMS = Array.isArray(studioVideos) ? studioVideos : []
+let wechatNavigation = false
+// #ifdef MP-WEIXIN
+wechatNavigation = true
+// #endif
+const navigation = ref(resolveHomeNavigation(uni, { wechat: wechatNavigation }))
+const statusBarHeight = computed(() => navigation.value.statusBarHeight)
+const topbarStyle = computed(() => navigation.value.capsuleInset
+  ? { paddingRight: `${navigation.value.capsuleInset}px` }
+  : {})
+function refreshNavigation() { navigation.value = resolveHomeNavigation(uni, { wechat: wechatNavigation }) }
+onResize(refreshNavigation)
 const teacher = computed(() => {
   const cfg = config.value
   const hasTeacher = [cfg.teacher, cfg.teachers, cfg.home?.teacher, cfg.home?.teachers, cfg.home?.teacherTeaser].some(value => value !== undefined)
@@ -30,11 +47,17 @@ const teacher = computed(() => {
 const isLaohan = computed(() => ['韩常青', '韩常青（老韩）', '韩常青(老韩)', '老韩'].includes(teacher.value?.name))
 const portrait = computed(() => {
   const avatar = teacher.value?.avatar || ''
-  if (isLaohan.value && (!avatar || /\/avatars\/|teacher-poster/.test(avatar))) return '/static/teacher/hero-portrait.jpg'
+  if (isLaohan.value && (!avatar || /\/avatars\/|teacher-poster|\/static\/teacher\/portrait\.jpg/i.test(avatar))) return LOCAL_TEACHER_PORTRAIT
+  return /\/avatars\//.test(avatar) ? '' : avatar
+})
+const portraitPreview = computed(() => {
+  const avatar = teacher.value?.avatar || ''
+  if (portraitFailed.value && isLaohan.value) return ORIGINAL_TEACHER_PORTRAIT
+  if (isLaohan.value && (!avatar || /\/avatars\/|teacher-poster|\/static\/teacher\/portrait\.jpg/i.test(avatar))) return ORIGINAL_TEACHER_PORTRAIT
   return /\/avatars\//.test(avatar) ? '' : avatar
 })
 const teacherDisplayName = computed(() => (teacher.value?.name || '').replace(/[（(]老韩[）)]/, ''))
-const courses = computed(() => UI_PREVIEW ? STUDIO_COURSES : normalizeCoursewareItems(config.value))
+const courses = computed(() => UI_PREVIEW ? STUDIO_COURSES : normalizeMiniappCourses(config.value))
 const featuredCourse = computed(() => courses.value[0])
 const dailyVideos = computed(() => videos.value.filter(item => item.itemType !== 'series').slice(0, 2))
 let ticket = 0
@@ -45,15 +68,32 @@ async function load() {
   const results = await Promise.allSettled([refreshSiteConfig(), listClassroomRecentApi({ limit: 6 })])
   if (current !== ticket) return
   if (results[0].status === 'fulfilled') { config.value = getStoredSiteConfig() || results[0].value || {}; portraitFailed.value = false }
-  if (results[1].status === 'fulfilled') videos.value = results[1].value?.items || []
-  else error.value = '视频暂未更新，稍后可以再试一次'
+  if (results[1].status === 'fulfilled') {
+    const remoteItems = Array.isArray(results[1].value?.items) ? results[1].value.items : []
+    const resolved = resolveClassroomItems(remoteItems, BUNDLED_CLASSROOM_ITEMS, {
+      allowFallback: isWechatDevtools(),
+    })
+    videos.value = resolved.items
+    if (resolved.usedFallback) error.value = ''
+  } else if (isWechatDevtools()) {
+    const resolved = resolveClassroomItems([], BUNDLED_CLASSROOM_ITEMS, { allowFallback: true })
+    videos.value = resolved.items
+    error.value = resolved.usedFallback ? '' : '视频暂未更新，稍后可以再试一次'
+  } else {
+    error.value = '视频暂未更新，稍后可以再试一次'
+  }
   loading.value = false
 }
-onMounted(load)
+onMounted(() => {
+  // Re-read after mount so the native value is applied before the first user
+  // interaction (the initial render can run before the platform bridge exists).
+  refreshNavigation()
+  load()
+})
 function navigate(url) { uni.navigateTo({ url }) }
 function daily() { uni.switchTab({ url: '/pages/learn/learn' }) }
 function booking(kind = 'course') { setBookingIntent({ kind, intentText: '' }); uni.switchTab({ url: '/pages/booking/booking', fail: clearBookingIntent }) }
-function openCourse() { if (featuredCourse.value) navigate(`/pages/course-detail/course-detail?id=${UI_PREVIEW ? featuredCourse.value.id : 'course-0'}`); else booking() }
+function openCourse() { if (featuredCourse.value) navigate(`/pages/course-detail/course-detail?id=${encodeURIComponent(featuredCourse.value.id)}`); else booking() }
 function openVideo(item) { const url = classroomContentRoute(item); if (url) navigate(url) }
 function duration(value) { return `${String(Math.floor((value || 0) / 60)).padStart(2, '0')}:${String((value || 0) % 60).padStart(2, '0')}` }
 function previewPortrait() {
@@ -61,17 +101,21 @@ function previewPortrait() {
     portraitPreviewVisible.value = true
     return
   }
-  previewImage(portraitFailed.value && isLaohan.value ? LOCAL_TEACHER_PORTRAIT : portrait.value)
+  previewImage(portraitPreview.value || portrait.value)
 }
 function closePortraitPreview() { portraitPreviewVisible.value = false }
 </script>
 
 <template>
-  <view class="studio-home">
-    <view class="studio-topbar">
-      <view class="brand"><image class="brand-logo" src="/static/brand/logo.png" mode="aspectFit" aria-label="九型芯之力品牌 Logo" /><view><text class="brand-name">九型芯之力</text><text class="brand-sub">看见自己 · 理解彼此</text></view></view>
-      <text v-if="UI_PREVIEW" class="preview-label">体验版</text>
-      <button v-else class="top-about" aria-label="了解老师" @click="navigate('/pages/teacher/teacher')"><NxIcon name="user" :size="21" color="#282A27" /></button>
+  <view class="studio-home" :style="{ paddingTop: `calc(${statusBarHeight}px + 144rpx)` }">
+    <view class="studio-header" :style="{ paddingTop: `${statusBarHeight}px` }">
+      <view class="studio-topbar" :style="topbarStyle">
+        <view class="brand"><image class="brand-logo" src="/static/brand/logo.png" mode="aspectFit" aria-label="九型芯之力品牌 Logo" /><view class="brand-copy"><text class="brand-name">九型芯之力</text><text class="brand-sub">看见自己 · 理解彼此</text></view></view>
+        <!-- #ifndef MP-WEIXIN -->
+        <text v-if="UI_PREVIEW" class="preview-label">体验版</text>
+        <button v-else class="top-about" aria-label="了解老师" @click="navigate('/pages/teacher/teacher')"><NxIcon name="user" :size="21" color="#282A27" /></button>
+        <!-- #endif -->
+      </view>
     </view>
 
     <view class="home-body">
@@ -128,17 +172,19 @@ function closePortraitPreview() { portraitPreviewVisible.value = false }
     </view>
   </view>
   <NxImagePreview
-    v-if="(portraitFailed && isLaohan) || portrait"
+    v-if="portraitPreview || portrait"
     :visible="portraitPreviewVisible"
-    :src="portraitFailed && isLaohan ? LOCAL_TEACHER_PORTRAIT : portrait"
+    :src="portraitPreview || portrait"
     :alt="`${teacher?.name || '老师'}头像`"
     @close="closePortraitPreview"
   />
 </template>
 
 <style scoped>
-.studio-home{min-height:100vh;background:#F7F5F0;color:#282A27;padding-top:var(--status-bar-height, env(safe-area-inset-top));padding-bottom:32rpx;}
-.studio-topbar{height:144rpx;max-width:900rpx;padding:24rpx 36rpx;display:flex;align-items:center;justify-content:space-between;margin:0 auto;}
+.studio-home{min-height:100vh;background:#F7F5F0;color:#282A27;padding-top:calc(var(--status-bar-height, env(safe-area-inset-top, 0px)) + 144rpx);padding-bottom:32rpx;}
+.studio-header{position:fixed;top:0;left:0;right:0;z-index:30;box-sizing:border-box;padding-top:var(--status-bar-height, env(safe-area-inset-top, 0px));background:#F7F5F0;}
+.studio-topbar{box-sizing:border-box;width:100%;height:144rpx;max-width:900rpx;padding:24rpx 36rpx;display:flex;align-items:center;justify-content:space-between;margin:0 auto;}
+.brand{min-width:0}.brand-copy{min-width:0}.brand-name,.brand-sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .brand{display:flex;align-items:center;gap:16rpx}.brand-logo{display:block;width:66rpx;height:66rpx;flex:none}.brand-name{display:block;font-size:31rpx;font-weight:650;letter-spacing:2rpx}.brand-sub{display:block;font-size:19rpx;color:#77786F;letter-spacing:3rpx;margin-top:3rpx}.preview-label{font-size:20rpx;color:#8B6A52;border:1rpx solid #E5D7C8;border-radius:30rpx;padding:6rpx 16rpx}.top-about{margin:0;width:88rpx;height:88rpx;display:flex;align-items:center;justify-content:center;background:transparent;padding:0}
 .home-body{max-width:900rpx;margin:0 auto;padding:0 36rpx}.opening{display:flex;gap:12rpx;align-items:center;color:#77786F;font-size:20rpx;margin:6rpx 0 22rpx}.opening-line{height:1rpx;width:25rpx;background:#A55C3B}.opening-en{margin-left:auto;font-size:13rpx;letter-spacing:1rpx}
 .mentor-hero{position:relative;height:610rpx;border-radius:26rpx;overflow:hidden;background:#151C24;color:#fff}.mentor-portrait{position:absolute;width:100%;height:100%;right:0;top:0}.mentor-shade{position:absolute;inset:0;z-index:0;background:linear-gradient(90deg,#151C24 0%,rgba(21,28,36,.95) 12%,rgba(21,28,36,.66) 41%,rgba(21,28,36,0) 70%),linear-gradient(0deg,rgba(10,15,20,.45),transparent 35%)}.mentor-portrait-action{position:absolute;inset:0 0 0 48%;z-index:1;width:auto;height:auto;margin:0;padding:0;border:0;border-radius:0;background:transparent}.mentor-content{position:relative;z-index:2;padding:40rpx 32rpx}.mentor-label{display:flex;gap:9rpx;align-items:center;font-size:19rpx;letter-spacing:1rpx;color:#E8D6BC}.mentor-dot{width:7rpx;height:7rpx;border-radius:50%;background:#D5AD85}.mentor-title{white-space:pre-line;display:block;font-family:"Songti SC","Noto Serif SC",STSong,serif;font-size:74rpx;line-height:1.34;letter-spacing:5rpx;margin:27rpx 0 18rpx}.mentor-name{font-size:29rpx;letter-spacing:3rpx}.mentor-nickname{font-size:21rpx;letter-spacing:2rpx;color:#D5D2CC}.mentor-desc{white-space:pre-line;display:block;font-size:23rpx;line-height:1.75;margin-top:16rpx;color:#E1DED6}.mentor-button{display:flex;align-items:center;justify-content:center;gap:20rpx;min-height:88rpx;width:215rpx;border-radius:10rpx;border:1rpx solid rgba(255,255,255,.45);background:rgba(255,255,255,.07);color:#fff;font-size:23rpx;margin:27rpx 0 0;padding:0 17rpx}.mentor-bottom{position:absolute;z-index:2;bottom:24rpx;right:26rpx;font-size:12rpx;letter-spacing:2rpx;color:#D0C3AD}

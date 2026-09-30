@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { listClassroomRecentApi } from '../../api'
 import { TYPES_INFO } from '../../data/enneagramGame'
+import studioVideos from '../../data/studioVideos.json'
 import { resolveContentAsset } from '../../utils/contentAsset'
 import { readLearningNavIntent } from '../../utils/learningNavIntent'
 import { getStoredSiteConfig, refreshSiteConfig } from '../../utils/siteConfig'
@@ -21,15 +22,29 @@ import {
   resolveLearningCategory,
   retainLearningContentOnError,
 } from '../../utils/learningPageState'
-import { mapPublishedClassroomItems } from '../../utils/classroomCourseware'
+import { mapPublishedClassroomItems, resolveClassroomItems } from '../../utils/classroomCourseware'
 import { classroomContentRoute } from '../../utils/classroomDisplay'
 import { normalizeMiniappLearn } from '../../utils/miniappPages'
 import { userErrorMessage } from '../../utils/userMessage'
 import { previewImage } from '../../utils/imagePreview'
+import { isWechatDevtools } from '../../utils/imagePreview'
 import NxIcon from '../../components/NxIcon.vue'
+import NxImagePreview from '../../components/NxImagePreview.vue'
+import NxStudioHeader from '../../components/NxStudioHeader.vue'
 import { UI_PREVIEW } from '../../utils/uiPreview'
+import { useStudioNavigation } from '../../utils/studioNavigation'
+
+// Keep the page state executable in source-level harnesses that strip SFC
+// imports; the real app always provides the shared navigation composable.
+const studioNavigation = typeof useStudioNavigation === 'function'
+  ? useStudioNavigation()
+  : { pageStyle: computed(() => ({})), refreshNavigation: () => {} }
+const { pageStyle, refreshNavigation } = studioNavigation
 
 const TEACHER_FALLBACK = '/static/teacher/portrait.jpg'
+// Keep the compact card free to use a cropped/wide composition while the
+// full-screen preview always opens the original portrait asset.
+const TEACHER_PREVIEW_FALLBACK = '/static/teacher/portrait.jpg'
 const COURSE_FALLBACKS = [
   '/static/editorial/course-intro.webp',
   '/static/editorial/course-growth.webp',
@@ -50,11 +65,29 @@ const teacherExpanded = ref(false)
 const loading = ref(true)
 const loadError = ref('')
 const teacherImage = ref(TEACHER_FALLBACK)
+const teacherPreviewVisible = ref(false)
+const teacherPreviewImage = computed(() => /(?:^|\/)hero-portrait\.jpg(?:[?#].*)?$/i.test(String(teacherImage.value || ''))
+  ? TEACHER_PREVIEW_FALLBACK
+  : teacherImage.value)
 const courseImages = ref({})
 const teacherImageFallbackUsed = createOneShotFallbackRegistry()
 const courseImageFallbackUsed = createOneShotFallbackRegistry()
 const requestGuard = createLatestRequestGuard()
 const actionActivationGuard = createActionActivationGuard()
+
+// The developer tools can run the packaged mini-program without an available
+// API host. Keep the same editorial video catalogue that powers the local H5
+// preview available as a display fallback in that runtime. A successful API
+// response always wins, so production content remains database controlled.
+const BUNDLED_CLASSROOM_ITEMS = Array.isArray(studioVideos) ? studioVideos : []
+
+function bundledClassroomItems() {
+  return BUNDLED_CLASSROOM_ITEMS.map((item) => ({ ...item }))
+}
+
+function shouldUseBundledClassroomFallback(items) {
+  return isWechatDevtools() && (!Array.isArray(items) || items.length === 0)
+}
 
 const teacher = computed(() => teachers.value[0] || null)
 const teacherImageLabel = computed(() => teacher.value ? `${teacher.value.name}老师肖像` : '主讲老师肖像')
@@ -135,7 +168,20 @@ function onTeacherImageError() {
 }
 
 function previewTeacherAvatar() {
-  previewImage(teacherImage.value)
+  if (!teacherPreviewImage.value) return
+  // Developer Tools does not consistently open the native preview bridge for
+  // bundled assets. Keep a local overlay available so the tap always has a
+  // visible result in the simulator; production devices still use the native
+  // image viewer for its gesture and save actions.
+  if (isWechatDevtools()) {
+    teacherPreviewVisible.value = true
+    return
+  }
+  previewImage(teacherPreviewImage.value)
+}
+
+function closeTeacherPreview() {
+  teacherPreviewVisible.value = false
 }
 
 function previewCourseCover(courseKey) {
@@ -209,32 +255,48 @@ async function loadContent(options = {}) {
   const ticket = requestGuard.issue()
   if (!silent) loading.value = true
   loadError.value = ''
-  try {
-    const [config, classroom] = await Promise.all([
-      refreshSiteConfig(),
-      listClassroomRecentApi({ limit: 20, offset: 0 }),
-    ])
-    if (!requestGuard.isLatest(ticket)) return
+  const [configResult, classroomResult] = await Promise.allSettled([
+    refreshSiteConfig(),
+    listClassroomRecentApi({ limit: 20, offset: 0 }),
+  ])
+  if (!requestGuard.isLatest(ticket)) return
+
+  if (configResult.status === 'fulfilled') {
+    const config = configResult.value
     applyContent(config, { preserveMissing: true })
-    coursewareItems.value = mapPublishedClassroomItems(classroom?.items)
-    publishedItems.value = Array.isArray(classroom?.items) ? classroom.items : []
-    syncContentImages()
-  } catch (error) {
-    if (!requestGuard.isLatest(ticket)) return
+  } else {
     const retained = retainLearningContentOnError({
       teachers: teachers.value,
       coursewareItems: coursewareItems.value,
       quotes: quotes.value,
-    }, userErrorMessage(error, '内容更新失败，当前资料仍可继续浏览'))
+    }, userErrorMessage(configResult.reason, '内容更新失败，当前资料仍可继续浏览'))
     loadError.value = retained.loadError
-  } finally {
-    if (requestGuard.isLatest(ticket)) loading.value = false
   }
+
+  if (classroomResult.status === 'fulfilled') {
+    const remoteItems = Array.isArray(classroomResult.value?.items) ? classroomResult.value.items : []
+    const resolved = resolveClassroomItems(remoteItems, bundledClassroomItems(), {
+      allowFallback: shouldUseBundledClassroomFallback(remoteItems),
+    })
+    const items = resolved.items
+    coursewareItems.value = mapPublishedClassroomItems(items)
+    publishedItems.value = items
+    if (remoteItems.length > 0 || items.length > 0) loadError.value = ''
+  } else if (shouldUseBundledClassroomFallback([])) {
+    const items = resolveClassroomItems([], bundledClassroomItems(), { allowFallback: true }).items
+    coursewareItems.value = mapPublishedClassroomItems(items)
+    publishedItems.value = items
+    loadError.value = ''
+  } else if (!loadError.value) {
+    loadError.value = userErrorMessage(classroomResult.reason, '视频暂未更新，稍后可以再试一次')
+  }
+  if (requestGuard.isLatest(ticket)) loading.value = false
 }
 
 onShow(consumeNavigationIntent)
 
 onMounted(() => {
+  refreshNavigation()
   const cached = getStoredSiteConfig()
   if (cached) {
     applyContent(cached)
@@ -247,7 +309,8 @@ onMounted(() => {
 </script>
 
 <template>
-  <view class="wrap learn page-stack ios-page ios-safe-bottom">
+  <view class="wrap learn page-stack ios-page ios-safe-bottom" :style="pageStyle">
+    <NxStudioHeader />
     <view class="learn-content">
       <view class="learn-header">
         <view class="eyebrow-row"><text class="eyebrow">DAILY WITH HAN</text><text v-if="UI_PREVIEW" class="preview-badge">演示体验</text></view>
@@ -343,7 +406,7 @@ onMounted(() => {
         <template v-if="teacher">
           <view class="learn-teacher__summary">
             <view class="learn-teacher__portrait">
-              <button v-if="teacherImage" class="teacher-card__avatar-action" :aria-label="`预览${teacherImageLabel}`" @click="previewTeacherAvatar"><image class="learn-teacher__image" :src="teacherImage" mode="aspectFill" role="img" :aria-label="teacherImageLabel" @error="onTeacherImageError" /></button>
+              <button v-if="teacherImage" class="teacher-card__avatar-action" :aria-label="`预览${teacherImageLabel}`" @click="previewTeacherAvatar"><image class="learn-teacher__image" :src="teacherImage" mode="widthFix" role="img" :aria-label="teacherImageLabel" @error="onTeacherImageError" /></button>
               <view v-else class="learn-teacher__image learn-teacher__image--placeholder">韩</view>
             </view>
             <view class="learn-teacher__identity"><text class="section-label">主讲老师</text><text id="learn-teacher-heading" class="learn-teacher__name">{{ teacher.name }}</text><text class="learn-teacher__title">{{ teacher.title }}</text></view>
@@ -360,11 +423,18 @@ onMounted(() => {
       </section>
       <text class="page-footnote">看见自己，也看见生活。</text>
     </view>
+    <NxImagePreview
+      v-if="teacherPreviewImage"
+      :visible="teacherPreviewVisible"
+      :src="teacherPreviewImage"
+      :alt="teacherImageLabel"
+      @close="closeTeacherPreview"
+    />
   </view>
 </template>
 
 <style scoped>
-.learn { min-width: 0; overflow-x: hidden; padding: 0; padding-bottom: calc(24rpx + env(safe-area-inset-bottom) + var(--window-bottom, 0px)); background: var(--nx-page-bg, #F7F5F0); color: var(--nx-text, #282A27); }
+.learn { min-width: 0; overflow-x: hidden; padding: 0 0 calc(24rpx + env(safe-area-inset-bottom) + var(--window-bottom, 0px)); background: var(--nx-page-bg, #F7F5F0); color: var(--nx-text, #282A27); }
 .learn-content { width: 100%; max-width: 980rpx; margin: 0 auto; padding: 36rpx 36rpx 52rpx; box-sizing: border-box; }
 button { box-sizing: border-box; margin: 0; padding: 0; border-radius: 0; background: transparent; color: inherit; font-size: inherit; line-height: 1.5; text-align: left; }
 button::after { border: 0; }
@@ -440,7 +510,7 @@ button:focus-visible { outline: 3rpx solid #A55C3B; outline-offset: 5rpx; }
 .learn-teacher__portrait { flex: none; width: 88rpx; aspect-ratio: 4 / 5; border-radius: 14rpx; overflow: hidden; }
 .teacher-card__avatar-action { display: block; width: 88rpx; height: 110rpx; padding: 0; margin: 0; border: 0; border-radius: 14rpx; background: transparent; overflow: hidden; }
 .teacher-card__avatar-action::after { border: 0; }
-.learn-teacher__image { display: block; width: 88rpx; height: 110rpx; border-radius: 14rpx; }
+.learn-teacher__image { display: block; width: 88rpx; min-height: 110rpx; border-radius: 14rpx; background: #F0E9DD; }
 .learn-teacher__image--placeholder { display: flex; align-items: center; justify-content: center; color: #A55C3B; background: #F0E9DD; font-family: 'Songti SC', serif; font-size: 40rpx; }
 .learn-teacher__identity { flex: 1; min-width: 0; }
 .section-label { color: #77786F; font-size: 21rpx; }

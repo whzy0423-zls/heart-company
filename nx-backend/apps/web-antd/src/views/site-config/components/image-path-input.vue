@@ -85,32 +85,34 @@ async function customRequest(options: UploadRequestOption) {
     class="image-uploader"
     :class="{ 'image-uploader--compact': props.variant === 'input' }"
   >
-    <Upload
-      accept="image/*"
-      :custom-request="customRequest"
-      :disabled="uploading"
-      :max-count="1"
-      :show-upload-list="false"
+    <div
+      class="image-uploader__preview"
+      :class="{ 'image-uploader__preview--uploading': uploading }"
+      role="button"
+      tabindex="0"
     >
-      <div
-        class="image-uploader__preview"
-        :class="{ 'image-uploader__preview--uploading': uploading }"
-        role="button"
-        tabindex="0"
+      <Image
+        v-if="previewState.showImage"
+        :height="props.variant === 'input' ? 64 : 88"
+        :preview="{ src: previewSrc }"
+        :src="previewSrc"
+        :width="props.variant === 'input' ? 64 : 88"
+        @click.stop
+        @error="markImageLoadError"
+      />
+      <Upload
+        v-else
+        accept="image/*"
+        :custom-request="customRequest"
+        :disabled="uploading"
+        :max-count="1"
+        :show-upload-list="false"
       >
-        <Image
-          v-if="previewState.showImage"
-          :height="props.variant === 'input' ? 64 : 88"
-          :preview="false"
-          :src="previewSrc"
-          :width="props.variant === 'input' ? 64 : 88"
-          @error="markImageLoadError"
-        />
-        <span v-else class="image-uploader__empty">
+        <span class="image-uploader__empty">
           {{ previewState.text }}
         </span>
-      </div>
-    </Upload>
+      </Upload>
+    </div>
     <div class="image-uploader__actions">
       <Upload
         accept="image/*"
@@ -170,6 +172,14 @@ async function customRequest(options: UploadRequestOption) {
 
 .image-uploader__preview :deep(.ant-image-img) {
   object-fit: contain;
+}
+
+.image-uploader__preview > :deep(.ant-upload) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
 }
 
 .image-uploader__empty {

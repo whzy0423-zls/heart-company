@@ -120,6 +120,32 @@ export interface MiniappLearnConfig {
   sections: MiniappLearnSections;
 }
 
+export type MiniappCoursePaymentMode = 'consult' | 'paid';
+
+export interface MiniappCourse {
+  id: string;
+  title: string;
+  subtitle: string;
+  description: string;
+  cover: string;
+  badge: string;
+  format: string;
+  duration: string;
+  schedule: string;
+  location: string;
+  bullets: string[];
+  outline: string[];
+  notice: string;
+  enabled: boolean;
+  priceCents: number;
+  paymentMode: MiniappCoursePaymentMode;
+}
+
+export interface MiniappCoursesConfig {
+  items: MiniappCourse[];
+  [key: string]: unknown;
+}
+
 export interface EnterpriseServiceItem {
   description: string;
   title: string;
@@ -146,6 +172,7 @@ export interface SiteConfig {
   home: {
     enterprise?: EnterpriseConfig;
     miniappCarousel?: MiniappCarouselConfig;
+    miniappCourses?: MiniappCoursesConfig;
     miniappHome?: MiniappHomeConfig;
     miniappLearn?: MiniappLearnConfig;
   } & Record<string, any>;

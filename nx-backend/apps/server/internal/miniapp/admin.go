@@ -221,7 +221,7 @@ func (s *AdminStore) listTestRecords(ctx context.Context, userID int64, page Adm
 }
 
 func (s *AdminStore) listBookings(ctx context.Context, userID int64, page AdminPagination) ([]Booking, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,COALESCE(signup_id,0),kind,contact_name,phone,intent,preferred_time,message,status,create_time FROM bookings WHERE wx_user_id=$1 ORDER BY create_time DESC,id DESC LIMIT $2 OFFSET $3`, userID, page.PageSize, (page.Page-1)*page.PageSize)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,COALESCE(signup_id,0),kind,contact_name,phone,intent,preferred_time,message,status,create_time,course_id,course_title,price_cents,payment_mode,payment_status FROM bookings WHERE wx_user_id=$1 ORDER BY create_time DESC,id DESC LIMIT $2 OFFSET $3`, userID, page.PageSize, (page.Page-1)*page.PageSize)
 	if err != nil {
 		return nil, fmt.Errorf("list miniapp bookings: %w", err)
 	}
@@ -231,7 +231,7 @@ func (s *AdminStore) listBookings(ctx context.Context, userID int64, page AdminP
 		var item Booking
 		var id, signupID int64
 		var createdAt time.Time
-		if err := rows.Scan(&id, &signupID, &item.Kind, &item.ContactName, &item.Phone, &item.Intent, &item.PreferredTime, &item.Message, &item.Status, &createdAt); err != nil {
+		if err := rows.Scan(&id, &signupID, &item.Kind, &item.ContactName, &item.Phone, &item.Intent, &item.PreferredTime, &item.Message, &item.Status, &createdAt, &item.CourseID, &item.CourseTitle, &item.PriceCents, &item.PaymentMode, &item.PaymentStatus); err != nil {
 			return nil, fmt.Errorf("scan miniapp booking: %w", err)
 		}
 		item.ID = strconv.FormatInt(id, 10)

@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { getImagePreviewState, selectStoredImagePath } from './image-path-input';
@@ -59,5 +62,15 @@ describe('image preview display state', () => {
         value: 'https://cdn.example.com/missing-logo.png',
       }),
     ).toEqual({ showImage: false, text: '预览加载失败，请重试上传或检查权限' });
+  });
+});
+
+describe('image path input preview interaction', () => {
+  it('opens configured images in the image preview instead of the upload picker', () => {
+    const source = readFileSync(resolve(__dirname, 'image-path-input.vue'), 'utf8');
+
+    expect(source).toContain(':preview="{ src: previewSrc }"');
+    expect(source).toContain('@click.stop');
+    expect(source).not.toContain(':preview="false"');
   });
 });

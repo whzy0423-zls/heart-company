@@ -2,6 +2,7 @@ export const BOOKING_INTENT_KEY = import.meta.env?.DEV === true && import.meta.e
 
 const ALLOWED_KINDS = new Set(['consult', 'course', 'enterprise'])
 const MAX_INTENT_TEXT_LENGTH = 120
+const COURSE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/
 
 function normalizeIntent(input) {
   if (!input || typeof input !== 'object') return null
@@ -13,7 +14,9 @@ function normalizeIntent(input) {
     ? Array.from(input.intentText.trim()).slice(0, MAX_INTENT_TEXT_LENGTH).join('')
     : ''
 
-  return { kind, intentText }
+  const courseId = typeof input.courseId === 'string' ? input.courseId.trim() : ''
+  if (courseId && (kind !== 'course' || !COURSE_ID_PATTERN.test(courseId))) return null
+  return courseId ? { kind, courseId, intentText } : { kind, intentText }
 }
 
 export function clearBookingIntent() {

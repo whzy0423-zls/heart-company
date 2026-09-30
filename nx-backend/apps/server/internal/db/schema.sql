@@ -1194,6 +1194,11 @@ CREATE TABLE IF NOT EXISTS bookings (
 );
 
 CREATE INDEX IF NOT EXISTS idx_test_records_user ON test_records(wx_user_id, create_time DESC);
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS course_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS course_title TEXT NOT NULL DEFAULT '';
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS price_cents INT NOT NULL DEFAULT 0 CHECK (price_cents >= 0 AND price_cents <= 99999900);
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_mode TEXT NOT NULL DEFAULT 'consult' CHECK (payment_mode IN ('consult','paid'));
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'none' CHECK (payment_status IN ('none','pending','paid'));
 CREATE INDEX IF NOT EXISTS idx_bookings_user ON bookings(wx_user_id, create_time DESC);
 CREATE INDEX IF NOT EXISTS idx_wx_users_create_time ON wx_users(create_time DESC);
 

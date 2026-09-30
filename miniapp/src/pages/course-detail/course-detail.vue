@@ -6,7 +6,7 @@ import NxImagePreview from '../../components/NxImagePreview.vue'
 import { STUDIO_COURSES, STUDIO_TEACHER } from '../../data/teacherStudio'
 import { UI_PREVIEW } from '../../utils/uiPreview'
 import { getCachedSiteConfig, getStoredSiteConfig } from '../../utils/siteConfig'
-import { normalizeCoursewareItems, normalizeTeachers } from '../../utils/teacherCourseware'
+import { normalizeMiniappCourses, normalizeTeachers } from '../../utils/teacherCourseware'
 import { setBookingIntent } from '../../utils/bookingIntent'
 import { previewImage } from '../../utils/imagePreview'
 import { isWechatDevtools } from '../../utils/imagePreview'
@@ -16,7 +16,7 @@ const config = ref(getStoredSiteConfig() || {})
 const loading = ref(false)
 const activeSection = ref('intro')
 const sections = [{ id: 'intro', label: '课程介绍' }, { id: 'outline', label: '学习内容' }, { id: 'notice', label: '报名须知' }]
-const courses = computed(() => UI_PREVIEW ? STUDIO_COURSES : normalizeCoursewareItems(config.value).map((item, index) => ({ ...item, id: `course-${index}`, tag: item.badge, highlights: item.bullets })))
+const courses = computed(() => UI_PREVIEW ? STUDIO_COURSES : normalizeMiniappCourses(config.value))
 const course = computed(() => courses.value.find((item) => String(item.id) === courseId.value))
 const teacher = computed(() => UI_PREVIEW ? STUDIO_TEACHER : normalizeTeachers(config.value)[0])
 const teacherAvatar = computed(() => {
@@ -27,6 +27,8 @@ const teacherAvatar = computed(() => {
 })
 const teacherAvatarFailed = ref(false)
 const teacherAvatarPreviewVisible = ref(false)
+const courseCoverFailed = ref(false)
+const courseCoverPreviewVisible = ref(false)
 const highlights = computed(() => Array.isArray(course.value?.highlights) ? course.value.highlights : [])
 const outline = computed(() => Array.isArray(course.value?.outline) ? course.value.outline : [])
 onLoad(async (query) => {
@@ -46,7 +48,7 @@ function chooseSection(section) {
 function enroll() {
   if (!course.value) return
   const detail = course.value.schedule ? `${course.value.title} · ${course.value.schedule}` : course.value.title
-  const saved = setBookingIntent({ kind: 'course', intentText: detail })
+  const saved = setBookingIntent({ kind: 'course', courseId: course.value.id, intentText: detail })
   if (!saved) {
     uni.showToast({ title: '本机存储暂不可用，请在报名页填写课程名称', icon: 'none' })
   }
@@ -62,6 +64,16 @@ function previewTeacherAvatar() {
   previewImage(teacherAvatar.value)
 }
 function closeTeacherAvatarPreview() { teacherAvatarPreviewVisible.value = false }
+function previewCourseCover() {
+  const cover = course.value?.cover || ''
+  if (!cover || courseCoverFailed.value) return
+  if (isWechatDevtools()) {
+    courseCoverPreviewVisible.value = true
+    return
+  }
+  previewImage(cover)
+}
+function closeCourseCoverPreview() { courseCoverPreviewVisible.value = false }
 function outlineTitle(item) { return typeof item === 'string' ? item : item.title || item.name || '主题练习' }
 function outlineDescription(item) { return typeof item === 'object' && item ? item.description || item.content || '' : '' }
 </script>
@@ -71,7 +83,7 @@ function outlineDescription(item) { return typeof item === 'object' && item ? it
     <view v-if="loading && !course" class="empty-state"><text class="empty-title">正在整理课程信息…</text></view>
     <view v-else-if="!course" class="empty-state"><NxIcon name="book" :size="38" /><text class="empty-title">这门课程暂未开放</text><text class="muted-copy">可以先看看其他学习方向，或联系工作室了解安排。</text><button class="primary-button" @click="goBack">返回课程列表</button></view>
     <block v-else>
-      <view class="course-cover"><image :src="course.cover" mode="aspectFill" class="cover-image" :aria-label="course.title" /><view class="cover-shade" /><view class="cover-caption"><text>认识自己，是一生的功课。</text><text class="caption-en">A JOURNEY TO YOURSELF</text></view></view>
+      <view class="course-cover" role="button" aria-label="预览课程封面" @click="previewCourseCover"><image :src="course.cover" mode="aspectFill" class="cover-image" :aria-label="course.title" @error="courseCoverFailed = true" /><view class="cover-shade" /><view class="cover-caption"><text>认识自己，是一生的功课。</text><text class="caption-en">A JOURNEY TO YOURSELF</text></view></view>
       <view class="detail-content">
         <view class="course-heading"><view class="title-meta"><text>{{ course.tag || '主题课程' }}</text><text class="meta-divider" /><text>{{ course.format || '主题共学' }}</text></view><text class="course-title">{{ course.title }}</text><text class="course-subtitle">{{ course.subtitle || course.description }}</text><view class="course-info"><view><NxIcon name="calendar" :size="18" /><text>{{ course.schedule || '排期请咨询工作室' }}</text></view><view><NxIcon name="clock" :size="18" /><text>{{ course.duration }}</text></view></view><view v-if="course.location" class="location-line"><text>{{ course.location }}</text><text v-if="UI_PREVIEW" class="demo-badge">演示排期 · 以实际发布为准</text></view></view>
         <view class="section-tabs"><button v-for="section in sections" :key="section.id" :class="['section-tab', { active: activeSection === section.id }]" @click="chooseSection(section.id)">{{ section.label }}</button></view>
@@ -79,16 +91,23 @@ function outlineDescription(item) { return typeof item === 'object' && item ? it
         <button v-if="teacher" class="teacher-card" @click="teacherDetail"><view v-if="teacherAvatar && !teacherAvatarFailed" class="teacher-avatar-action" :aria-label="`预览${teacher.name}老师头像`" @click.stop="previewTeacherAvatar"><image class="teacher-avatar" :src="teacherAvatar" mode="aspectFill" :aria-label="teacher.name" @error="teacherAvatarFailed = true" /></view><view v-else class="teacher-avatar teacher-avatar--fallback">{{ teacher.name.slice(0, 1) }}</view><view class="teacher-copy"><text class="teacher-overline">你的学习向导</text><text class="teacher-name">{{ teacher.name }}</text><text class="teacher-title">{{ teacher.title }}</text></view><NxIcon name="arrow" :size="21" /></button>
         <view id="section-outline" class="content-section"><text class="eyebrow">LEARNING JOURNEY</text><text class="section-title">一步一步，把觉察带回日常</text><view v-if="outline.length" class="outline-list"><view v-for="(item, index) in outline" :key="index" class="outline-item"><text class="outline-number">0{{ index + 1 }}</text><view><text class="outline-title">{{ outlineTitle(item) }}</text><text v-if="outlineDescription(item)" class="outline-description">{{ outlineDescription(item) }}</text></view></view></view><view v-else class="outline-empty"><text class="body-copy">{{ course.description }}</text><text class="muted-copy">详细学习内容与课程安排，可在报名沟通时向工作室了解。</text></view></view>
         <view class="quote-note"><text class="quote-mark">“</text><view class="quote-copy"><text>学习不是为自己贴上标签，</text><text>而是为改变留出空间。</text></view><text class="quote-footer">让理解发生，让成长继续。</text></view>
-        <view id="section-notice" class="content-section notice-section"><text class="eyebrow">BEFORE WE MEET</text><text class="section-title">相遇之前，你可能想知道</text><view class="notice-item"><text class="notice-label">如何报名</text><text class="body-copy">提交报名意向后，工作室会联系你确认课程、时间与费用。意向提交不等于支付或席位确认。</text></view><view class="notice-item"><text class="notice-label">课程安排</text><text class="body-copy">{{ UI_PREVIEW ? '当前页面的排期、地点与价格为界面演示数据。正式开课信息，请以工作室实际发布与确认为准。' : '具体开课时间、地点、费用及调整规则，将由工作室在报名沟通时说明。' }}</text></view><view class="notice-item"><text class="notice-label">学习建议</text><text class="body-copy">带着好奇和真实问题来，不需要提前确定自己的性格类型。九型人格帮助自我觉察，不替代专业心理诊疗。</text></view></view>
+        <view id="section-notice" class="content-section notice-section"><text class="eyebrow">BEFORE WE MEET</text><text class="section-title">相遇之前，你可能想知道</text><view class="notice-item"><text class="notice-label">如何报名</text><text class="body-copy">{{ course.notice || (course.paymentMode === 'paid' ? '提交报名并完成微信支付后，工作室会与你确认开课时间与席位安排。' : '提交报名意向后，工作室会联系你确认课程、时间与费用。意向提交不等于支付或席位确认。') }}</text></view><view class="notice-item"><text class="notice-label">课程安排</text><text class="body-copy">{{ UI_PREVIEW ? '当前页面的排期、地点与价格为界面演示数据。正式开课信息，请以工作室实际发布与确认为准。' : '具体开课时间、地点、费用及调整规则，以工作室实际发布与确认为准。' }}</text></view><view class="notice-item"><text class="notice-label">学习建议</text><text class="body-copy">带着好奇和真实问题来，不需要提前确定自己的性格类型。九型人格帮助自我觉察，不替代专业心理诊疗。</text></view></view>
         <view class="page-ending"><view /><text>期待，与你在课堂相遇</text><view /></view>
       </view>
-      <view class="enroll-bar"><view class="enroll-price"><view v-if="course.price !== undefined"><text class="currency">¥</text><text class="price">{{ course.price.toLocaleString() }}</text><text class="price-unit"> / 人</text></view><text v-else class="consult-price">预约了解课程</text><text class="price-caption">{{ UI_PREVIEW ? '演示价格 · 无需在线支付' : '提交意向后确认安排' }}</text></view><button class="enroll-button" @click="enroll">报名这门课程 <NxIcon name="arrow" :size="18" color="#FFFFFF" /></button></view>
+      <view class="enroll-bar"><view class="enroll-price"><view v-if="course.price !== undefined"><text class="currency">¥</text><text class="price">{{ course.price.toLocaleString() }}</text><text class="price-unit"> / 人</text></view><text v-else class="consult-price">预约了解课程</text><text class="price-caption">{{ UI_PREVIEW ? '演示价格 · 无需在线支付' : course.paymentMode === 'paid' ? '在线支付后确认报名' : '提交意向后确认安排' }}</text></view><button class="enroll-button" @click="enroll">{{ course.paymentMode === 'paid' ? '报名并支付' : '报名这门课程' }} <NxIcon name="arrow" :size="18" color="#FFFFFF" /></button></view>
       <NxImagePreview
         v-if="teacherAvatar && !teacherAvatarFailed"
         :visible="teacherAvatarPreviewVisible"
         :src="teacherAvatar"
         :alt="`${teacher?.name || '老师'}头像`"
         @close="closeTeacherAvatarPreview"
+      />
+      <NxImagePreview
+        v-if="course.cover && !courseCoverFailed"
+        :visible="courseCoverPreviewVisible"
+        :src="course.cover"
+        :alt="`${course.title || '课程'}封面`"
+        @close="closeCourseCoverPreview"
       />
     </block>
   </view>

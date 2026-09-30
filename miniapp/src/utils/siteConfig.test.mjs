@@ -48,6 +48,7 @@ assert.equal(hasSiteConfigLearningContent({ home: { teachers: [{ name: '韩老�
 assert.equal(hasSiteConfigLearningContent({ home: { teacherTeaser: { title: '韩常青（老韩）｜九型芯之力首席导师' } } }), true, 'home teacherTeaser should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ materials: [{ title: '课件' }] }), true, 'root materials should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ home: { courseware: { items: [{ title: '课件' }] } } }), true, 'home courseware should count as learning content')
+assert.equal(hasSiteConfigLearningContent({ home: { miniappCourses: { items: [{ title: '报名课' }] } } }), true, 'miniapp course catalog should count as learning content')
 assert.equal(hasSiteConfigLearningContent({ home: { courses: { items: [] }, quotes: { items: [] } } }), false, 'empty learning arrays should not count as visible learning content')
 assert.equal(hasSiteConfigLearningSection({ home: {} }), false, 'missing learning section should be treated as incomplete')
 assert.equal(hasSiteConfigLearningSection({ home: { teacher: {} } }), true, 'explicit teacher section should be treated as intentional content')

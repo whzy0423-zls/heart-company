@@ -98,7 +98,7 @@ func validateWxPayCallbackAgainstOrder(env config.Env, result wxpay.CallbackResu
 		return fmt.Errorf("wxpay amount mismatch: callback=%d order=%d", result.AmountTotal, order.Amount)
 	}
 	if order.Product != "report" && order.Product != "member" && order.Product != miniapp.ProductWechatPayTest &&
-		order.Product != "classroom_series" && order.Product != "classroom_content" {
+		order.Product != "classroom_series" && order.Product != "classroom_content" && order.Product != miniapp.ProductCourseBooking {
 		return fmt.Errorf("unsupported payment product: %s", order.Product)
 	}
 	return nil

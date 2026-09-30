@@ -2,6 +2,7 @@ export const BOOKING_DRAFT_KEY = import.meta.env?.DEV === true && import.meta.en
 
 const DEFAULT_KIND = 'consult'
 const FIELDS = ['contactName', 'phone', 'intent', 'preferredTime', 'message']
+const COURSE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/
 
 function normalizeDraft(input) {
   if (!input || typeof input !== 'object') return null
@@ -11,6 +12,9 @@ function normalizeDraft(input) {
   }
   for (const field of FIELDS) {
     data[field] = typeof input[field] === 'string' ? input[field] : ''
+  }
+  if (typeof input.courseId === 'string' && COURSE_ID_PATTERN.test(input.courseId.trim())) {
+    data.courseId = input.courseId.trim()
   }
   return data
 }

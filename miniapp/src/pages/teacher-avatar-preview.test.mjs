@@ -24,6 +24,8 @@ assert.match(courseDetail, /import\s+\{\s*previewImage\s*\}\s+from\s+['"]\.\.\/\
 assert.match(courseDetail, /function\s+previewTeacherAvatar\s*\(\s*\)\s*\{[\s\S]*previewImage\(/, 'course detail should expose a teacher avatar preview action')
 assert.match(courseDetail, /class=["']teacher-avatar-action["'][^>]*@click\.stop=["']previewTeacherAvatar["']/, 'course detail teacher avatar should have a dedicated preview tap target')
 assert.match(courseDetail, /const\s+teacherAvatar\s*=\s*computed\(/, 'course detail should resolve a real teacher portrait before rendering')
+assert.match(courseDetail, /function\s+previewCourseCover\s*\(\s*\)\s*\{[\s\S]*previewImage\(/, 'course detail should expose a course cover preview action')
+assert.match(courseDetail, /class=["']course-cover["'][^>]*@click=["']previewCourseCover["']/, 'course cover should have a dedicated preview tap target')
 
 assert.match(classroomDetail, /import\s+\{\s*previewImage\s*\}\s+from\s+["']\.\.\/\.\.\/utils\/imagePreview(?:\.js)?["']/, 'classroom detail should use the shared image preview helper')
 assert.match(classroomDetail, /function\s+previewTeacherAvatar\s*\(\s*\)\s*\{[\s\S]*previewImage\(/, 'classroom detail should expose a teacher avatar preview action')

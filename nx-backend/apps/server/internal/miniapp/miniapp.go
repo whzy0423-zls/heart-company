@@ -404,6 +404,11 @@ func (s *Store) ListTestRecords(ctx context.Context, userID int64) ([]TestRecord
 // ---------------- 预约 ----------------
 
 type Booking struct {
+	CourseID      string `json:"courseId"`
+	CourseTitle   string `json:"courseTitle"`
+	PriceCents    int    `json:"priceCents"`
+	PaymentMode   string `json:"paymentMode"`
+	PaymentStatus string `json:"paymentStatus"`
 	ID            string `json:"id"`
 	SignupID      string `json:"signupId"`
 	Kind          string `json:"kind"`
@@ -417,6 +422,11 @@ type Booking struct {
 }
 
 type BookingInput struct {
+	CourseID      string `json:"courseId"`
+	CourseTitle   string `json:"-"`
+	PriceCents    int    `json:"-"`
+	PaymentMode   string `json:"-"`
+	PaymentStatus string `json:"-"`
 	Kind          string `json:"kind"`
 	ContactName   string `json:"contactName"`
 	Phone         string `json:"phone"`
@@ -435,6 +445,10 @@ const (
 var mainlandBookingPhoneRE = regexp.MustCompile(`^1[3-9][0-9]{9}$`)
 
 func normalizeBookingInput(in BookingInput) (BookingInput, error) {
+	in.CourseID = strings.TrimSpace(in.CourseID)
+	if in.CourseID != "" && (in.CourseTitle == "" || len(in.CourseID) > 80 || containsControl(in.CourseID)) {
+		return BookingInput{}, ErrInvalidBooking
+	}
 	in.Kind = strings.TrimSpace(in.Kind)
 	if in.Kind == "" {
 		in.Kind = "consult"
@@ -482,14 +496,15 @@ func (s *Store) InsertBooking(ctx context.Context, q dbtx.DBTX, userID int64, in
 	var id int64
 	var ct time.Time
 	err = q.QueryRowContext(ctx,
-		`INSERT INTO bookings (wx_user_id, kind, contact_name, phone, intent, preferred_time, message, signup_id)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, create_time`,
-		userID, in.Kind, in.ContactName, in.Phone, in.Intent, in.PreferredTime, in.Message, signupID,
+		`INSERT INTO bookings (wx_user_id, kind, contact_name, phone, intent, preferred_time, message, signup_id,course_id,course_title,price_cents,payment_mode,payment_status)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id, create_time`,
+		userID, in.Kind, in.ContactName, in.Phone, in.Intent, in.PreferredTime, in.Message, signupID, in.CourseID, in.CourseTitle, in.PriceCents, bookingPaymentMode(in), bookingPaymentStatus(in),
 	).Scan(&id, &ct)
 	if err != nil {
 		return Booking{}, err
 	}
 	return Booking{
+		CourseID: in.CourseID, CourseTitle: in.CourseTitle, PriceCents: in.PriceCents, PaymentMode: bookingPaymentMode(in), PaymentStatus: bookingPaymentStatus(in),
 		ID:            strconv.FormatInt(id, 10),
 		SignupID:      strconv.FormatInt(signupID, 10),
 		Kind:          in.Kind,
@@ -507,7 +522,7 @@ func (s *Store) ListBookings(ctx context.Context, userID int64) ([]Booking, erro
 	c, cancel := s.ctx(ctx)
 	defer cancel()
 	rows, err := s.db.QueryContext(c,
-		`SELECT id, COALESCE(signup_id,0), kind, contact_name, phone, intent, preferred_time, message, status, create_time
+		`SELECT id, COALESCE(signup_id,0), kind, contact_name, phone, intent, preferred_time, message, status, create_time,course_id,course_title,price_cents,payment_mode,payment_status
 		 FROM bookings WHERE wx_user_id=$1 ORDER BY create_time DESC LIMIT 50`, userID)
 	if err != nil {
 		return nil, err
@@ -518,7 +533,7 @@ func (s *Store) ListBookings(ctx context.Context, userID int64) ([]Booking, erro
 		var b Booking
 		var id, signupID int64
 		var ct time.Time
-		if err := rows.Scan(&id, &signupID, &b.Kind, &b.ContactName, &b.Phone, &b.Intent, &b.PreferredTime, &b.Message, &b.Status, &ct); err != nil {
+		if err := rows.Scan(&id, &signupID, &b.Kind, &b.ContactName, &b.Phone, &b.Intent, &b.PreferredTime, &b.Message, &b.Status, &ct, &b.CourseID, &b.CourseTitle, &b.PriceCents, &b.PaymentMode, &b.PaymentStatus); err != nil {
 			return nil, err
 		}
 		b.ID = strconv.FormatInt(id, 10)
@@ -529,4 +544,17 @@ func (s *Store) ListBookings(ctx context.Context, userID int64) ([]Booking, erro
 		items = append(items, b)
 	}
 	return items, rows.Err()
+}
+
+func bookingPaymentMode(in BookingInput) string {
+	if in.CourseID != "" && in.PaymentMode == "paid" {
+		return "paid"
+	}
+	return "consult"
+}
+func bookingPaymentStatus(in BookingInput) string {
+	if bookingPaymentMode(in) == "paid" {
+		return "pending"
+	}
+	return "none"
 }

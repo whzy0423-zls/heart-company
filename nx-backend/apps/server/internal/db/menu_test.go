@@ -68,6 +68,28 @@ func TestDefaultMenusIncludeMiniappOrdersUnderMiniappManagement(t *testing.T) {
 	t.Fatal("expected default menu MiniappOrders with fixed id 513")
 }
 
+func TestDefaultMenusIncludeMiniappCustomersUnderMiniappManagement(t *testing.T) {
+	for _, menu := range defaultMenus {
+		if menu.ID != 1305 {
+			continue
+		}
+		if menu.PID != 1300 || menu.Name != "MiniappCustomers" {
+			t.Fatalf("expected miniapp customers under MiniappManage: %+v", menu)
+		}
+		if menu.Path != "/miniapp/customers" || menu.Component != "/customer/miniapp-users" {
+			t.Fatalf("unexpected miniapp customers route: %+v", menu)
+		}
+		if menu.AuthCode != "Customer:Miniapp:List" || menu.Type != "menu" || menu.Sort != 6 {
+			t.Fatalf("unexpected miniapp customers metadata: %+v", menu)
+		}
+		if menu.Icon == "" || menu.Title != "客户信息" {
+			t.Fatalf("unexpected miniapp customers label: %+v", menu)
+		}
+		return
+	}
+	t.Fatal("expected default menu MiniappCustomers with fixed id 1305")
+}
+
 func TestDefaultMenusIncludeAppPaymentMode(t *testing.T) {
 	for _, menu := range defaultMenus {
 		if menu.Name != "AppPaymentMode" {

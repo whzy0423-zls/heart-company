@@ -22,6 +22,7 @@ const {
   DEFAULT_COURSEWARE_ITEMS,
   DEFAULT_TEACHERS,
   normalizeCoursewareItems,
+  normalizeMiniappCourses,
   normalizeTeachers,
 } = await import(`file://${modulePath}`)
 
@@ -313,6 +314,28 @@ assert.equal(
   '优先课件',
   'a nonempty higher-priority courseware source should win over an empty home courses section',
 )
+
+const configuredMiniappCourses = normalizeMiniappCourses({
+  home: {
+    miniappCourses: {
+      items: [
+        {
+          id: 'growth-live',
+          title: '成长直播课',
+          cover: '/custom-cover.jpg',
+          badge: '直播',
+          paymentMode: 'paid',
+          priceCents: 19900,
+          enabled: true,
+        },
+        { id: 'hidden', title: '已下架', enabled: false },
+      ],
+    },
+  },
+})
+assert.deepEqual(configuredMiniappCourses.map((item) => item.id), ['growth-live'], 'miniapp catalog should hide disabled courses')
+assert.equal(configuredMiniappCourses[0].price, 199, 'miniapp catalog should convert server cents to yuan')
+assert.equal(configuredMiniappCourses[0].paymentMode, 'paid', 'miniapp catalog should preserve payment mode')
 
 console.log('teacher/courseware normalization tests passed')
 await rm(dir, { force: true, recursive: true })

@@ -27,6 +27,46 @@ func TestSeedCallsCustomerMiniappMenuBindingMigration(t *testing.T) {
 	}
 }
 
+func TestSeedCallsMiniappCustomerManagementMenuBindingMigration(t *testing.T) {
+	source, err := os.ReadFile("db.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedStart := strings.Index(string(source), "func seed(ctx ")
+	seedEnd := strings.Index(string(source), "type seedMenu struct")
+	if seedStart < 0 || seedEnd <= seedStart {
+		t.Fatal("could not locate seed function")
+	}
+	if got := strings.Count(string(source[seedStart:seedEnd]), "seedMiniappCustomerManagementMenuBindings(ctx, database)"); got != 1 {
+		t.Fatalf("seed must call miniapp customer management menu migration exactly once, got %d", got)
+	}
+}
+
+func TestSeedMiniappCustomerManagementMenuBindingsUsesOneTimeMigrationMarker(t *testing.T) {
+	source, err := os.ReadFile("db.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	functionStart := strings.Index(string(source), "func seedMiniappCustomerManagementMenuBindings(")
+	functionEnd := strings.Index(string(source), "// seedMindQuotes")
+	if functionStart < 0 || functionEnd <= functionStart {
+		t.Fatal("could not locate miniapp customer management menu migration")
+	}
+	functionSource := string(source[functionStart:functionEnd])
+	for _, required := range []string{
+		"BeginTx",
+		"INSERT INTO migration_logs",
+		"seed.miniapp_customer_management_menu_bindings.v1",
+		"menu_id = 511",
+		"1305",
+		"tx.Commit()",
+	} {
+		if !strings.Contains(functionSource, required) {
+			t.Fatalf("miniapp customer management menu migration must contain %q", required)
+		}
+	}
+}
+
 func TestSeedCustomerMiniappMenuBindingsUsesOneTimeMigrationMarker(t *testing.T) {
 	source, err := os.ReadFile("db.go")
 	if err != nil {
@@ -159,13 +199,23 @@ func TestSeedCustomerMiniappMenuBindingsUpgradesOnlyExistingCustomerReaders(t *t
 	if err := seedCustomerMiniappMenuBindings(ctx, database); err != nil {
 		t.Fatalf("seed miniapp customer bindings should be idempotent: %v", err)
 	}
+	if err := seedMiniappCustomerManagementMenuBindings(ctx, database); err != nil {
+		t.Fatalf("seed miniapp management customer bindings: %v", err)
+	}
+	if err := seedMiniappCustomerManagementMenuBindings(ctx, database); err != nil {
+		t.Fatalf("seed miniapp management customer bindings should be idempotent: %v", err)
+	}
 
 	for _, roleCode := range eligibleRoleCodes {
 		assertRoleMenuBindingCount(t, ctx, database, roleCode, 511, 1)
+		assertRoleMenuBindingCount(t, ctx, database, roleCode, 1305, 1)
 	}
 	assertRoleMenuBindingCount(t, ctx, database, "other_reader_test", 511, 0)
+	assertRoleMenuBindingCount(t, ctx, database, "other_reader_test", 1305, 0)
 	assertRoleMenuBindingCount(t, ctx, database, "admin", 511, 1)
+	assertRoleMenuBindingCount(t, ctx, database, "admin", 1305, 1)
 	assertSeedMigrationLogCount(t, ctx, database, "seed.customer_miniapp_menu_bindings.v1", 1)
+	assertSeedMigrationLogCount(t, ctx, database, "seed.miniapp_customer_management_menu_bindings.v1", 1)
 
 	manuallyRevokedRole := eligibleRoleCodes[0]
 	if _, err := database.ExecContext(ctx,
@@ -173,11 +223,21 @@ func TestSeedCustomerMiniappMenuBindingsUpgradesOnlyExistingCustomerReaders(t *t
 		manuallyRevokedRole); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := database.ExecContext(ctx,
+		`DELETE FROM role_menus USING roles WHERE role_menus.role_id=roles.id AND roles.code=$1 AND role_menus.menu_id=1305`,
+		manuallyRevokedRole); err != nil {
+		t.Fatal(err)
+	}
 	if err := seedCustomerMiniappMenuBindings(ctx, database); err != nil {
 		t.Fatalf("completed migration should be a no-op: %v", err)
 	}
+	if err := seedMiniappCustomerManagementMenuBindings(ctx, database); err != nil {
+		t.Fatalf("completed miniapp management migration should be a no-op: %v", err)
+	}
 	assertRoleMenuBindingCount(t, ctx, database, manuallyRevokedRole, 511, 0)
+	assertRoleMenuBindingCount(t, ctx, database, manuallyRevokedRole, 1305, 0)
 	assertSeedMigrationLogCount(t, ctx, database, "seed.customer_miniapp_menu_bindings.v1", 1)
+	assertSeedMigrationLogCount(t, ctx, database, "seed.miniapp_customer_management_menu_bindings.v1", 1)
 }
 
 func assertRoleMenuBindingCount(t *testing.T, ctx context.Context, database *sql.DB, roleCode string, menuID int64, want int) {

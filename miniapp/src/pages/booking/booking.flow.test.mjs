@@ -10,7 +10,7 @@ const bookingScript = await scriptFor('./booking.vue')
 const detailScript = await scriptFor('../course-detail/course-detail.vue')
 const previewCourse = { id: 'intro', title: '演示课程', schedule: '10月17日', price: 1980 }
 
-function createHarness({ preview = true, draft = null } = {}) {
+function createHarness({ preview = true, draft = null, h5 = false } = {}) {
   const state = { draft, intents: [], saved: [], requests: [], clears: 0, toasts: [], failing: false, logins: 0, scrolls: [], navigations: [], setIntents: [] }
   const context = vm.createContext({
     ref: (value) => ({ value }),
@@ -37,9 +37,10 @@ function createHarness({ preview = true, draft = null } = {}) {
     getCachedSiteConfig: async () => ({}),
     normalizePersonalExpertHome: () => ({ enterprise: { serviceModes: [], processSteps: [] } }),
     normalizeMiniappLearn: () => ({ classroom: { enabled: true } }),
-    normalizeCoursewareItems: () => [{ title: '工作室已配置的课程', bullets: [] }],
+    normalizeMiniappCourses: () => [{ title: '工作室已配置的课程', bullets: [], id: 'course-1', paymentMode: 'consult' }],
     normalizeTeachers: () => [],
     STUDIO_COURSES: [previewCourse], STUDIO_TEACHER: {}, UI_PREVIEW: preview,
+    window: h5 ? { document: {} } : undefined,
     uni: {
       showToast: (payload) => state.toasts.push(payload),
       pageScrollTo: (payload) => state.scrolls.push(payload),
@@ -57,7 +58,7 @@ function createBooking(options) {
 }
 
 {
-  const { state, page } = createBooking()
+  const { state, page } = createBooking({ preview: false })
   assert.equal(page.currentKind.value, 'course', 'booking starts with courses')
   await page.submit()
   assert.equal(state.requests.length, 0, 'invalid forms never reach the API')
@@ -77,8 +78,16 @@ function createBooking(options) {
   assert.equal(page.consent.value, false, 'consent is not carried into another request')
 }
 {
+  const { state, page } = createBooking({ h5: true })
+  page.form.value = { contactName: '预览用户', phone: '13800138000', intent: '课程咨询', preferredTime: '', message: '' }
+  page.consent.value = true
+  await page.submit()
+  assert.equal(state.requests.length, 0, 'H5 preview must never submit local or backend booking data')
+  assert.match(state.toasts.at(-1).title, /微信小程序内提交/)
+}
+{
   const draft = { kind: 'consult', contactName: '示例学员', phone: '13800138000', intent: '关系沟通', preferredTime: '周末', message: '保留这条留言' }
-  const { state, page } = createBooking({ draft })
+  const { state, page } = createBooking({ draft, preview: false })
   assert.equal(page.currentKind.value, 'consult')
   assert.equal(page.consent.value, false, 'restoring a draft does not imply consent')
   page.consent.value = true
@@ -113,6 +122,7 @@ function createBooking(options) {
   await state.load({ id: 'intro' })
   context.page.enroll()
   assert.equal(state.setIntents[0].kind, 'course')
+  assert.equal(state.setIntents[0].courseId, 'intro')
   assert.equal(state.setIntents[0].intentText, '演示课程 · 10月17日')
   assert.equal(state.navigations[0].url, '/pages/booking/booking')
 }
@@ -123,7 +133,7 @@ function createBooking(options) {
   assert.equal(context.page.course.value, undefined, 'production does not resolve fixture course IDs')
   context.page.enroll()
   assert.equal(state.setIntents.length, 0, 'unavailable courses cannot create a booking intent')
-  await state.load({ id: 'course-0' })
+  await state.load({ id: 'course-1' })
   assert.equal(context.page.course.value.title, '工作室已配置的课程')
 }
 console.log('Booking and course-detail flow tests passed')

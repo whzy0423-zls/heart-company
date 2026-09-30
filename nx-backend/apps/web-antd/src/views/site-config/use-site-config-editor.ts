@@ -37,7 +37,7 @@ export function useSiteConfigEditor() {
     }
   }
 
-  async function saveConfig() {
+  async function saveConfig(successMessage = '已保存官网配置') {
     if (!config.value) return;
     if (!config.value.site.brandName?.trim()) {
       message.warning('请填写品牌名称');
@@ -50,7 +50,7 @@ export function useSiteConfigEditor() {
     saving.value = true;
     try {
       config.value = await updateSiteConfigApi(config.value);
-      message.success('已保存官网配置');
+      message.success(successMessage);
     } finally {
       saving.value = false;
     }

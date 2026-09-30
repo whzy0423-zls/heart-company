@@ -41,6 +41,14 @@ assert.match(
   /export function createWechatPayTestOrderApi\(\)/,
   "wechat payment test API must not accept a client amount",
 );
+assert.match(source, /export function createCourseBookingOrderApi\(bookingId\)/,
+  "course booking payment must expose a server-priced order API");
+assert.match(source, /url:\s*["']\/miniapp\/course\/orders["']/,
+  "course booking order API must use the course order endpoint");
+assert.match(source, /export function getCourseBookingOrderStatusApi\(bookingId\)/,
+  "course booking payment must poll server confirmation");
+assert.match(source, /export function devPayCourseBookingOrderApi\(outTradeNo\)/,
+  "course booking payment must support local dev confirmation");
 
 const dir = await mkdtemp(join(tmpdir(), "nx-miniapp-classroom-api-"));
 try {
@@ -141,9 +149,12 @@ try {
   await api.createClassroomOrderApi("series", 12);
   await api.getClassroomOrderStatusApi("content", 21);
   await api.devPayClassroomOrderApi("cls-21");
+  await api.createCourseBookingOrderApi(31);
+  await api.getCourseBookingOrderStatusApi("31");
+  await api.devPayCourseBookingOrderApi("crs-31");
   await api.updateClassroomProgressApi(21, 91);
   await api.getClassroomContinueLearningApi();
-  assert.deepEqual(requestStub.calls.slice(-5), [
+  assert.deepEqual(requestStub.calls.slice(-8), [
     {
       url: "/miniapp/classroom/orders",
       method: "POST",
@@ -160,6 +171,24 @@ try {
       url: "/miniapp/classroom/orders/dev-pay",
       method: "POST",
       data: { outTradeNo: "cls-21" },
+      auth: true,
+    },
+    {
+      url: "/miniapp/course/orders",
+      method: "POST",
+      data: { bookingId: "31" },
+      auth: true,
+    },
+    {
+      url: "/miniapp/course/orders/status",
+      method: "GET",
+      query: { bookingId: "31" },
+      auth: true,
+    },
+    {
+      url: "/miniapp/course/orders/dev-pay",
+      method: "POST",
+      data: { outTradeNo: "crs-31" },
       auth: true,
     },
     {

@@ -239,6 +239,12 @@ func (s *Service) CreateBooking(ctx context.Context, userID int64, in BookingInp
 }
 
 func BookingInterest(in BookingInput) string {
+	if in.CourseID != "" {
+		if in.PaymentMode == "paid" {
+			return "课程报名 · " + in.CourseTitle + " · 待付款"
+		}
+		return "课程报名 · " + in.CourseTitle + " · 咨询确认"
+	}
 	kind := strings.TrimSpace(in.Kind)
 	if kind == "" {
 		kind = "consult"

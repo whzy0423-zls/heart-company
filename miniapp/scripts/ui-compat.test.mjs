@@ -148,7 +148,7 @@ assert.match(indexPage, /listClassroomRecentApi/, 'home videos should come from 
 assert.match(indexPage, /const videos = ref\(\[\]\)/, 'home must not initialize unpublished video fixtures')
 assert.match(indexPage, /if \(current !== ticket\) return/, 'home should discard stale refresh results')
 assert.match(indexPage, /Promise\.allSettled/, 'teacher and video requests should fail independently')
-assert.match(indexPage, /UI_PREVIEW \? STUDIO_COURSES : normalizeCoursewareItems/, 'simulated course schedules must remain restricted to preview mode')
+assert.match(indexPage, /UI_PREVIEW \? STUDIO_COURSES : normalizeMiniappCourses/, 'simulated course schedules must remain restricted to preview mode')
 assert.match(indexTemplate, /v-if="UI_PREVIEW"[^>]*>演示排期/, 'sample schedules should be visibly identified')
 assert.match(indexPage, /classroomContentRoute\(item\)/, 'published videos should use the validated classroom detail route')
 assert.match(indexPage, /function daily\(\)[\s\S]*?uni\.switchTab\(\{ url: '\/pages\/learn\/learn'/, 'daily sharing should navigate to the native learning tab')

@@ -69,6 +69,12 @@ assert.equal(Array.from(emojiIntent.intentText).length, 120, 'emoji text is capp
 assert.equal(emojiIntent.intentText, '😀'.repeat(120), 'emoji truncation does not leave a lone surrogate')
 assert.equal(setBookingIntent({ kind: 'course', intentText: 42 }), true)
 assert.deepEqual(consumeBookingIntent(), { kind: 'course', intentText: '' }, 'non-string intent text normalizes to empty text')
+assert.equal(setBookingIntent({ kind: 'course', courseId: 'growth-live', intentText: '成长直播课' }), true)
+assert.deepEqual(
+  consumeBookingIntent(),
+  { kind: 'course', courseId: 'growth-live', intentText: '成长直播课' },
+  'course handoff preserves the server catalog id',
+)
 
 storage[BOOKING_INTENT_KEY] = JSON.stringify({ kind: 'enterprise', intentText: ' JSON ', timestamp: 1, extra: 'ignore' })
 assert.deepEqual(consumeBookingIntent(), { kind: 'enterprise', intentText: 'JSON' }, 'serialized storage is parsed and normalized')

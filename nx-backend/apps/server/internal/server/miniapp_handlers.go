@@ -184,6 +184,29 @@ func (s *Server) miniappBookings(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
 			return
 		}
+		if in.CourseID != "" {
+			items, courseErr := siteconfig.MiniappCoursesFromStore(r.Context(), s.db, s.env.SiteConfig)
+			if courseErr != nil {
+				httpx.Fail(w, http.StatusInternalServerError, "课程配置读取失败")
+				return
+			}
+			var found *siteconfig.MiniappCourse
+			for i := range items {
+				if items[i].ID == strings.TrimSpace(in.CourseID) {
+					found = &items[i]
+					break
+				}
+			}
+			if found == nil || !found.Enabled {
+				httpx.Fail(w, http.StatusConflict, "课程不可报名")
+				return
+			}
+			in.Kind = "course"
+			in.CourseTitle, in.PriceCents, in.PaymentMode = found.Title, found.PriceCents, found.PaymentMode
+			if found.PaymentMode == "paid" {
+				in.PaymentStatus = "pending"
+			}
+		}
 		if s.miniappBookingService == nil {
 			log.Printf("miniapp booking: %v", miniapp.ErrServiceNotConfigured)
 			httpx.Fail(w, http.StatusInternalServerError, "预约提交失败，请稍后重试")
@@ -303,6 +326,29 @@ func miniappRAGDocuments(config siteconfig.SiteConfig) []rag.Document {
 			Content: content,
 			Tags:    []string{item.ID + "号", item.Name, item.Keywords},
 		})
+	}
+	if courses, err := siteconfig.MiniappCourses(config); err == nil {
+		for i, item := range courses {
+			title := strings.TrimSpace(item.Title)
+			description := strings.TrimSpace(item.Description)
+			if title == "" || description == "" || !item.Enabled {
+				continue
+			}
+			tags := []string{"课程"}
+			for _, bullet := range item.Bullets {
+				if text := strings.TrimSpace(bullet); text != "" {
+					tags = append(tags, text)
+					description += " " + text
+				}
+			}
+			docs = append(docs, rag.Document{
+				ID:      "course-" + strconv.Itoa(i+1),
+				Title:   title,
+				Content: description,
+				Tags:    tags,
+			})
+		}
+		return docs
 	}
 
 	if courses, ok := config.Home["courses"].(map[string]any); ok {

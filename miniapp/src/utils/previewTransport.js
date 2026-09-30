@@ -1,7 +1,6 @@
 import siteConfig from '../data/studioSiteConfig.json'
 import videos from '../data/studioVideos.json'
 
-const BOOKINGS_KEY = 'nx_ui_preview_bookings'
 const USER_KEY = 'nx_ui_preview_user'
 const PROGRESS_KEY = 'nx_ui_preview_progress'
 function read(key, fallback) {
@@ -22,13 +21,12 @@ export async function previewRequest({ url, method = 'GET', data = {}, query = {
     return clone(method === 'PUT' ? { ...user, ...data } : user)
   }
   if (url === '/miniapp/bookings') {
-    const bookings = read(BOOKINGS_KEY, [exampleBooking])
     if (method === 'POST') {
-      const booking = { ...data, id: Date.now(), status: 'pending', createTime: new Date().toISOString().slice(0, 16).replace('T', ' ') }
-      uni.setStorageSync(BOOKINGS_KEY, [booking, ...bookings])
-      return clone(booking)
+      throw new Error('正式报名请在微信小程序内提交，信息将保存至后台管理')
     }
-    return { items: clone(bookings) }
+    // The H5 preview exposes a read-only fixture so it never depends on, or
+    // mutates, device storage. Formal records come from the WeChat API.
+    return { items: [clone(exampleBooking)] }
   }
   if (url === '/miniapp/test-records') {
     const items = read('nx_ui_preview_tests', [])

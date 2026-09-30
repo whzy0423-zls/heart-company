@@ -287,6 +287,50 @@ export function devPayClassroomOrderApi(outTradeNo) {
   );
 }
 
+function courseBookingID(value) {
+  const normalized = String(value ?? '').trim()
+  if (!/^\d+$/.test(normalized) || normalized === '0') throw new Error('报名参数无效')
+  return normalized
+}
+
+export function createCourseBookingOrderApi(bookingId) {
+  return classroomRequest(
+    {
+      url: '/miniapp/course/orders',
+      method: 'POST',
+      data: { bookingId: courseBookingID(bookingId) },
+      auth: true,
+    },
+    '课程订单创建失败，请重试',
+  )
+}
+
+export function getCourseBookingOrderStatusApi(bookingId) {
+  return classroomRequest(
+    {
+      url: '/miniapp/course/orders/status',
+      method: 'GET',
+      query: { bookingId: courseBookingID(bookingId) },
+      auth: true,
+    },
+    '课程订单状态查询失败，请重试',
+  )
+}
+
+export function devPayCourseBookingOrderApi(outTradeNo) {
+  const normalized = String(outTradeNo || '').trim()
+  if (!normalized) throw new Error('订单参数无效')
+  return classroomRequest(
+    {
+      url: '/miniapp/course/orders/dev-pay',
+      method: 'POST',
+      data: { outTradeNo: normalized },
+      auth: true,
+    },
+    '本地支付确认失败，请重试',
+  )
+}
+
 export function updateClassroomProgressApi(contentId, positionSeconds) {
   return classroomRequest(
     {

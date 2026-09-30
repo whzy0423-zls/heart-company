@@ -78,6 +78,7 @@ func Read(path string) (SiteConfig, error) {
 	if err := json.Unmarshal(file, &config); err != nil {
 		return SiteConfig{}, err
 	}
+	EnsureMiniappCourses(&config)
 	if err := Validate(config); err != nil {
 		return SiteConfig{}, err
 	}
@@ -104,6 +105,7 @@ func ReadStore(ctx context.Context, db *sql.DB, path string) (SiteConfig, error)
 				config.Site.CustomerServiceQr = defaults.Site.CustomerServiceQr
 			}
 		}
+		EnsureMiniappCourses(&config)
 		if err := Validate(config); err != nil {
 			return SiteConfig{}, err
 		}
@@ -124,6 +126,7 @@ func ReadStore(ctx context.Context, db *sql.DB, path string) (SiteConfig, error)
 }
 
 func Write(path string, config SiteConfig) error {
+	EnsureMiniappCourses(&config)
 	if err := Validate(config); err != nil {
 		return err
 	}
@@ -146,6 +149,7 @@ func Write(path string, config SiteConfig) error {
 }
 
 func WriteStore(ctx context.Context, db *sql.DB, path string, config SiteConfig) error {
+	EnsureMiniappCourses(&config)
 	if err := Validate(config); err != nil {
 		return err
 	}
@@ -160,6 +164,10 @@ func WriteStore(ctx context.Context, db *sql.DB, path string, config SiteConfig)
 }
 
 func UpsertStore(ctx context.Context, db *sql.DB, config SiteConfig) error {
+	EnsureMiniappCourses(&config)
+	if err := Validate(config); err != nil {
+		return err
+	}
 	body, err := json.Marshal(config)
 	if err != nil {
 		return err
@@ -194,6 +202,9 @@ func siteFieldMissing(raw []byte, field string) bool {
 }
 
 func Validate(config SiteConfig) error {
+	if _, err := MiniappCourses(config); err != nil {
+		return err
+	}
 	if config.Site.BrandName == "" {
 		return errors.New("site.brandName is required")
 	}

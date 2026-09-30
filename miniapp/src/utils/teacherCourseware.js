@@ -223,3 +223,59 @@ export function normalizeCoursewareItems(config) {
   if (items.length > 0) return items
   return sources.some(hasExplicitSection) ? [] : DEFAULT_COURSEWARE_ITEMS
 }
+
+function normalizedCourseID(value, index) {
+  const candidate = String(value ?? '').trim()
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(candidate)
+    ? candidate
+    : `course-${index + 1}`
+}
+
+function normalizeMiniappCourse(item, index) {
+  const source = item && typeof item === 'object' ? item : {}
+  const title = firstText(source, ['title', 'name', 'courseTitle']) || '主题课程'
+  const editorial = courseEditorial(title, index)
+  const priceCents = Number.isSafeInteger(source.priceCents) && source.priceCents >= 0
+    ? source.priceCents
+    : 0
+  const paymentMode = source.paymentMode === 'paid' ? 'paid' : 'consult'
+  return {
+    id: normalizedCourseID(source.id, index),
+    title,
+    subtitle: firstText(source, ['subtitle', 'lead', 'summary']) || firstText(source, ['description', 'desc']),
+    description: firstText(source, ['description', 'desc', 'summary', 'intro']) || '老师整理的九型人格学习课程，适合在真实生活里练习和复盘。',
+    cover: firstAsset(source, ['cover', 'image', 'thumb', 'poster'], editorial.cover),
+    tag: firstText(source, ['badge', 'tag', 'label', 'type']) || '主题课程',
+    format: firstText(source, ['format', 'delivery', 'mode']) || '主题共学',
+    duration: firstText(source, ['duration', 'time', 'length']) || editorial.duration,
+    schedule: firstText(source, ['schedule', 'date', 'timeSlot']),
+    location: firstText(source, ['location', 'venue']),
+    highlights: normalizeTextList(source.bullets || source.highlights),
+    outline: Array.isArray(source.outline) ? source.outline : [],
+    notice: firstText(source, ['notice', 'enrollmentNotice']),
+    enabled: source.enabled !== false,
+    priceCents,
+    price: paymentMode === 'paid' && priceCents > 0 ? priceCents / 100 : undefined,
+    paymentMode,
+  }
+}
+
+/** Normalizes the independently managed, purchasable mini-app course catalog. */
+export function normalizeMiniappCourses(config) {
+  const home = config?.home && typeof config.home === 'object' ? config.home : {}
+  const hasDedicated = Object.prototype.hasOwnProperty.call(home, 'miniappCourses')
+  const dedicated = home.miniappCourses
+  if (hasDedicated) {
+    const items = Array.isArray(dedicated)
+      ? dedicated
+      : Array.isArray(dedicated?.items) ? dedicated.items : []
+    return items.map(normalizeMiniappCourse).filter((item) => item.enabled)
+  }
+  return normalizeCoursewareItems(config).map((item, index) => normalizeMiniappCourse({
+    ...item,
+    id: item.id || `course-${index + 1}`,
+    badge: item.badge,
+    bullets: item.bullets,
+    paymentMode: 'consult',
+  })).filter((item) => item.enabled)
+}

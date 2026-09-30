@@ -32,3 +32,19 @@ export function mapPublishedClassroomItems(items) {
       }
     })
 }
+
+/**
+ * Prefer published classroom data, while allowing the packaged preview
+ * catalogue to keep the learning page useful when the devtools API host is
+ * unavailable or has not been seeded yet.
+ */
+export function resolveClassroomItems(remoteItems, bundledItems, options = {}) {
+  if (Array.isArray(remoteItems) && remoteItems.length > 0) {
+    return { items: remoteItems, usedFallback: false }
+  }
+  if (!options.allowFallback) {
+    return { items: Array.isArray(remoteItems) ? remoteItems : [], usedFallback: false }
+  }
+  const fallback = Array.isArray(bundledItems) ? bundledItems : []
+  return { items: fallback, usedFallback: fallback.length > 0 }
+}

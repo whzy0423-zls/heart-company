@@ -81,6 +81,10 @@ assert.deepEqual(storage[BOOKING_DRAFT_KEY].data, {
 })
 assert.deepEqual(loadBookingDraft(), storage[BOOKING_DRAFT_KEY].data, 'saved draft should load back')
 
+saveBookingDraft({ kind: 'course', courseId: 'growth-live', contactName: '小九', intent: '成长直播课' })
+assert.equal(storage[BOOKING_DRAFT_KEY].data.courseId, 'growth-live', 'course draft should retain the catalog id')
+assert.equal(loadBookingDraft().courseId, 'growth-live', 'course catalog id should survive reload')
+
 storage[BOOKING_DRAFT_KEY] = JSON.stringify({ ts: 1, data: { kind: 'enterprise', contactName: '企业', phone: '13900139000' } })
 assert.deepEqual(loadBookingDraft(), {
   kind: 'enterprise',

@@ -20,12 +20,15 @@ assert.equal(list.items.length, 2)
 assert.equal(list.items[0].id, videos[1].id)
 list.items[0].title = 'modified in UI'
 assert.notEqual((await call({ url: '/public/classroom/recent', query: { limit: 2, offset: 1 } })).items[0].title, 'modified in UI', 'consumer mutations never overwrite source data')
-const booking = await call({ url: '/miniapp/bookings', method: 'POST', data: { kind: 'consult', contactName: '演示学员', phone: '13800000000', intent: '关系沟通' } })
-assert.equal(booking.status, 'pending')
-assert.equal((await call({ url: '/miniapp/bookings' })).items[0].id, booking.id)
+await assert.rejects(
+  () => call({ url: '/miniapp/bookings', method: 'POST', data: { kind: 'consult', contactName: '演示学员', phone: '13800000000', intent: '关系沟通' } }),
+  /微信小程序内提交/,
+  'H5 preview must not persist fake booking submissions',
+)
+assert.equal((await call({ url: '/miniapp/bookings' })).items[0].id, 9001, 'preview booking list remains read-only fixture data')
 assert.equal(storage.nx_token, 'existing-real-session')
 assert.equal(storage.nx_booking_draft.contactName, 'real draft')
-assert.ok(storage.nx_ui_preview_bookings)
+assert.equal(storage.nx_ui_preview_bookings, undefined, 'preview booking submissions must never touch local storage')
 const playback = await call({ url: `/miniapp/classroom/content/${videos[0].id}/play`, method: 'POST' })
 assert.match(playback.url, /^http:\/\/127\.0\.0\.1:5179\/__studio-media\/laohan-\d+\.mp4$/)
 await call({ url: `/miniapp/classroom/content/${videos[0].id}/progress`, method: 'PUT', data: { positionSeconds: 12 } })

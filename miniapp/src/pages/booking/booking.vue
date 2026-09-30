@@ -4,18 +4,32 @@ import { onShow, onHide, onUnload } from '@dcloudio/uni-app'
 import NxIcon from '../../components/NxIcon.vue'
 import NxImagePreview from '../../components/NxImagePreview.vue'
 import { ensureLogin } from '../../utils/auth'
-import { createBookingApi } from '../../api'
+import { createBookingApi, createCourseBookingOrderApi, devPayCourseBookingOrderApi, getCourseBookingOrderStatusApi } from '../../api'
 import { userErrorMessage } from '../../utils/userMessage'
 import { clearBookingDraft, loadBookingDraft, saveBookingDraft } from '../../utils/bookingDraft'
 import { consumeBookingIntent } from '../../utils/bookingIntent'
 import { getCachedSiteConfig, getStoredSiteConfig } from '../../utils/siteConfig'
 import { normalizePersonalExpertHome } from '../../utils/personalExpertHome'
-import { normalizeCoursewareItems, normalizeTeachers } from '../../utils/teacherCourseware'
+import { normalizeMiniappCourses, normalizeTeachers } from '../../utils/teacherCourseware'
+import { createWechatPaymentController } from '../../utils/payment'
 import { normalizeMiniappLearn } from '../../utils/miniappPages'
 import { STUDIO_COURSES, STUDIO_TEACHER } from '../../data/teacherStudio'
 import { UI_PREVIEW } from '../../utils/uiPreview'
 import { previewImage } from '../../utils/imagePreview'
 import { isWechatDevtools } from '../../utils/imagePreview'
+import NxStudioHeader from '../../components/NxStudioHeader.vue'
+import { useStudioNavigation } from '../../utils/studioNavigation'
+
+// Keep the page state executable in the lightweight flow harness, where the
+// component imports are intentionally stripped before evaluating this script.
+const studioNavigation = typeof useStudioNavigation === 'function'
+  ? useStudioNavigation()
+  : { pageStyle: computed(() => ({})), refreshNavigation: () => {} }
+const { pageStyle, refreshNavigation } = studioNavigation
+
+// H5 studio preview is a visual fixture only. Real submissions require the
+// WeChat runtime so wx.login can establish the backend miniapp session.
+const H5_RUNTIME = UI_PREVIEW || typeof window !== 'undefined'
 
 const kinds = [
   { value: 'course', label: '课程报名' },
@@ -26,15 +40,18 @@ const kindIndex = ref(0)
 const currentKind = computed(() => kinds[kindIndex.value]?.value || 'course')
 const emptyForm = () => ({ contactName: '', phone: '', intent: '', preferredTime: '', message: '' })
 const form = ref(emptyForm())
+const selectedCourseId = ref('')
 const fieldErrors = ref({ contactName: '', phone: '', consent: '' })
 const consent = ref(false)
 const submitting = ref(false)
+const paymentMessage = ref('')
 const submitted = ref(false)
 const submittedKind = ref('course')
 const siteConfig = ref(getStoredSiteConfig() || {})
 const enterpriseView = computed(() => normalizePersonalExpertHome(siteConfig.value).enterprise)
 const classroomEnabled = computed(() => normalizeMiniappLearn(siteConfig.value).classroom.enabled)
-const courses = computed(() => UI_PREVIEW ? STUDIO_COURSES : normalizeCoursewareItems(siteConfig.value).map((item, index) => ({ ...item, id: `course-${index}`, tag: item.badge, highlights: item.bullets })))
+const courses = computed(() => UI_PREVIEW ? STUDIO_COURSES : normalizeMiniappCourses(siteConfig.value))
+const selectedCourse = computed(() => courses.value.find((course) => String(course.id) === selectedCourseId.value))
 const teacher = computed(() => UI_PREVIEW ? STUDIO_TEACHER : normalizeTeachers(siteConfig.value)[0])
 const teacherAvatar = computed(() => {
   const avatar = teacher.value?.avatar || ''
@@ -60,10 +77,18 @@ if (draft) {
   const index = kinds.findIndex((item) => item.value === draft.kind)
   if (index >= 0) kindIndex.value = index
   form.value = { ...emptyForm(), ...draft }
+  selectedCourseId.value = draft.courseId || ''
   delete form.value.kind
+  delete form.value.courseId
 }
 
-function currentDraft() { return { kind: currentKind.value, ...form.value } }
+function currentDraft() {
+  return {
+    kind: currentKind.value,
+    ...(currentKind.value === 'course' && selectedCourseId.value ? { courseId: selectedCourseId.value } : {}),
+    ...form.value,
+  }
+}
 function cancelPendingDraftSave() {
   if (draftSaveTimer !== null) clearTimeout(draftSaveTimer)
   draftSaveTimer = null
@@ -81,7 +106,10 @@ function scheduleDraftSave() {
 }
 function flushDraftSave() { cancelPendingDraftSave(); persistDraft() }
 watch([kindIndex, form], scheduleDraftSave, { deep: true })
-onShow(applyBookingIntent)
+onShow(() => {
+  refreshNavigation()
+  applyBookingIntent()
+})
 onHide(flushDraftSave)
 onUnload(flushDraftSave)
 
@@ -91,6 +119,7 @@ async function applyBookingIntent() {
     submitted.value = false
     const index = kinds.findIndex((item) => item.value === intent.kind)
     if (index >= 0) kindIndex.value = index
+    selectedCourseId.value = intent.kind === 'course' ? (intent.courseId || '') : ''
     // A new explicit course selection replaces the old direction, while contact details remain.
     if (intent.intentText) form.value = { ...form.value, intent: intent.intentText }
   }
@@ -109,6 +138,7 @@ async function applyBookingIntent() {
 function selectKind(index) {
   if (submitting.value) return
   kindIndex.value = index
+  if (kinds[index]?.value !== 'course') selectedCourseId.value = ''
 }
 function viewCourse(course) { uni.navigateTo({ url: `/pages/course-detail/course-detail?id=${encodeURIComponent(course.id)}` }) }
 function previewTeacherAvatar() {
@@ -132,6 +162,8 @@ function resetForm() {
   cancelPendingDraftSave()
   kindIndex.value = 0
   form.value = emptyForm()
+  selectedCourseId.value = ''
+  paymentMessage.value = ''
   fieldErrors.value = { contactName: '', phone: '', consent: '' }
   restoredDraftNotice.value = false
   consent.value = false
@@ -148,8 +180,8 @@ function changeConsent(event) {
 function showPrivacy() {
   uni.showModal({
     title: '预约信息使用说明',
-    content: UI_PREVIEW
-      ? '当前为界面演示。提交结果仅保存在本机，不会发送给老师。请使用示例信息体验。'
+    content: H5_RUNTIME
+      ? '当前为界面预览。正式提交请打开微信小程序，报名信息会保存至后台管理并用于本次预约沟通。请勿在留言中填写身份证、银行卡等敏感信息。'
       : '你填写的称呼、手机号、意向和留言将提交给工作室，仅用于本次预约沟通与课程安排。提交前的草稿保存在当前设备，可随时清空。请勿在留言中填写身份证、银行卡等敏感信息。',
     showCancel: false,
     confirmText: '我知道了',
@@ -166,15 +198,31 @@ function validateForm() {
 }
 async function submit() {
   if (submitting.value) return
+  if (H5_RUNTIME) {
+    uni.showToast({ title: '请在微信小程序内提交报名意向', icon: 'none' })
+    return
+  }
   if (!validateForm()) {
     uni.showToast({ title: Object.values(fieldErrors.value).find(Boolean), icon: 'none' })
     return
   }
   submitting.value = true
+  paymentMessage.value = ''
   try {
     await ensureLogin()
     const payload = currentDraft()
-    await createBookingApi(payload)
+    const booking = await createBookingApi(payload)
+    if (!UI_PREVIEW && payload.kind === 'course' && booking?.paymentMode === 'paid' && booking?.paymentStatus === 'pending') {
+      const controller = createWechatPaymentController({
+        create: () => createCourseBookingOrderApi(booking.id),
+        devPay: (order) => devPayCourseBookingOrderApi(order.outTradeNo),
+        status: () => getCourseBookingOrderStatusApi(booking.id),
+        isPaid: (status) => status?.status === 'paid' || status?.paymentStatus === 'paid',
+        onChange: (snapshot) => { paymentMessage.value = snapshot.message || '' },
+      })
+      const result = await controller.purchase()
+      if (result?.state !== 'success') throw new Error(result?.message || '支付未完成，请稍后重试')
+    }
     submittedKind.value = payload.kind
     cancelPendingDraftSave()
     clearBookingDraft()
@@ -191,13 +239,14 @@ function submitAnother() { resetForm(); submitted.value = false }
 </script>
 
 <template>
-  <view class="booking-page">
+  <view class="booking-page" :style="pageStyle">
+    <NxStudioHeader />
     <view class="page-masthead"><text class="masthead-name">共学与成长</text><button class="records-link" @click="viewBookingRecords">我的报名 <NxIcon name="arrow" :size="16" /></button></view>
     <view v-if="submitted" class="booking-success">
       <view class="success-symbol"><NxIcon name="check" :size="32" /></view>
-      <text class="eyebrow">{{ UI_PREVIEW ? '演示提交完成' : '已提交 · 等待确认' }}</text>
+      <text class="eyebrow">已提交 · 等待确认</text>
       <text class="success-title">{{ successTitle }}</text>
-      <text class="success-copy">{{ UI_PREVIEW ? '这是一条保存在本机的演示记录，你可以继续体验报名流程。' : '工作室将通过你留下的联系方式与你沟通。具体时间、费用与安排，以双方确认为准。' }}</text>
+      <text class="success-copy">工作室将通过你留下的联系方式与你沟通。具体时间、费用与安排，以双方确认为准。</text>
       <button class="primary-button" @click="viewBookingRecords">查看预约记录 <NxIcon name="arrow" :size="18" color="#FFFFFF" /></button>
       <button v-if="classroomEnabled" class="secondary-button" @click="continueClassroom">继续浏览老师课堂</button>
       <button class="text-button" @click="submitAnother">再提交一个需求</button>
@@ -257,13 +306,12 @@ function submitAnother() { resetForm(); submitted.value = false }
         <view class="consent-row"><checkbox-group @change="changeConsent"><label class="consent-label"><checkbox value="agree" :checked="consent" color="#A55C3B" /><text>我已阅读并同意</text></label></checkbox-group><button class="privacy-link" @click="showPrivacy">预约信息使用说明</button></view>
         <text v-if="fieldErrors.consent" class="field-error" role="alert">{{ fieldErrors.consent }}</text>
         <!-- #ifdef H5 -->
-        <button v-if="!UI_PREVIEW" class="primary-button" disabled>请在微信小程序内提交预约</button>
-        <button v-else class="primary-button" :loading="submitting" :disabled="submitting" @click="submit">{{ submitting ? '正在提交' : currentKind === 'course' ? '提交报名意向' : '提交预约意向' }} <NxIcon v-if="!submitting" name="arrow" :size="19" color="#FFFFFF" /></button>
+        <button class="primary-button" disabled>请在微信小程序内提交报名意向</button>
         <!-- #endif -->
         <!-- #ifndef H5 -->
-        <button class="primary-button" :loading="submitting" :disabled="submitting" @click="submit">{{ submitting ? '正在提交' : currentKind === 'course' ? '提交报名意向' : '提交预约意向' }} <NxIcon v-if="!submitting" name="arrow" :size="19" color="#FFFFFF" /></button>
+        <button class="primary-button" :loading="submitting" :disabled="submitting" @click="submit">{{ submitting ? (paymentMessage || '正在提交') : currentKind === 'course' ? selectedCourse?.paymentMode === 'paid' ? '提交报名并支付' : '提交报名意向' : '提交预约意向' }} <NxIcon v-if="!submitting" name="arrow" :size="19" color="#FFFFFF" /></button>
         <!-- #endif -->
-        <text class="form-footer">{{ UI_PREVIEW ? '当前为演示体验 · 提交仅保存在本机' : '提交意向无需付款 · 具体安排以工作室确认为准' }}</text>
+        <text class="form-footer">{{ H5_RUNTIME ? '当前为界面预览 · 请在微信小程序内正式提交，信息将同步到后台管理' : selectedCourse?.paymentMode === 'paid' ? '提交后将进入微信支付 · 支付结果以服务端确认状态为准' : '提交意向无需付款 · 具体安排以工作室确认为准' }}</text>
         <text class="draft-hint">未提交的内容会自动保存为本机草稿</text>
       </view>
       <view class="page-ending"><text>每一步靠近，都是成长。</text><text class="ending-en">GROW, AT YOUR OWN PACE.</text></view>
@@ -279,7 +327,7 @@ function submitAnother() { resetForm(); submitted.value = false }
 </template>
 
 <style scoped>
-.booking-page{box-sizing:border-box;min-height:100vh;padding:calc(28rpx + var(--status-bar-height, 0px)) 36rpx calc(56rpx + env(safe-area-inset-bottom));background:var(--nx-page-bg);color:var(--nx-text)}
+.booking-page{box-sizing:border-box;min-height:100vh;padding:calc(28rpx + var(--status-bar-height, 0px)) 36rpx calc(56rpx + env(safe-area-inset-bottom));padding-top:calc(144rpx + env(safe-area-inset-top, 0px));background:var(--nx-page-bg);color:var(--nx-text)}
 button{box-sizing:border-box;margin:0;border:0;line-height:1.5}button::after{border:0}button[disabled]{opacity:.48}.page-masthead{display:flex;align-items:center;justify-content:space-between;gap:16rpx}.masthead-name{font-size:24rpx;letter-spacing:3rpx}.records-link{min-height:88rpx;padding:0;display:flex;align-items:center;gap:10rpx;background:transparent;font-size:23rpx;color:var(--nx-text-muted)}.booking-hero{padding:35rpx 2rpx 40rpx}.eyebrow{display:block;color:var(--nx-brand-700);font-size:20rpx;letter-spacing:4rpx;line-height:1.6}.hero-title{display:block;margin-top:20rpx;font-family:'Songti SC','STSong',serif;font-size:64rpx;font-weight:500;line-height:1.4;letter-spacing:1rpx}.hero-title text{display:block}.hero-description{display:block;margin-top:23rpx;font-size:24rpx;line-height:1.8;color:var(--nx-text-muted)}.hero-rule{display:flex;align-items:center;gap:20rpx;margin-top:34rpx;color:var(--nx-text-muted);font-size:20rpx;letter-spacing:3rpx}.hero-rule view{width:58rpx;height:2rpx;background:var(--nx-brand-700)}.kind-tabs{display:flex;border-bottom:1rpx solid var(--nx-border);margin-bottom:36rpx;gap:28rpx}.kind-tab{position:relative;min-height:92rpx;flex:1;background:transparent;padding:20rpx 0;color:var(--nx-text-muted);font-size:27rpx;white-space:nowrap;border-radius:0}.kind-tab.is-active{color:var(--nx-brand-700);font-weight:600}.kind-tab.is-active::before{content:'';position:absolute;bottom:0;left:26%;width:48%;height:4rpx;border-radius:4rpx;background:var(--nx-brand-700)}.section-heading{display:flex;justify-content:space-between;align-items:center;gap:16rpx;margin:0 0 24rpx}.section-title{display:block;font-family:'Songti SC','STSong',serif;font-size:33rpx;line-height:1.5}.section-meta{color:var(--nx-text-muted);font-size:21rpx;flex-shrink:0}.course-card{display:block;padding:0;width:100%;margin-bottom:28rpx;border-radius:24rpx;overflow:hidden;background:var(--nx-surface);text-align:left;box-shadow:0 5rpx 20rpx rgba(56,45,32,.025)}.course-image-wrap{height:296rpx;position:relative;background:#E7E0D3}.course-image{width:100%;height:100%;display:block}.course-tag{position:absolute;top:24rpx;left:24rpx;font-size:20rpx;padding:9rpx 17rpx;border-radius:8rpx;background:rgba(255,255,255,.92);color:var(--nx-text)}.course-index{position:absolute;right:22rpx;bottom:7rpx;font-family:Georgia,serif;font-size:76rpx;color:rgba(255,255,255,.7)}.course-body{padding:29rpx 28rpx 24rpx}.course-subtitle{display:flex;align-items:center;gap:12rpx;font-size:20rpx;color:var(--nx-brand-700);letter-spacing:1rpx}.dot{color:#B5A99A}.course-title{display:block;margin-top:12rpx;font-size:36rpx;font-family:'Songti SC','STSong',serif;line-height:1.4;font-weight:600}.course-description{display:block;margin-top:12rpx;font-size:23rpx;line-height:1.65;color:var(--nx-text-muted)}.course-schedule{display:flex;align-items:center;flex-wrap:wrap;gap:9rpx;margin-top:27rpx;font-size:21rpx;color:var(--nx-text-muted)}.demo-label{font-size:17rpx;border:1rpx solid var(--nx-border);border-radius:4rpx;padding:2rpx 6rpx}.course-bottom{border-top:1rpx solid #EEEAE3;margin-top:24rpx;padding-top:21rpx;display:flex;align-items:center;justify-content:space-between}.course-price{font-family:Georgia,serif;font-size:39rpx;color:var(--nx-brand-700)}.currency{font-size:23rpx;margin-right:5rpx}.price-unit{color:var(--nx-text-muted);font-size:20rpx}.price-consult{color:var(--nx-brand-700);font-size:24rpx}.course-link{display:flex;gap:14rpx;align-items:center;font-size:22rpx}.pressed{opacity:.8}.empty-card{padding:50rpx 30rpx;display:flex;flex-direction:column;align-items:center;gap:20rpx;background:var(--nx-surface);border-radius:24rpx;text-align:center}.muted-copy{display:block;color:var(--nx-text-muted);font-size:23rpx;line-height:1.7}.consult-card{padding:32rpx;background:var(--nx-surface);border-radius:24rpx}.consult-top{display:flex;align-items:center;gap:20rpx}.teacher-avatar-action{display:block;width:90rpx;height:90rpx;flex:0 0 90rpx;padding:0;margin:0;border:0;border-radius:50%;background:transparent;overflow:hidden}.teacher-avatar-action::after{border:0}.teacher-avatar{display:block;width:90rpx;height:90rpx;border-radius:50%;background:var(--nx-border)}.teacher-avatar--fallback{display:flex;align-items:center;justify-content:center;color:var(--nx-brand-700);font-size:32rpx;background:var(--nx-page-bg)}.consult-teacher{flex:1;min-width:0}.teacher-name{display:block;margin-bottom:6rpx;font-size:26rpx}.consult-title{display:block;margin-top:38rpx;font-family:'Songti SC','STSong',serif;font-size:34rpx;line-height:1.5}.consult-copy{display:block;color:var(--nx-text-muted);font-size:25rpx;line-height:1.9;margin-top:18rpx}.topic-tags{display:flex;gap:12rpx;flex-wrap:wrap;margin-top:27rpx}.topic-tags text{background:var(--nx-page-bg);padding:10rpx 18rpx;border-radius:8rpx;color:#6A695F;font-size:21rpx}.consult-note{display:flex;align-items:center;gap:12rpx;margin-top:34rpx;padding-top:24rpx;border-top:1rpx solid var(--nx-border);color:var(--nx-text-muted);font-size:22rpx}.section-footnote{display:block;font-size:20rpx;line-height:1.7;color:var(--nx-text-muted);margin:24rpx 8rpx}.enterprise-intro{padding:16rpx 0 28rpx}.enterprise-intro .section-title{margin:16rpx 0}.service-card{padding:28rpx 24rpx;background:var(--nx-surface);border:1rpx solid transparent;border-radius:20rpx;display:flex;align-items:center;gap:20rpx;margin-bottom:16rpx;text-align:left}.service-card.selected{border-color:var(--nx-brand-700)}.service-number{font-family:Georgia,serif;font-size:31rpx;color:#AC9882;align-self:flex-start;padding-top:3rpx}.service-copy{flex:1}.service-title{display:block;font-size:27rpx;margin-bottom:9rpx}.process-list{display:flex;gap:12rpx;justify-content:space-between;padding:25rpx 0 0}.process-step{display:flex;gap:10rpx;align-items:center;font-size:20rpx;color:var(--nx-text-muted)}.process-number{width:30rpx;height:30rpx;border-radius:50%;border:1rpx solid #CBC1B3;display:flex;align-items:center;justify-content:center;font-size:18rpx}.form-divider{display:flex;align-items:center;gap:23rpx;margin:50rpx 55rpx;color:#A79884}.form-divider view{height:1rpx;background:var(--nx-border);flex:1}.booking-form{padding:32rpx 28rpx;background:var(--nx-surface);border-radius:24rpx}.form-title{display:block;margin:16rpx 0;font-family:'Songti SC','STSong',serif;font-size:36rpx;line-height:1.5}.form-hint{display:block;color:var(--nx-text-muted);font-size:23rpx;line-height:1.7;margin-bottom:34rpx}.draft-restored{display:flex;align-items:center;justify-content:space-between;gap:12rpx;background:#F3F0E9;border-radius:10rpx;padding:4rpx 18rpx;margin:0 0 24rpx;font-size:21rpx;color:var(--nx-text-muted)}.draft-restored button{min-height:88rpx;padding:10rpx 0;display:flex;align-items:center;background:transparent;color:var(--nx-brand-700);font-size:21rpx}.field{position:relative;margin-top:27rpx}.field-label{display:block;font-size:25rpx;margin-bottom:14rpx}.required{color:var(--nx-brand-700);font-size:20rpx}.optional{margin-left:10rpx;font-size:20rpx;color:#8B8B82}.field-control{box-sizing:border-box;width:100%;height:88rpx;line-height:1.5;padding:0 20rpx;background:#F8F7F3;border:1rpx solid #EEEAE3;border-radius:10rpx;font-size:24rpx;color:var(--nx-text)}.message-input{height:188rpx;min-height:188rpx;padding:20rpx 20rpx 37rpx}.message-count{position:absolute;right:16rpx;bottom:11rpx;font-size:18rpx;color:#929087}.field-error{display:block;color:#A34432;margin-top:10rpx;font-size:22rpx;line-height:1.5}.consent-row{display:flex;align-items:center;flex-wrap:wrap;gap:0;margin-top:23rpx;font-size:21rpx;color:var(--nx-text-muted)}.consent-label{display:flex;align-items:center;min-height:88rpx}.consent-label checkbox{transform:scale(.76);transform-origin:left center;margin-right:-2rpx}.privacy-link{display:flex;align-items:center;min-height:88rpx;background:transparent;padding:0 0 0 4rpx;font-size:21rpx;color:var(--nx-brand-700);text-decoration:underline}.primary-button{display:flex;align-items:center;justify-content:center;gap:22rpx;min-height:96rpx;width:100%;padding:20rpx;border-radius:14rpx;background:var(--nx-brand-700);color:#fff;font-size:27rpx;letter-spacing:1rpx;margin-top:20rpx}.form-footer{display:block;text-align:center;margin-top:21rpx;font-size:20rpx;color:var(--nx-text-muted);line-height:1.6}.draft-hint{display:block;text-align:center;margin-top:9rpx;font-size:18rpx;color:#919087}.page-ending{display:flex;flex-direction:column;align-items:center;gap:15rpx;margin-top:48rpx;color:#979186;font-family:'Songti SC','STSong',serif;font-size:25rpx;letter-spacing:2rpx}.ending-en{font-family:Arial,sans-serif;font-size:16rpx;letter-spacing:3rpx}.booking-success{display:flex;flex-direction:column;align-items:center;padding:60rpx 24rpx;text-align:center}.success-symbol{display:flex;align-items:center;justify-content:center;width:116rpx;height:116rpx;border-radius:50%;background:#EAEDE3;color:#6E785C;margin-bottom:40rpx}.success-title{font-family:'Songti SC','STSong',serif;font-size:46rpx;line-height:1.5;margin-top:18rpx}.success-copy{font-size:26rpx;line-height:1.9;color:var(--nx-text-muted);margin:24rpx 0 40rpx}.secondary-button{min-height:92rpx;width:100%;display:flex;align-items:center;justify-content:center;border:1rpx solid var(--nx-border);background:transparent;color:var(--nx-text);font-size:25rpx;border-radius:14rpx;margin-top:18rpx}.text-button{min-height:88rpx;background:transparent;color:var(--nx-text-muted);font-size:24rpx;margin-top:18rpx;display:flex;align-items:center}.booking-page :deep(.uni-input-placeholder),.booking-page :deep(.uni-textarea-placeholder){color:#96958D}
 @media(min-width:600px){.booking-page{max-width:800rpx;margin:auto}.hero-title{font-size:58rpx}}
 @media(prefers-reduced-motion:reduce){.booking-page{scroll-behavior:auto!important;transition:none!important}}

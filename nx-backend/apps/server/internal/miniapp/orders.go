@@ -35,6 +35,7 @@ const (
 	ProductMember           = "member"
 	ProductClassroomSeries  = "classroom_series"
 	ProductClassroomContent = "classroom_content"
+	ProductCourseBooking    = "course_booking"
 	ProductWechatPayTest    = "wechat_pay_test"
 )
 
@@ -105,6 +106,15 @@ func (s *Store) CreateOrReusePendingOrder(ctx context.Context, userID int64, out
 			return Order{}, ErrOrderAlreadyOwned
 		}
 	}
+	if product == ProductCourseBooking {
+		var paid bool
+		if err := tx.QueryRowContext(c, `SELECT payment_status='paid' FROM bookings WHERE id=$1 AND wx_user_id=$2 FOR UPDATE`, refID, userID).Scan(&paid); err != nil {
+			return Order{}, err
+		}
+		if paid {
+			return Order{}, ErrOrderAlreadyOwned
+		}
+	}
 
 	order, err := queryPendingOrder(c, tx, userID, product, refID)
 	if err == nil {
@@ -165,6 +175,15 @@ func (s *Store) ReplacePendingOrder(ctx context.Context, userID int64, outTradeN
 			return Order{}, ownedErr
 		}
 		if owned {
+			return Order{}, ErrOrderAlreadyOwned
+		}
+	}
+	if product == ProductCourseBooking {
+		var paid bool
+		if err := tx.QueryRowContext(c, `SELECT payment_status='paid' FROM bookings WHERE id=$1 AND wx_user_id=$2 FOR UPDATE`, refID, userID).Scan(&paid); err != nil {
+			return Order{}, err
+		}
+		if paid {
 			return Order{}, ErrOrderAlreadyOwned
 		}
 	}
@@ -300,7 +319,7 @@ func (s *Store) MarkOrderPaidDetailed(ctx context.Context, outTradeNo, transacti
 		}
 		return PaymentApplyResult{PendingToClose: pending}, nil
 	}
-	lateSuccess := status == "closed" && (product == ProductReport || isClassroomProduct(product))
+	lateSuccess := status == "closed" && (product == ProductReport || isClassroomProduct(product) || product == ProductCourseBooking)
 	if status != "pending" && !lateSuccess {
 		return PaymentApplyResult{}, fmt.Errorf("%w: status=%s", ErrOrderNotPayable, status)
 	}
@@ -365,6 +384,26 @@ func (s *Store) MarkOrderPaidDetailed(ctx context.Context, outTradeNo, transacti
 			 VALUES ($1,$2,$3,'purchase') ON CONFLICT (order_id) WHERE order_id IS NOT NULL DO NOTHING`,
 			wxUserID, refID, orderID,
 		); err != nil {
+			return PaymentApplyResult{}, err
+		}
+	case ProductCourseBooking:
+		if refID <= 0 {
+			return PaymentApplyResult{}, errors.New("course booking order missing target")
+		}
+		result, err := tx.ExecContext(c, `UPDATE bookings SET payment_status='paid' WHERE id=$1 AND wx_user_id=$2 AND payment_status <> 'paid'`, refID, wxUserID)
+		if err != nil {
+			return PaymentApplyResult{}, err
+		}
+		if rows, _ := result.RowsAffected(); rows == 0 {
+			var status string
+			if err := tx.QueryRowContext(c, `SELECT payment_status FROM bookings WHERE id=$1 AND wx_user_id=$2`, refID, wxUserID).Scan(&status); err != nil {
+				return PaymentApplyResult{}, err
+			}
+			if status != "paid" {
+				return PaymentApplyResult{}, errors.New("course booking payment target mismatch")
+			}
+		}
+		if _, err := tx.ExecContext(c, `UPDATE signups SET interest=regexp_replace(interest, ' · 待付款$', ' · 已付款') WHERE id=(SELECT signup_id FROM bookings WHERE id=$1)`, refID); err != nil {
 			return PaymentApplyResult{}, err
 		}
 	default:
@@ -575,4 +614,30 @@ func (s *Store) OpenIDByUserID(ctx context.Context, userID int64) (string, error
 	var openid string
 	err := s.db.QueryRowContext(c, `SELECT openid FROM wx_users WHERE id=$1`, userID).Scan(&openid)
 	return openid, err
+}
+
+type CourseBooking struct {
+	ID            string
+	UserID        int64
+	CourseID      string
+	CourseTitle   string
+	PriceCents    int
+	PaymentMode   string
+	PaymentStatus string
+}
+
+func (s *Store) CourseBooking(ctx context.Context, userID, bookingID int64) (CourseBooking, error) {
+	if userID <= 0 || bookingID <= 0 {
+		return CourseBooking{}, ErrOrderNotPayable
+	}
+	c, cancel := s.ctx(ctx)
+	defer cancel()
+	var b CourseBooking
+	var id int64
+	err := s.db.QueryRowContext(c, `SELECT id,wx_user_id,course_id,course_title,price_cents,payment_mode,payment_status FROM bookings WHERE id=$1 AND wx_user_id=$2`, bookingID, userID).Scan(&id, &b.UserID, &b.CourseID, &b.CourseTitle, &b.PriceCents, &b.PaymentMode, &b.PaymentStatus)
+	if err != nil {
+		return CourseBooking{}, err
+	}
+	b.ID = strconv.FormatInt(id, 10)
+	return b, nil
 }

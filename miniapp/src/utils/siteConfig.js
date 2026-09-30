@@ -18,6 +18,7 @@ const COURSE_SECTION_PATHS = [
   ['home', 'materials'],
   ['home', 'lessons'],
   ['home', 'courses'],
+  ['home', 'miniappCourses'],
 ]
 const QUOTE_SECTION_PATHS = [
   ['quotes'],
@@ -155,6 +156,7 @@ function learningSources(config) {
     config?.home?.materials,
     config?.home?.lessons,
     config?.home?.courses,
+    config?.home?.miniappCourses,
     config?.home?.quotes,
   ]
 }
