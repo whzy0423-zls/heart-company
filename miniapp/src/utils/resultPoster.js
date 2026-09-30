@@ -112,7 +112,7 @@ export async function createResultPoster({
   ctx.font = "12px sans-serif";
   ctx.fillText("九型芯之力 · 性格芯片测试", POSTER_WIDTH / 2, 34);
 
-  const avatar = await loadCanvasImage(canvas, `/static/avatars/${type}.png`);
+  const avatar = await loadCanvasImage(canvas, `/static/enneagram/${type}.png`);
   const centerX = POSTER_WIDTH / 2;
   const centerY = 110;
   const radius = 52;

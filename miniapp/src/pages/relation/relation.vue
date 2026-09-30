@@ -63,7 +63,7 @@ function onTaAvatarError() {
 
 function typeAvatarSource(typeId) {
   const id = normalizeTypeId(typeId)
-  return id ? `/static/avatars/${id}.png` : ''
+  return id ? `/static/enneagram/${id}.png` : ''
 }
 
 function previewMyAvatar() {
@@ -244,7 +244,7 @@ function reset() {
             hover-class="pair__avatar-action--pressed"
             @click="previewMyAvatar()"
           >
-            <image class="pair__avatar" :src="`/static/avatars/${myInfo.id}.png`" mode="aspectFill" lazy-load @error="onMyAvatarError" />
+            <image class="pair__avatar" :src="typeAvatarSource(myInfo.id)" mode="aspectFill" lazy-load @error="onMyAvatarError" />
           </button>
           <view v-else class="pair__avatar-fallback">{{ myInfo.id }}</view>
           <text class="pair__role">我的能量</text>
@@ -264,7 +264,7 @@ function reset() {
             hover-class="pair__avatar-action--pressed"
             @click="previewTaAvatar()"
           >
-            <image class="pair__avatar" :src="`/static/avatars/${taInfo.id}.png`" mode="aspectFill" lazy-load @error="onTaAvatarError" />
+            <image class="pair__avatar" :src="typeAvatarSource(taInfo.id)" mode="aspectFill" lazy-load @error="onTaAvatarError" />
           </button>
           <view v-else class="pair__avatar-fallback">{{ taInfo.id }}</view>
           <text class="pair__role">TA 的能量</text>

@@ -251,7 +251,7 @@ function resultShareImage(type) {
 function resultAvatarSource() {
   const type = Number(result.value?.type)
   return Number.isInteger(type) && type >= 1 && type <= 9
-    ? `/static/avatars/${type}.png`
+    ? `/static/enneagram/${type}.png`
     : ''
 }
 
@@ -320,7 +320,7 @@ function savePoster() {
           hover-class="result-hero__avatar-action--pressed"
           @click="previewResultAvatar()"
         >
-          <image class="result-hero__avatar" :src="`/static/avatars/${result.type}.png`" mode="aspectFill" lazy-load @error="avatarFailed = true" />
+          <image class="result-hero__avatar" :src="resultAvatarSource()" mode="aspectFill" lazy-load @error="avatarFailed = true" />
         </button>
         <view v-else class="result-hero__avatar-fallback">{{ result.type }}</view>
         <view class="result-hero__number">{{ result.type }}</view>

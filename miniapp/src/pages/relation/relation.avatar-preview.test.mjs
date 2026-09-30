@@ -14,15 +14,16 @@ assert.match(script, /function\s+previewMyAvatar\s*\(\s*\)/, 'relation should ex
 assert.match(script, /function\s+previewTaAvatar\s*\(\s*\)/, 'relation should expose a preview action for TA avatar')
 assert.match(script, /previewMyAvatar[\s\S]*previewImage\(/, 'my avatar preview should call the shared helper')
 assert.match(script, /previewTaAvatar[\s\S]*previewImage\(/, 'TA avatar preview should call the shared helper')
+assert.match(script, /return id \? `\/static\/enneagram\/\$\{id\}\.png` : ''/, 'relation should use the matching high-resolution enneagram logos')
 
 assert.match(
   template,
-  /<button\b(?=[^>]*class="pair__avatar-action")(?=[^>]*@click="previewMyAvatar\(\)")[^>]*>[\s\S]*?<image\b(?=[^>]*class="pair__avatar")/,
+  /<button\b(?=[^>]*class="pair__avatar-action")(?=[^>]*@click="previewMyAvatar\(\)")[^>]*>[\s\S]*?<image\b(?=[^>]*class="pair__avatar")(?=[^>]*:src="typeAvatarSource\(myInfo\.id\)")/,
   'my avatar should be inside an accessible preview button',
 )
 assert.match(
   template,
-  /<button\b(?=[^>]*class="pair__avatar-action")(?=[^>]*@click="previewTaAvatar\(\)")[^>]*>[\s\S]*?<image\b(?=[^>]*class="pair__avatar")/,
+  /<button\b(?=[^>]*class="pair__avatar-action")(?=[^>]*@click="previewTaAvatar\(\)")[^>]*>[\s\S]*?<image\b(?=[^>]*class="pair__avatar")(?=[^>]*:src="typeAvatarSource\(taInfo\.id\)")/,
   'TA avatar should be inside an accessible preview button',
 )
 assert.match(template, /class="pair__avatar-fallback"/, 'avatar failures should retain their fallback')
