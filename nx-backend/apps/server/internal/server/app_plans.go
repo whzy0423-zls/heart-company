@@ -14,8 +14,6 @@ import (
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 )
 
-const problemFollowupFeatureCopy = "问题解决跟进（30 分钟未回复，跟进一次）"
-
 type appPlanConfig struct {
 	Code                string          `json:"code"`
 	PlanLevel           string          `json:"planLevel"`
@@ -51,7 +49,6 @@ func defaultAppPlans() []appPlanConfig {
 	}
 	for i := range plans {
 		plans[i].FeatureFlags = membershipFeatureFlags(plans[i].PlanLevel, plans[i].FeatureFlags)
-		plans[i].Features = normalizeProblemFollowupFeatureCopy(plans[i].Features, plans[i].FeatureFlags["problemFollowup"])
 	}
 	return plans
 }
@@ -61,23 +58,14 @@ func membershipFeatureFlags(level string, base map[string]bool) map[string]bool 
 	for key, value := range base {
 		flags[key] = value
 	}
-	defaults := defaultMembershipLevelPlan(level).FeatureFlags
 	for _, key := range []string{"growthPortrait", "trendAnalysis", "relationshipInsight", "prioritySupport", "xinzhili"} {
 		if normalizeMembershipLevel(level) == "free" {
 			// Free accounts keep only the explicitly public capabilities. A
 			// stale plan row must not turn a paid feature on through a flag.
 			flags[key] = false
 		} else if _, exists := flags[key]; !exists {
-			// Missing additive keys inherit the current tier policy. Explicit
-			// administrator choices, including false, continue to win.
-			flags[key] = defaults[key]
+			flags[key] = normalizeMembershipLevel(level) == "svip"
 		}
-	}
-	// A lower-tier flag must never grant this SVIP-only feature.
-	if normalizeMembershipLevel(level) != "svip" {
-		flags["problemFollowup"] = false
-	} else if _, exists := flags["problemFollowup"]; !exists {
-		flags["problemFollowup"] = true
 	}
 	return flags
 }
@@ -89,11 +77,11 @@ func defaultMembershipLevelPlan(level string) appPlanConfig {
 	level = normalizeMembershipLevel(level)
 	switch level {
 	case "vip":
-		return appPlanConfig{Code: "vip", PlanLevel: "vip", BillingCycle: "month", Name: "VIP", Features: []string{"深度对话与专业陪伴", "每月 3 篇人生故事", "最多 3 张人物卡"}, Enabled: true, DurationDays: 30, DailyChatLimit: -1, StoryMonthlyLimit: 3, CardLimit: 3, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true, "growthPortrait": true, "trendAnalysis": true, "relationshipInsight": true, "xinzhili": true, "prioritySupport": false, "problemFollowup": false}, Limits: map[string]int{"cardLimit": 3, "dailyChatLimit": -1, "storyMonthlyLimit": 3}}
+		return appPlanConfig{Code: "vip", PlanLevel: "vip", BillingCycle: "month", Name: "VIP", Features: []string{"深度对话与专业陪伴", "每月 3 篇人生故事", "最多 3 张人物卡"}, Enabled: true, DurationDays: 30, DailyChatLimit: -1, StoryMonthlyLimit: 3, CardLimit: 3, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true, "growthPortrait": true, "trendAnalysis": true, "relationshipInsight": true, "xinzhili": true, "prioritySupport": false}, Limits: map[string]int{"cardLimit": 3, "dailyChatLimit": -1, "storyMonthlyLimit": 3}}
 	case "svip":
-		return appPlanConfig{Code: "svip", PlanLevel: "svip", BillingCycle: "year", Name: "SVIP", Features: []string{"深度对话与专业陪伴", "每月 12 篇人生故事", "最多 10 张人物卡", problemFollowupFeatureCopy}, Enabled: false, DurationDays: 365, DailyChatLimit: -1, StoryMonthlyLimit: 12, CardLimit: 10, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true, "growthPortrait": true, "trendAnalysis": true, "relationshipInsight": true, "xinzhili": true, "prioritySupport": true, "problemFollowup": true}, Limits: map[string]int{"cardLimit": 10, "dailyChatLimit": -1, "storyMonthlyLimit": 12}}
+		return appPlanConfig{Code: "svip", PlanLevel: "svip", BillingCycle: "year", Name: "SVIP", Features: []string{"深度对话与专业陪伴", "每月 12 篇人生故事", "最多 10 张人物卡"}, Enabled: false, DurationDays: 365, DailyChatLimit: -1, StoryMonthlyLimit: 12, CardLimit: 10, DeepChatEnabled: true, CompanionEnabled: true, MemberPosterEnabled: true, FeatureFlags: map[string]bool{"deepChat": true, "companion": true, "memberPoster": true, "growthPortrait": true, "trendAnalysis": true, "relationshipInsight": true, "xinzhili": true, "prioritySupport": true}, Limits: map[string]int{"cardLimit": 10, "dailyChatLimit": -1, "storyMonthlyLimit": 12}}
 	default:
-		return appPlanConfig{Code: "free", PlanLevel: "free", BillingCycle: "none", Name: "免费版", Enabled: true, DailyChatLimit: -1, StoryMonthlyLimit: 1, CardLimit: 1, DeepChatEnabled: false, CompanionEnabled: false, MemberPosterEnabled: false, FeatureFlags: map[string]bool{"deepChat": false, "companion": false, "memberPoster": false, "growthPortrait": false, "trendAnalysis": false, "relationshipInsight": false, "prioritySupport": false, "xinzhili": false, "problemFollowup": false}, Limits: map[string]int{"cardLimit": 1, "dailyChatLimit": -1, "storyMonthlyLimit": 1}}
+		return appPlanConfig{Code: "free", PlanLevel: "free", BillingCycle: "none", Name: "免费版", Enabled: true, DailyChatLimit: -1, StoryMonthlyLimit: 1, CardLimit: 1, DeepChatEnabled: false, CompanionEnabled: false, MemberPosterEnabled: false, FeatureFlags: map[string]bool{"deepChat": false, "companion": false, "memberPoster": false, "growthPortrait": false, "trendAnalysis": false, "relationshipInsight": false, "prioritySupport": false, "xinzhili": false}, Limits: map[string]int{"cardLimit": 1, "dailyChatLimit": -1, "storyMonthlyLimit": 1}}
 	}
 }
 
@@ -291,7 +279,7 @@ func (s *Server) loadAppPlans(ctx context.Context) ([]appPlanConfig, error) {
 	if len(plans) == 0 {
 		return nil, sql.ErrNoRows
 	}
-	return applyProblemFollowupPlanPolicy(plans), nil
+	return plans, nil
 }
 
 func normalizeLoadedAppPlan(plan appPlanConfig) appPlanConfig {
@@ -324,48 +312,6 @@ func normalizeLoadedAppPlan(plan appPlanConfig) appPlanConfig {
 	return plan
 }
 
-// Every SVIP billing cycle inherits this one level switch. The sales enabled
-// flag only controls purchase availability, never an existing member's access.
-func applyProblemFollowupPlanPolicy(plans []appPlanConfig) []appPlanConfig {
-	enabled := true
-	for _, plan := range plans {
-		if plan.Code == "svip" {
-			enabled = membershipFeatureFlags("svip", plan.FeatureFlags)["problemFollowup"]
-			break
-		}
-	}
-	return applyProblemFollowupPlanAvailability(plans, enabled)
-}
-
-func applyProblemFollowupPlanAvailability(plans []appPlanConfig, enabled bool) []appPlanConfig {
-	for i := range plans {
-		if plans[i].FeatureFlags == nil {
-			plans[i].FeatureFlags = make(map[string]bool)
-		}
-		plans[i].FeatureFlags["problemFollowup"] = normalizeMembershipLevel(plans[i].PlanLevel) == "svip" && enabled
-		plans[i].Features = normalizeProblemFollowupFeatureCopy(plans[i].Features, plans[i].FeatureFlags["problemFollowup"])
-	}
-	return plans
-}
-
-func normalizeProblemFollowupFeatureCopy(features []string, enabled bool) []string {
-	result := make([]string, 0, len(features)+1)
-	found := false
-	for _, feature := range features {
-		if strings.Contains(feature, "问题解决跟进") {
-			if !enabled {
-				continue
-			}
-			found = true
-		}
-		result = append(result, feature)
-	}
-	if enabled && !found && len(result) < 8 {
-		result = append(result, problemFollowupFeatureCopy)
-	}
-	return result
-}
-
 func normalizeCardFeatureCopy(features []string, cardLimit int) []string {
 	if len(features) == 0 {
 		return features
@@ -396,12 +342,6 @@ func (s *Server) loadAppPlanCapabilities(ctx context.Context, plan *appPlanConfi
 	if s == nil || s.db == nil || plan == nil {
 		return nil
 	}
-	// The new capability alone fails closed if additive columns cannot be
-	// loaded. All historical capability fallbacks remain untouched.
-	if plan.FeatureFlags == nil {
-		plan.FeatureFlags = make(map[string]bool)
-	}
-	plan.FeatureFlags["problemFollowup"] = false
 	var level, cycle string
 	var flagsRaw, limitsRaw []byte
 	err := s.db.QueryRowContext(ctx, `SELECT plan_level,billing_cycle,feature_flags,limits FROM app_plans WHERE code=$1`, plan.Code).
@@ -418,10 +358,6 @@ func (s *Server) loadAppPlanCapabilities(ctx context.Context, plan *appPlanConfi
 	if len(flagsRaw) > 0 {
 		_ = json.Unmarshal(flagsRaw, &plan.FeatureFlags)
 	}
-	if plan.FeatureFlags == nil {
-		plan.FeatureFlags = make(map[string]bool)
-	}
-	plan.FeatureFlags["problemFollowup"], _ = configuredProblemFollowupEnabled(flagsRaw)
 	if len(limitsRaw) > 0 {
 		_ = json.Unmarshal(limitsRaw, &plan.Limits)
 	}
@@ -445,12 +381,7 @@ func (s *Server) appPlan(ctx context.Context, code string) appPlanConfig {
 			}
 		}
 	}
-	plan := normalizeLoadedAppPlan(defaultAppPlan(code))
-	if s != nil && s.db != nil && err != nil && !errors.Is(err, sql.ErrNoRows) {
-		plan.FeatureFlags["problemFollowup"] = false
-		plan.Features = normalizeProblemFollowupFeatureCopy(plan.Features, false)
-	}
-	return plan
+	return normalizeLoadedAppPlan(defaultAppPlan(code))
 }
 
 func encodeAppPlanFeatures(features []string) ([]byte, error) {
@@ -511,7 +442,6 @@ func (s *Server) adminAppPlanUpdate(w http.ResponseWriter, r *http.Request) {
 	if input.Limits == nil {
 		input.Limits = map[string]int{"cardLimit": input.CardLimit, "dailyChatLimit": input.DailyChatLimit, "storyMonthlyLimit": input.StoryMonthlyLimit}
 	}
-	input.FeatureFlags["problemFollowup"] = membershipFeatureFlags(input.PlanLevel, input.FeatureFlags)["problemFollowup"]
 	featureFlags, err := json.Marshal(input.FeatureFlags)
 	if err != nil {
 		httpx.Fail(w, http.StatusBadRequest, "功能开关格式不正确")
