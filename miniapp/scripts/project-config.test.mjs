@@ -62,11 +62,11 @@ assert.notEqual(
   'manifest mp-weixin urlCheck must keep WeChat domain validation enabled',
 )
 
-assert.equal(
-  packageJson.scripts['prebuild:h5'],
-  'node scripts/verify-production-api-base.mjs',
-  'H5 production builds must verify VITE_API_BASE before generating a runnable-but-broken bundle',
-)
+for (const platform of ['h5', 'mp-weixin']) {
+  const checks = packageJson.scripts[`prebuild:${platform}`].split('&&').map(command => command.trim())
+  assert.ok(checks.includes('node scripts/verify-production-api-base.mjs'), `${platform} production builds must verify VITE_API_BASE`)
+  assert.ok(checks.includes('node scripts/publish-share-assets.mjs --check'), `${platform} production builds must verify the published share cover manifest`)
+}
 
 
 const qaPath = resolve('QA.md')

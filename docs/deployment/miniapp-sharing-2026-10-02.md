@@ -1,5 +1,7 @@
 # Miniapp friend and Moments sharing — 2026-10-02
 
+The native cover preview issue recorded below was subsequently fixed with published HTTPS covers; see [cover fix verification](miniapp-share-cover-fix-2026-10-02.md).
+
 The teacher's public pages now offer native WeChat friend sharing and Moments sharing. Course/content links carry only public IDs; recipients use their own account and purchase permissions. This is a miniapp client change using the existing public database APIs. No backend migration or service restart is needed.
 
 ## Page policy

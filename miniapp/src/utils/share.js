@@ -1,4 +1,5 @@
 import { resolveContentAsset } from './contentAsset.js'
+import shareAssets from '../data/shareAssets.js'
 
 const STUDIO_COVER = '/static/share/studio.jpg'
 const MENUS = ['shareAppMessage', 'shareTimeline']
@@ -15,14 +16,18 @@ const PAGES = {
 }
 
 function publicImage(value, fallback) {
+  // Native share dialogs load outside the page's package-image context.
+  // Publish bundled covers as immutable HTTPS assets; never guess a URL for
+  // an unknown local image. The manifest is verified before each build.
+  const fallbackUrl = resolveContentAsset(shareAssets[fallback] || shareAssets[STUDIO_COVER])
   const asset = resolveContentAsset(value)
-  if (/^\/static\/teacher\/(?:hero-)?portrait\.jpg$/.test(asset)) return STUDIO_COVER
+  if (/^\/static\/teacher\/(?:hero-)?portrait\.jpg$/.test(asset)) return resolveContentAsset(shareAssets[STUDIO_COVER])
   // WeChat share covers support PNG/JPG, unlike in-page images (e.g. WebP).
   // Shares outlive signed URLs. Keep only stable supported assets; playback and
   // credential-bearing addresses are never embedded in a share card.
-  if (!asset || /[?#]/.test(asset) || !/\.(?:jpe?g|png)$/i.test(asset)) return fallback
-  if (!asset.startsWith('/static/') && !asset.startsWith('https://')) return fallback
-  return asset
+  if (!asset || /[?#]/.test(asset) || !/\.(?:jpe?g|png)$/i.test(asset)) return fallbackUrl
+  if (asset.startsWith('/static/')) return resolveContentAsset(shareAssets[asset]) || fallbackUrl
+  return asset.startsWith('https://') ? asset : fallbackUrl
 }
 
 export function buildShareCard({ kind = 'home', title, imageUrl, id, type, seriesId } = {}) {

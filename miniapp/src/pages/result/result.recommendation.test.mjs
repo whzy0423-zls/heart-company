@@ -3,6 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import shareAssets from '../../data/shareAssets.js'
+import { DEFAULT_API_BASE } from '../../config.js'
 
 const source = await readFile(new URL('./result.vue', import.meta.url), 'utf8')
 const templateStart = source.indexOf('<template>')
@@ -209,12 +211,12 @@ try {
     assert.deepEqual(state.shareAppMessage(), {
       title: '认识 1 号「改革者」｜你是哪一型？',
       path: '/pages/result/result?shareType=1',
-      imageUrl: '/static/share/result-1.jpg',
+      imageUrl: new URL(shareAssets['/static/share/result-1.jpg'], DEFAULT_API_BASE).href,
     }, 'friend sharing should use the dedicated landscape result card')
     assert.deepEqual(state.shareTimeline(), {
       title: '认识 1 号「改革者」｜你是哪一型？',
       query: 'shareType=1',
-      imageUrl: '/static/share/result-1.jpg',
+      imageUrl: new URL(shareAssets['/static/share/result-1.jpg'], DEFAULT_API_BASE).href,
     }, 'timeline sharing should reuse the stable result card')
   }
 

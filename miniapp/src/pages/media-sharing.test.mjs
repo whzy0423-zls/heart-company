@@ -5,8 +5,8 @@ import { ref, computed, watch } from 'vue'
 import { buildShareCard } from '../utils/share.js'
 import { normalizeClassroomContent, normalizeClassroomSeries, classroomPurchaseAction } from '../utils/classroomDisplay.js'
 
-const lesson = { id: '21', title: '关于关系的真实日常', coverUrl: '/static/lesson.jpg', contentType: 'video', effectiveAccess: 'paid', accessLevel: 'paid', canPlay: false, purchaseState: 'purchase_required' }
-const series = { id: '7', title: '老师的关系系列', coverUrl: '/static/series.jpg', effectiveAccess: 'paid', canPlay: false }
+const lesson = { id: '21', title: '关于关系的真实日常', coverUrl: 'https://cdn.example/lesson.jpg', contentType: 'video', effectiveAccess: 'paid', accessLevel: 'paid', canPlay: false, purchaseState: 'purchase_required' }
+const series = { id: '7', title: '老师的关系系列', coverUrl: 'https://cdn.example/series.jpg', effectiveAccess: 'paid', canPlay: false }
 const flush = async () => { for (let n = 0; n < 20; n++) await Promise.resolve() }
 function deferred() { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 function harness(name, options = {}) {
