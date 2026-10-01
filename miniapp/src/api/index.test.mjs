@@ -152,6 +152,18 @@ try {
     data: { courseId: 'growth-course' },
   });
   assert.throws(() => api.createCourseOrderApi('../invalid'), /课程参数无效/);
+  await api.getCourseEnrollmentApi({ bookingId: 31 });
+  assert.deepEqual(requestStub.calls.at(-1), {
+    url: '/miniapp/course/enrollment', method: 'GET', auth: true,
+    query: { bookingId: '31' },
+  });
+  await api.getCourseEnrollmentApi({ courseId: 'growth-course' });
+  assert.deepEqual(requestStub.calls.at(-1).query, { courseId: 'growth-course' });
+  const enrollmentCalls = requestStub.calls.length;
+  for (const query of [{}, { bookingId: '31', courseId: 'growth-course' }, { bookingId: '0' }, { bookingId: '31&paid=1' }, { courseId: '../invalid' }]) {
+    assert.throws(() => api.getCourseEnrollmentApi(query), /参数无效/);
+  }
+  assert.equal(requestStub.calls.length, enrollmentCalls, 'invalid enrollment identities never reach the network');
   await api.listMiniappOrdersApi({ page: 2, pageSize: 20, status: 'paid' });
   assert.deepEqual(requestStub.calls.at(-1), {
     url: '/miniapp/orders', method: 'GET', auth: true,

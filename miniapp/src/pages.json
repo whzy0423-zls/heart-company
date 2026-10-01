@@ -77,6 +77,13 @@
       }
     },
     {
+      "path": "pages/my-course/my-course",
+      "style": {
+        "navigationBarTitleText": "我的课程",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
       "path": "pages/payment-result/payment-result",
       "style": {
         "navigationBarTitleText": "支付结果"

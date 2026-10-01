@@ -11,7 +11,7 @@ import { setBookingIntent } from '../../utils/bookingIntent'
 import { previewImage } from '../../utils/imagePreview'
 import { isWechatDevtools } from '../../utils/imagePreview'
 import { ensureLogin, getToken } from '../../utils/auth'
-import { createCourseOrderApi, devPayCourseBookingOrderApi, getCourseBookingOrderStatusApi } from '../../api'
+import { createCourseOrderApi, devPayCourseBookingOrderApi, getCourseBookingOrderStatusApi, getCourseEnrollmentApi } from '../../api'
 import { payWechatOrder } from '../../utils/payment'
 import { createCoursePaymentController, coursePaymentResultUrl } from '../../utils/coursePayment'
 import { userErrorMessage } from '../../utils/userMessage'
@@ -20,10 +20,32 @@ const courseId = ref('')
 const config = ref(getStoredSiteConfig() || {})
 const loading = ref(false)
 const paying = ref(false)
+const enrollment = ref(null)
+const enrollmentLoading = ref(false)
+const enrollmentError = ref('')
+const enrollmentChecked = ref(UI_PREVIEW || !getToken())
 let paymentController = null
 let active = true
-onUnload(() => { active = false; paymentController?.stop() })
-onShow(() => { if (active) paymentController?.resume() })
+let enrollmentToken = getToken()
+let enrollmentTicket = 0
+onUnload(() => {
+  active = false
+  paymentController?.stop()
+  enrollmentTicket += 1
+  enrollment.value = null
+  enrollmentLoading.value = false
+  enrollmentError.value = ''
+  enrollmentToken = ''
+})
+onShow(() => {
+  if (!active) return
+  if (paying.value) {
+    if (enrollmentToken !== getToken()) resetEnrollmentSession()
+    paymentController?.resume()
+    return
+  }
+  return refreshEnrollment()
+})
 const activeSection = ref('intro')
 const sections = [{ id: 'intro', label: '课程介绍' }, { id: 'outline', label: '学习内容' }, { id: 'notice', label: '报名须知' }]
 const courses = computed(() => UI_PREVIEW ? STUDIO_COURSES : normalizeMiniappCourses(config.value))
@@ -41,13 +63,97 @@ const courseCoverFailed = ref(false)
 const courseCoverPreviewVisible = ref(false)
 const highlights = computed(() => Array.isArray(course.value?.highlights) ? course.value.highlights : [])
 const outline = computed(() => Array.isArray(course.value?.outline) ? course.value.outline : [])
+const isEnrolled = computed(() => enrollment.value?.owned === true && enrollment.value?.order?.status === 'paid')
+const enrollmentPending = computed(() => !enrollmentChecked.value || enrollmentLoading.value)
+const confirmationPending = computed(() => !isEnrolled.value && enrollment.value?.syncStatus === 'retrying')
+const enrollmentActionDisabled = computed(() => paying.value || enrollmentPending.value)
+const enrollmentActionText = computed(() => {
+  if (paying.value) return '确认支付中'
+  if (enrollmentPending.value) return '确认报名状态'
+  if (enrollmentError.value) return '重试报名状态'
+  if (isEnrolled.value) return '查看我的课程'
+  if (confirmationPending.value) return enrollment.value?.bookingId ? '查看支付结果' : '刷新支付结果'
+  return course.value?.paymentMode === 'paid' ? '立即支付' : '咨询老师'
+})
+const enrollmentCaption = computed(() => {
+  if (enrollmentPending.value) return '正在确认你的课程报名'
+  if (enrollmentError.value) return '请重试后查看报名状态'
+  if (isEnrolled.value) return '查看课程安排与报名信息'
+  if (confirmationPending.value) return '请勿重复支付，稍后刷新结果'
+  return UI_PREVIEW ? '演示价格 · 无需在线支付' : course.value?.paymentMode === 'paid' ? '在线支付后确认报名' : '提交意向后确认安排'
+})
 onLoad(async (query) => {
   courseId.value = String(query?.id || '')
   if (UI_PREVIEW) return
   loading.value = true
-  try { config.value = await getCachedSiteConfig() || {} } catch { /* Keep cached content visible. */ }
-  finally { loading.value = false }
+  try { const updated = await getCachedSiteConfig(); if (active) config.value = updated || {} } catch { /* Keep cached content visible. */ }
+  finally { if (active) loading.value = false }
 })
+function resetEnrollmentSession() {
+  enrollmentTicket += 1
+  enrollment.value = null
+  enrollmentLoading.value = false
+  enrollmentChecked.value = true
+  enrollmentError.value = '登录状态已更新，请重试报名状态'
+  enrollmentToken = getToken()
+}
+function validEnrollment(value, requestedCourse) {
+  if (!value || value.courseId !== requestedCourse || typeof value.owned !== 'boolean' || !['confirmed', 'retrying'].includes(value.syncStatus)) {
+    throw new Error('报名状态暂未确认，请重试')
+  }
+  const bookingId = String(value.bookingId || '')
+  if (bookingId && !/^[1-9]\d*$/.test(bookingId)) throw new Error('报名信息暂未确认，请重试')
+  if (value.owned && value.order?.status === 'paid') {
+    if (!bookingId || String(value.order.bookingId) !== bookingId || value.order.courseId !== requestedCourse) {
+      throw new Error('报名信息暂未确认，请重试')
+    }
+  } else if (value.order?.status === 'paid' || (value.owned && value.syncStatus !== 'retrying')) {
+    throw new Error('报名状态暂未确认，请重试')
+  }
+  return { ...value, bookingId }
+}
+async function refreshEnrollment(whilePaying = false) {
+  if (!active || (paying.value && !whilePaying)) return false
+  const token = getToken()
+  const requestedCourse = courseId.value
+  const ticket = ++enrollmentTicket
+  enrollmentToken = token
+  enrollment.value = null
+  enrollmentError.value = ''
+  enrollmentLoading.value = false
+  enrollmentChecked.value = UI_PREVIEW || !token
+  if (UI_PREVIEW || !token) return true
+  enrollmentLoading.value = true
+  const current = () => active && ticket === enrollmentTicket && requestedCourse === courseId.value
+  try {
+    const result = await getCourseEnrollmentApi({ courseId: requestedCourse })
+    if (!current()) return false
+    if (getToken() !== token) { resetEnrollmentSession(); return false }
+    enrollment.value = validEnrollment(result, requestedCourse)
+    enrollmentChecked.value = true
+    return true
+  } catch (error) {
+    if (!current()) return false
+    if (getToken() !== token) { resetEnrollmentSession(); return false }
+    enrollmentError.value = userErrorMessage(error, '报名状态暂未确认，请重试')
+    enrollmentChecked.value = true
+    return false
+  } finally {
+    if (current()) enrollmentLoading.value = false
+  }
+}
+function openMyCourse() {
+  if (!active) return
+  if (enrollmentToken !== getToken()) { resetEnrollmentSession(); return }
+  if (!isEnrolled.value || !enrollment.value?.bookingId) return
+  uni.navigateTo({ url: `/pages/my-course/my-course?bookingId=${encodeURIComponent(enrollment.value.bookingId)}` })
+}
+function showPendingPayment() {
+  if (!active || enrollmentToken !== getToken()) { if (active) resetEnrollmentSession(); return }
+  const url = coursePaymentResultUrl(enrollment.value)
+  if (url) uni.navigateTo({ url })
+  else return refreshEnrollment()
+}
 function goBack() {
   uni.navigateBack({ fail: () => uni.switchTab({ url: '/pages/booking/booking' }) })
 }
@@ -56,7 +162,13 @@ function chooseSection(section) {
   uni.pageScrollTo({ selector: `#section-${section}`, duration: 250, offsetTop: -24 })
 }
 async function enroll() {
-  if (!course.value || paying.value) return
+  if (!active || paying.value) return
+  if (enrollmentToken !== getToken()) { await refreshEnrollment(); return }
+  if (enrollmentPending.value) return
+  if (enrollmentError.value) { await refreshEnrollment(); return }
+  if (isEnrolled.value) { openMyCourse(); return }
+  if (confirmationPending.value) { return showPendingPayment() }
+  if (!course.value) return
   if (course.value.priceCents > 0) {
     if (UI_PREVIEW || typeof window !== 'undefined') {
       uni.showToast({ title: '请在微信小程序内完成支付', icon: 'none' })
@@ -68,6 +180,12 @@ async function enroll() {
       await ensureLogin()
       if (!active) return
       paymentToken = getToken()
+      if (!paymentToken) return
+      if (enrollmentToken !== paymentToken || !enrollment.value || enrollmentError.value) {
+        if (!await refreshEnrollment(true) || !active || getToken() !== paymentToken) return
+        if (isEnrolled.value) { openMyCourse(); return }
+        if (confirmationPending.value) { return showPendingPayment() }
+      }
       const selectedId = course.value.id
       const requireSession = () => {
         if (!active || !paymentToken || getToken() !== paymentToken) throw new Error('登录状态已更新，请重新支付')
@@ -125,8 +243,15 @@ function outlineDescription(item) { return typeof item === 'object' && item ? it
 
 <template>
   <view class="course-detail-page">
-    <view v-if="loading && !course" class="empty-state"><text class="empty-title">正在整理课程信息…</text></view>
-    <view v-else-if="!course" class="empty-state"><NxIcon name="book" :size="38" /><text class="empty-title">这门课程暂未开放</text><text class="muted-copy">可以先看看其他学习方向，或联系工作室了解安排。</text><button class="primary-button" @click="goBack">返回课程列表</button></view>
+    <view v-if="(loading || enrollmentPending) && !course && !isEnrolled" class="empty-state"><text class="empty-title">{{ enrollmentPending ? '正在确认课程报名…' : '正在整理课程信息…' }}</text></view>
+    <view v-else-if="!course" class="empty-state">
+      <NxIcon :name="isEnrolled ? 'check' : 'book'" :size="38" />
+      <text class="empty-title">{{ isEnrolled ? enrollment.order.title || '已报名课程' : enrollmentError ? '报名状态待确认' : confirmationPending ? '支付结果确认中' : '这门课程暂未开放' }}</text>
+      <text class="muted-copy">{{ isEnrolled ? '你已报名这门课程，可继续查看报名信息与课程安排。' : enrollmentError || (confirmationPending ? '正在同步微信支付结果，请勿重复支付。' : '可以先看看其他学习方向，或联系工作室了解安排。') }}</text>
+      <button v-if="isEnrolled" class="primary-button" @click="openMyCourse">查看我的课程</button>
+      <button v-else-if="enrollmentError || confirmationPending" class="primary-button" :disabled="enrollmentActionDisabled" :loading="enrollmentLoading" @click="enroll">{{ enrollmentActionText }}</button>
+      <button v-else class="primary-button" @click="goBack">返回课程列表</button>
+    </view>
     <block v-else>
       <view class="course-cover" role="button" aria-label="预览课程封面" @click="previewCourseCover"><image :src="course.cover" mode="aspectFill" class="cover-image" :aria-label="course.title" @error="courseCoverFailed = true" /><view class="cover-shade" /><view class="cover-caption"><text>认识自己，是一生的功课。</text><text class="caption-en">A JOURNEY TO YOURSELF</text></view></view>
       <view class="detail-content">
@@ -139,7 +264,17 @@ function outlineDescription(item) { return typeof item === 'object' && item ? it
         <view id="section-notice" class="content-section notice-section"><text class="eyebrow">BEFORE WE MEET</text><text class="section-title">相遇之前，你可能想知道</text><view class="notice-item"><text class="notice-label">如何报名</text><text class="body-copy">{{ course.notice || (course.paymentMode === 'paid' ? '完成微信支付后，可在我的订单中查看报名信息与支付状态。' : '提交报名意向后，工作室会联系你确认课程、时间与费用。意向提交不等于支付或席位确认。') }}</text></view><view class="notice-item"><text class="notice-label">课程安排</text><text class="body-copy">{{ UI_PREVIEW ? '当前页面的排期、地点与价格为界面演示数据。正式开课信息，请以工作室实际发布与确认为准。' : '具体开课时间、地点、费用及调整规则，以工作室实际发布与确认为准。' }}</text></view><view class="notice-item"><text class="notice-label">学习建议</text><text class="body-copy">带着好奇和真实问题来，不需要提前确定自己的性格类型。九型人格帮助自我觉察，不替代专业心理诊疗。</text></view></view>
         <view class="page-ending"><view /><text>期待，与你在课堂相遇</text><view /></view>
       </view>
-      <view class="enroll-bar"><view class="enroll-price"><view v-if="course.price !== undefined"><text class="currency">¥</text><text class="price">{{ course.price.toLocaleString() }}</text><text class="price-unit"> / 人</text></view><text v-else class="consult-price">咨询老师</text><text class="price-caption">{{ UI_PREVIEW ? '演示价格 · 无需在线支付' : course.paymentMode === 'paid' ? '在线支付后确认报名' : '提交意向后确认安排' }}</text></view><button class="enroll-button" :disabled="paying" :loading="paying" @click="enroll">{{ paying ? '确认支付中' : course.paymentMode === 'paid' ? '立即支付' : '咨询老师' }} <NxIcon name="arrow" :size="18" color="#FFFFFF" /></button></view>
+      <view class="enroll-bar">
+        <view class="enroll-price">
+          <text v-if="isEnrolled" class="enrolled-status">已报名</text>
+          <text v-else-if="enrollmentPending || enrollmentError" class="consult-price">报名状态待确认</text>
+          <text v-else-if="confirmationPending" class="consult-price">支付结果确认中</text>
+          <view v-else-if="course.price !== undefined"><text class="currency">¥</text><text class="price">{{ course.price.toLocaleString() }}</text><text class="price-unit"> / 人</text></view>
+          <text v-else class="consult-price">咨询老师</text>
+          <text class="price-caption">{{ enrollmentCaption }}</text>
+        </view>
+        <button class="enroll-button" :disabled="enrollmentActionDisabled" :loading="paying || enrollmentLoading" @click="enroll">{{ enrollmentActionText }} <NxIcon name="arrow" :size="18" color="#FFFFFF" /></button>
+      </view>
       <NxImagePreview
         v-if="teacherAvatar && !teacherAvatarFailed"
         :visible="teacherAvatarPreviewVisible"
@@ -161,5 +296,6 @@ function outlineDescription(item) { return typeof item === 'object' && item ? it
 <style scoped>
 .course-detail-page{min-height:100vh;background:var(--nx-page-bg);color:var(--nx-text);padding-bottom:calc(160rpx + env(safe-area-inset-bottom));box-sizing:border-box}button{box-sizing:border-box;border:0;margin:0;line-height:1.5}button::after{border:0}.course-cover{height:500rpx;position:relative;background:#DBD5C7}.cover-image{display:block;width:100%;height:100%}.cover-shade{position:absolute;inset:0;background:linear-gradient(180deg,transparent 40%,rgba(35,32,24,.42))}.cover-caption{position:absolute;bottom:38rpx;left:40rpx;display:flex;flex-direction:column;gap:14rpx;color:#fff;font-size:29rpx;font-family:'Songti SC','STSong',serif;letter-spacing:2rpx}.caption-en{font-family:Arial,sans-serif;font-size:17rpx;letter-spacing:3rpx;opacity:.85}.detail-content{padding:0 36rpx}.course-heading{padding:36rpx 0 30rpx}.title-meta{display:flex;gap:15rpx;align-items:center;font-size:21rpx;letter-spacing:1rpx;color:var(--nx-brand-700)}.meta-divider{width:1rpx;height:18rpx;background:#C6AE97}.course-title{display:block;font-family:'Songti SC','STSong',serif;font-size:49rpx;font-weight:600;line-height:1.45;margin-top:19rpx}.course-subtitle{display:block;font-size:25rpx;color:var(--nx-text-muted);line-height:1.8;margin-top:15rpx}.course-info{display:flex;flex-wrap:wrap;gap:22rpx 32rpx;margin-top:28rpx}.course-info>view{display:flex;align-items:center;gap:10rpx;font-size:23rpx;color:#66675E}.location-line{display:flex;align-items:center;flex-wrap:wrap;gap:15rpx;font-size:22rpx;color:var(--nx-text-muted);margin-top:20rpx}.demo-badge{font-size:18rpx;color:#897C68;border:1rpx solid #DAD1C2;padding:5rpx 9rpx;border-radius:5rpx}.section-tabs{display:flex;justify-content:space-between;border-bottom:1rpx solid var(--nx-border);gap:10rpx}.section-tab{position:relative;min-height:96rpx;display:flex;align-items:center;justify-content:center;flex:1;padding:20rpx 0;background:transparent;border-radius:0;font-size:25rpx;color:var(--nx-text-muted)}.section-tab.active{color:var(--nx-brand-700);font-weight:600}.section-tab.active::before{content:'';position:absolute;bottom:0;left:24%;width:52%;height:4rpx;background:var(--nx-brand-700);border-radius:4rpx}.content-section{padding:40rpx 0}.eyebrow{display:block;font-size:18rpx;letter-spacing:3rpx;color:var(--nx-brand-700)}.section-title{display:block;margin:15rpx 0 24rpx;font-family:'Songti SC','STSong',serif;font-size:36rpx;line-height:1.5}.body-copy{display:block;font-size:26rpx;color:#66685F;line-height:1.95}.highlight-list{margin-top:26rpx;display:flex;flex-direction:column;gap:20rpx}.highlight-item{display:flex;align-items:flex-start;gap:14rpx;font-size:25rpx;line-height:1.7}.highlight-icon{margin-top:3rpx;flex-shrink:0;display:flex;align-items:center;justify-content:center;width:35rpx;height:35rpx;border-radius:50%;color:var(--nx-brand-700);background:#EFE8DB}.teacher-card{display:flex;align-items:center;gap:23rpx;width:100%;background:var(--nx-surface);padding:27rpx;border-radius:24rpx;text-align:left;color:var(--nx-text)}.teacher-avatar-action{display:block;width:108rpx;height:126rpx;flex:0 0 108rpx;overflow:hidden;border-radius:12rpx}.teacher-avatar{display:block;width:108rpx;height:126rpx;flex-shrink:0;object-fit:cover;border-radius:12rpx;background:var(--nx-border)}.teacher-avatar--fallback{display:flex;align-items:center;justify-content:center;color:var(--nx-brand-700);font-size:40rpx;background:var(--nx-page-bg)}.teacher-copy{flex:1;min-width:0}.teacher-overline{display:block;color:var(--nx-text-muted);font-size:19rpx;letter-spacing:1rpx}.teacher-name{display:block;font-size:30rpx;font-family:'Songti SC','STSong',serif;margin-top:6rpx}.teacher-title{display:block;font-size:21rpx;color:var(--nx-text-muted);line-height:1.6;margin-top:7rpx}.outline-list{border-top:1rpx solid var(--nx-border)}.outline-item{display:flex;gap:24rpx;padding:28rpx 0;border-bottom:1rpx solid var(--nx-border)}.outline-number{font-family:Georgia,serif;color:#A38B73;font-size:32rpx;line-height:1.3;flex-shrink:0}.outline-title{display:block;font-size:27rpx;line-height:1.5}.outline-description{display:block;font-size:23rpx;color:var(--nx-text-muted);line-height:1.8;margin-top:10rpx}.outline-empty{background:var(--nx-surface);padding:26rpx;border-radius:20rpx}.muted-copy{display:block;font-size:24rpx;color:var(--nx-text-muted);line-height:1.8;margin-top:18rpx}.quote-note{position:relative;background:#EEEAE0;border-radius:24rpx;padding:42rpx 30rpx;text-align:center}.quote-mark{display:block;color:#BEAA90;font-family:Georgia,serif;font-size:73rpx;height:57rpx;line-height:1}.quote-copy{display:block;font-family:'Songti SC','STSong',serif;font-size:32rpx;line-height:1.8;color:#5D5E51}.quote-copy text{display:block}.quote-footer{display:block;margin-top:25rpx;font-size:20rpx;letter-spacing:2rpx;color:#878573}.notice-item{margin-top:26rpx}.notice-label{display:block;font-size:26rpx;font-weight:500;margin-bottom:10rpx}.notice-item .body-copy{font-size:24rpx}.page-ending{display:flex;align-items:center;gap:20rpx;padding:12rpx 0 30rpx;color:#999183;font-size:22rpx;letter-spacing:1rpx}.page-ending view{height:1rpx;background:var(--nx-border);flex:1}.enroll-bar{position:fixed;z-index:10;bottom:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;gap:20rpx;padding:22rpx 32rpx calc(22rpx + env(safe-area-inset-bottom));background:rgba(255,255,255,.98);border-top:1rpx solid var(--nx-border);box-sizing:border-box}.enroll-price{min-width:0}.currency{font-size:25rpx;color:var(--nx-brand-700);margin-right:5rpx}.price{font-family:Georgia,serif;font-size:40rpx;color:var(--nx-brand-700)}.price-unit{font-size:20rpx;color:var(--nx-text-muted)}.price-caption{display:block;font-size:18rpx;color:var(--nx-text-muted);margin-top:7rpx}.consult-price{font-size:25rpx}.enroll-button{display:flex;align-items:center;justify-content:center;gap:15rpx;min-height:92rpx;padding:20rpx 30rpx;border-radius:14rpx;background:var(--nx-brand-700);font-size:25rpx;color:#fff;flex-shrink:0}.empty-state{display:flex;flex-direction:column;align-items:center;padding:120rpx 40rpx;text-align:center;gap:20rpx}.empty-title{font-family:'Songti SC','STSong',serif;font-size:38rpx}.primary-button{min-height:96rpx;display:flex;align-items:center;justify-content:center;width:100%;border-radius:14rpx;margin-top:30rpx;background:var(--nx-brand-700);color:#fff;font-size:27rpx}
 @media(min-width:600px){.course-detail-page{max-width:800rpx;margin:auto}.enroll-bar{max-width:800rpx;margin:auto}}
+.enrolled-status{font-family:'Songti SC','STSong',serif;font-size:34rpx;color:var(--nx-brand-700)}.enroll-button[disabled]{background:#B87A5D;color:#FFFFFF}
 @media(prefers-reduced-motion:reduce){.course-detail-page{scroll-behavior:auto!important;transition:none!important}}
 </style>

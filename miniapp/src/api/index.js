@@ -313,6 +313,18 @@ export function createCourseOrderApi(courseId) {
   }, '课程订单创建失败，请重试')
 }
 
+export function getCourseEnrollmentApi(query = {}) {
+  const bookingId = String(query?.bookingId ?? '').trim()
+  const courseId = String(query?.courseId ?? '').trim()
+  if (Boolean(bookingId) === Boolean(courseId)) throw new Error('课程报名参数无效')
+  if (bookingId && !/^[1-9]\d*$/.test(bookingId)) throw new Error('课程报名参数无效')
+  if (courseId && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(courseId)) throw new Error('课程参数无效')
+  return classroomRequest({
+    url: '/miniapp/course/enrollment', method: 'GET', auth: true,
+    query: bookingId ? { bookingId } : { courseId },
+  }, '课程报名信息加载失败，请稍后刷新')
+}
+
 export function listMiniappOrdersApi({ page = 1, pageSize = 20, status } = {}) {
   return classroomRequest({
     url: '/miniapp/orders', method: 'GET', auth: true,

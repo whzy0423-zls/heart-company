@@ -136,7 +136,7 @@ function harness() {
   assert.equal(page.orders.value[0].status, 'paid')
   assert.equal(page.canContinue(page.orders.value[0]), false)
   page.openCourse(page.orders.value[0])
-  assert.equal(state.navigation.at(-1).url, '/pages/course-detail/course-detail?id=course-1')
+  assert.equal(state.navigation.at(-1).url, '/pages/my-course/my-course?bookingId=101', 'paid orders open their enrollment, never the purchase page')
 }
 {
   const { state, page } = harness()
@@ -229,3 +229,16 @@ function harness() {
   assert.equal(state.navigation.at(-1).url, '/pages/payment-result/payment-result?bookingId=101')
 }
 console.log('Miniapp orders session, pagination and payment tests passed')
+
+{
+  const { state, page } = harness()
+  await state.show()
+  page.openCourse(order(1, {status:'paid', courseId:''}))
+  assert.equal(state.navigation.at(-1).url, '/pages/my-course/my-course?bookingId=101', 'historical paid enrollment stays reachable without a catalog course')
+  page.openCourse(order(2))
+  assert.equal(state.navigation.at(-1).url, '/pages/course-detail/course-detail?id=course-2', 'unpaid discovery still opens the public course')
+  state.token='session-b'
+  const before=state.navigation.length
+  page.openCourse(order(1, {status:'paid'}))
+  assert.equal(state.navigation.length,before,'old account navigation cannot open its private enrollment')
+}
