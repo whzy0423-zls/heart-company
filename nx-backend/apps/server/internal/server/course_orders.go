@@ -57,6 +57,7 @@ type courseOrderRequest struct {
 
 func registerCourseOrderRoutes(mux *http.ServeMux, authn func(http.HandlerFunc) http.HandlerFunc, s *Server) {
 	mux.HandleFunc("/api/miniapp/orders", s.method(http.MethodGet, authn(s.miniappOrders)))
+	mux.HandleFunc("/api/miniapp/course/enrollment", s.method(http.MethodGet, authn(s.courseEnrollment)))
 	mux.HandleFunc("/api/miniapp/course/orders", s.method(http.MethodPost, authn(s.courseOrderCreate)))
 	mux.HandleFunc("/api/miniapp/course/orders/status", s.method(http.MethodGet, authn(s.courseOrderStatus)))
 	mux.HandleFunc("/api/miniapp/course/orders/dev-pay", s.method(http.MethodPost, authn(s.courseOrderDevPay)))
