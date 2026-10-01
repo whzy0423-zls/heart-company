@@ -155,6 +155,11 @@ onLoad((query) => {
 })
 onShow(() => {
   if (disposed) return
+  // #ifdef MP-WEIXIN
+  if (typeof uni !== 'undefined' && typeof uni.hideShareMenu === 'function') {
+    uni.hideShareMenu({ menus: ['shareAppMessage', 'shareTimeline'] })
+  }
+  // #endif
   active = true
   redirecting = false
   return startPolling()

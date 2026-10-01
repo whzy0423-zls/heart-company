@@ -79,9 +79,7 @@
     {
       "path": "pages/payment-result/payment-result",
       "style": {
-        "navigationBarTitleText": "支付结果",
-        "enableShareAppMessage": false,
-        "enableShareTimeline": false
+        "navigationBarTitleText": "支付结果"
       }
     },
     {

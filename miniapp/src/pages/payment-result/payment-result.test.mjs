@@ -7,7 +7,8 @@ assert.ok(existsSync(pageUrl), 'payment result page must exist')
 const routes = JSON.parse(readFileSync(new URL('../../pages.json', import.meta.url), 'utf8'))
 const route = routes.pages.find(item => item.path === 'pages/payment-result/payment-result')
 assert.ok(route, 'payment result must be registered in mini-program routes')
-assert.equal(route.style.enableShareAppMessage, false, 'private payment results cannot be shared')
+assert.equal(route.style.enableShareAppMessage, undefined, 'unsupported sharing fields must not enter WeChat page.json')
+assert.equal(route.style.enableShareTimeline, undefined, 'unsupported sharing fields must not enter WeChat page.json')
 const source = readFileSync(pageUrl, 'utf8')
 const script = source.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import[^\n]+\n/gm, '')
 assert.doesNotMatch(script, /createCourse\w*OrderApi|payWechatOrder|requestPayment/, 'result page only queries payment status')
@@ -19,8 +20,8 @@ function deferred() {
   const promise = new Promise((yes, no) => { resolve = yes; reject = no })
   return { promise, resolve, reject }
 }
-function harness() {
-  const state = { token: 'session-a', queries: [], navigation: [], timers: new Map(), nextTimer: 0, status: async () => response() }
+function harness({ shareAvailable = true } = {}) {
+  const state = { token: 'session-a', queries: [], navigation: [], shareCalls: [], timers: new Map(), nextTimer: 0, status: async () => response() }
   const context = vm.createContext({
     ref: value => ({ value }), computed: getter => ({ get value() { return getter() } }),
     onLoad: fn => { state.load = fn }, onShow: fn => { state.show = fn },
@@ -30,6 +31,7 @@ function harness() {
     setTimeout: (fn, delay) => { const id = ++state.nextTimer; state.timers.set(id, { fn, delay }); return id },
     clearTimeout: id => state.timers.delete(id),
     uni: {
+      ...(shareAvailable ? { hideShareMenu: options => state.shareCalls.push(options) } : {}),
       switchTab: options => state.navigation.push(options),
       navigateTo: options => state.navigation.push(options),
       redirectTo: options => state.navigation.push(options),
@@ -51,6 +53,7 @@ function harness() {
   const { state, page } = harness()
   state.load({ bookingId: '52' })
   await state.show()
+  assert.deepEqual(Array.from(state.shareCalls[0].menus), ['shareAppMessage', 'shareTimeline'], 'private results hide both share menus at runtime')
   assert.equal(page.isPaid.value, false)
   assert.equal(page.order.value.title, '认识自己的成长课')
   await state.tick()
@@ -240,4 +243,11 @@ for (const bookingId of [undefined, '', '0', '-1', '52x', '52&status=paid']) {
   assert.equal(page.order.value, null)
 }
 
+{
+  const { state, page } = harness({ shareAvailable: false })
+  state.status = async () => response('paid')
+  state.load({ bookingId: '52' })
+  await state.show()
+  assert.equal(page.isPaid.value, true, 'environments without the WeChat sharing API still query normally')
+}
 console.log('payment result behavior passed: confirmation, bounded polling, forged params, session and lifecycle isolation')

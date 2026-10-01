@@ -24,3 +24,11 @@ Validation:
 Production incident backups are under `/opt/heart-company/backups/payment-status-20261002`: verified transaction evidence, the small business-table backup, original environment/Compose override and server image ID. The rollback image is `heart-company-server:before-payment-reconcile-20261002`. No schema change is required.
 
 This is a production API update and a local WeChat developer-tool bundle. It does not publish a new version to the WeChat store.
+
+Production verification:
+
+- Server revision `546d224505aaa42d06309baa33fb57f744efc259` was built and deployed; both Compose operations exited 0. The running image is `sha256:a50f335d8189335fbab6ad21d12451ef15c7fd7621a8b9bec64105bda0f9e073`. Other services, volumes, environment and certificate mounts were retained.
+- Health returned HTTP 200. Authenticated requests through the public domain confirmed the real incident order as paid for one cent and present in My Orders. Both course-ID and booking-ID repeat checkout returned that same paid order without payment parameters.
+- The final database check confirmed the order and booking paid, with exactly one payment-success administration notification.
+- WeChat developer tools reopened the production bundle. The real incident order rendered “支付成功”, the correct course title, CNY 0.01, its order number and settlement confirmation time on the result page. No new payment was made during this verification.
+- A developer-tool warning from unsupported page JSON sharing flags was removed; sharing is hidden using the WeChat runtime API instead.
