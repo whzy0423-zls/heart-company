@@ -4,9 +4,30 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
+import vm from 'node:vm'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(resolve(__dirname, './payment.js'), 'utf8')
+
+// uni-app injects a module-scoped uni runtime in the WeChat build. It need not
+// exist on globalThis. Exercise that shape rather than only a Node global mock.
+{
+  const calls = []
+  const runtime = {
+    requestPayment(options) {
+      assert.equal(this, runtime, 'keep the API receiver when invoking payment')
+      calls.push(options)
+      options.success({ errMsg: 'requestPayment:ok' })
+    },
+  }
+  const context = vm.createContext({ injectedRuntime: runtime })
+  const script = source.replace(/^import[^\n]+\n/gm, '').replace(/\bexport /g, '')
+  vm.runInContext(`const uni = injectedRuntime;\n${script}\nglobalThis.paymentEntry = requestWechatPayment`, context)
+  assert.equal(context.uni, undefined, 'runtime is lexical, not a global property')
+  await context.paymentEntry({ timeStamp: '1700000000', nonceStr: 'nonce', package: 'prepay_id=1', paySign: 'signature' })
+  assert.equal(calls.length, 1, 'the injected WeChat runtime must open the cashier')
+  assert.equal(calls[0].provider, 'wxpay')
+}
 
 assert.match(
   source,

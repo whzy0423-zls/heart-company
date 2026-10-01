@@ -16,10 +16,11 @@ function normalizePayParams(payParams) {
 // 仅负责调起一次真实微信收银台；返回成功不等于服务端已完成落账。
 export async function requestWechatPayment(payParams) {
   const pay = normalizePayParams(payParams)
-  const requestPayment = globalThis.uni?.requestPayment
-  if (typeof requestPayment !== 'function') throw new Error('当前环境不支持微信支付')
+  // Use uni-app's injected runtime so the WeChat compiler binds this API.
+  // globalThis.uni is not guaranteed to exist in the mini-program sandbox.
+  if (typeof uni === 'undefined' || typeof uni.requestPayment !== 'function') throw new Error('当前环境不支持微信支付')
   return new Promise((resolve, reject) => {
-    requestPayment({
+    uni.requestPayment({
       provider: 'wxpay',
       timeStamp: pay.timeStamp,
       nonceStr: pay.nonceStr,
