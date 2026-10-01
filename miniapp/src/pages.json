@@ -77,6 +77,14 @@
       }
     },
     {
+      "path": "pages/payment-result/payment-result",
+      "style": {
+        "navigationBarTitleText": "支付结果",
+        "enableShareAppMessage": false,
+        "enableShareTimeline": false
+      }
+    },
+    {
       "path": "pages/booking-detail/booking-detail",
       "style": {
         "navigationBarTitleText": "预约详情"

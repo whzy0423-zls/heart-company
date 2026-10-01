@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { onLoad, onUnload } from '@dcloudio/uni-app'
+import { onLoad, onShow, onUnload } from '@dcloudio/uni-app'
 import NxIcon from '../../components/NxIcon.vue'
 import NxImagePreview from '../../components/NxImagePreview.vue'
 import { STUDIO_COURSES, STUDIO_TEACHER } from '../../data/teacherStudio'
@@ -12,7 +12,8 @@ import { previewImage } from '../../utils/imagePreview'
 import { isWechatDevtools } from '../../utils/imagePreview'
 import { ensureLogin, getToken } from '../../utils/auth'
 import { createCourseOrderApi, devPayCourseBookingOrderApi, getCourseBookingOrderStatusApi } from '../../api'
-import { createWechatPaymentController, payWechatOrder } from '../../utils/payment'
+import { payWechatOrder } from '../../utils/payment'
+import { createCoursePaymentController, coursePaymentResultUrl } from '../../utils/coursePayment'
 import { userErrorMessage } from '../../utils/userMessage'
 
 const courseId = ref('')
@@ -22,6 +23,7 @@ const paying = ref(false)
 let paymentController = null
 let active = true
 onUnload(() => { active = false; paymentController?.stop() })
+onShow(() => { if (active) paymentController?.resume() })
 const activeSection = ref('intro')
 const sections = [{ id: 'intro', label: '课程介绍' }, { id: 'outline', label: '学习内容' }, { id: 'notice', label: '报名须知' }]
 const courses = computed(() => UI_PREVIEW ? STUDIO_COURSES : normalizeMiniappCourses(config.value))
@@ -70,25 +72,22 @@ async function enroll() {
       const requireSession = () => {
         if (!active || !paymentToken || getToken() !== paymentToken) throw new Error('登录状态已更新，请重新支付')
       }
-      paymentController = createWechatPaymentController({
+      paymentController = createCoursePaymentController({
+        isCurrent: () => active && getToken() === paymentToken,
         create: () => { requireSession(); return createCourseOrderApi(selectedId) },
         pay: (order) => {
           requireSession()
           return payWechatOrder(order, { devPay: (pending) => devPayCourseBookingOrderApi(pending.outTradeNo) })
         },
         status: (order) => { requireSession(); return getCourseBookingOrderStatusApi(order.bookingId) },
-        isPaid: (status) => status?.status === 'paid',
       })
       const result = await paymentController.purchase()
       if (!active || getToken() !== paymentToken) return
-      if (result?.state === 'success') {
-        uni.navigateTo({ url: '/pages/orders/orders' })
-      } else {
-        uni.showToast({ title: result?.state === 'cancelled' ? '已取消，可到我的订单继续支付' : result?.message || '请到我的订单查看支付结果', icon: 'none' })
-      }
+      const url = coursePaymentResultUrl(result?.order)
+      if (url) uni.navigateTo({ url })
     } catch (error) {
       if (active && (!paymentToken || getToken() === paymentToken)) {
-        uni.showToast({ title: userErrorMessage(error, '支付未完成，请稍后重试'), icon: 'none' })
+        uni.showToast({ title: userErrorMessage(error, '订单状态待确认，请到我的订单查看'), icon: 'none' })
       }
     } finally { paying.value = false; paymentController = null }
     return

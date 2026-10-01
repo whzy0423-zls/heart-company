@@ -11,7 +11,8 @@ import { consumeBookingIntent } from '../../utils/bookingIntent'
 import { getCachedSiteConfig, getStoredSiteConfig } from '../../utils/siteConfig'
 import { normalizePersonalExpertHome } from '../../utils/personalExpertHome'
 import { normalizeMiniappCourses, normalizeTeachers } from '../../utils/teacherCourseware'
-import { createWechatPaymentController, payWechatOrder } from '../../utils/payment'
+import { payWechatOrder } from '../../utils/payment'
+import { createCoursePaymentController, coursePaymentResultUrl } from '../../utils/coursePayment'
 import { normalizeMiniappLearn } from '../../utils/miniappPages'
 import { STUDIO_COURSES, STUDIO_TEACHER } from '../../data/teacherStudio'
 import { UI_PREVIEW } from '../../utils/uiPreview'
@@ -111,6 +112,7 @@ function scheduleDraftSave() {
 function flushDraftSave() { cancelPendingDraftSave(); persistDraft() }
 watch([kindIndex, form], scheduleDraftSave, { deep: true })
 onShow(() => {
+  paymentController?.resume()
   refreshNavigation()
   applyBookingIntent()
 })
@@ -214,6 +216,7 @@ async function submit() {
   submitting.value = true
   paymentMessage.value = ''
   let requestToken = ''
+  let resultUrl = ''
   try {
     await ensureLogin()
     if (!pageActive) return
@@ -225,21 +228,30 @@ async function submit() {
     const booking = pendingBooking?.token === requestToken && pendingBooking.fingerprint === fingerprint
       ? pendingBooking.record : await createBookingApi(payload)
     if (!currentSession()) return
-    if (!UI_PREVIEW && payload.kind === 'course' && booking?.paymentMode === 'paid' && booking?.paymentStatus === 'pending') {
+    if (!UI_PREVIEW && payload.kind === 'course' && booking?.paymentMode === 'paid') {
       pendingBooking = { token: requestToken, fingerprint, record: booking }
+      resultUrl = coursePaymentResultUrl({ bookingId: booking.id })
       const status = await getCourseBookingOrderStatusApi(booking.id)
       requireSession()
+      if (status?.syncStatus === 'retrying' || ['closed', 'refunded', 'cancelled', 'failed'].includes(status?.status)) {
+        if (resultUrl) uni.navigateTo({ url: resultUrl })
+        return
+      }
       if (status?.status !== 'paid') {
-        paymentController = createWechatPaymentController({
+        paymentController = createCoursePaymentController({
+          isCurrent: currentSession,
           create: () => { requireSession(); return createCourseBookingOrderApi(booking.id) },
           pay: (order) => { requireSession(); return payWechatOrder(order, { devPay: (pending) => devPayCourseBookingOrderApi(pending.outTradeNo) }) },
-          status: () => { requireSession(); return getCourseBookingOrderStatusApi(booking.id) },
-          isPaid: (result) => result?.status === 'paid',
+          status: (order) => { requireSession(); return getCourseBookingOrderStatusApi(order.bookingId) },
           onChange: (snapshot) => { if (currentSession()) paymentMessage.value = snapshot.message || '' },
         })
         const result = await paymentController.purchase()
         requireSession()
-        if (result?.state !== 'success') throw new Error(result?.message || '支付未完成，可到我的订单继续支付')
+        resultUrl = coursePaymentResultUrl(result?.order) || resultUrl
+        if (result?.state !== 'success') {
+          if (resultUrl) uni.navigateTo({ url: resultUrl })
+          return
+        }
       }
       submittedPaid.value = true
     } else {
@@ -251,9 +263,13 @@ async function submit() {
     clearBookingDraft()
     submitted.value = true
     resetForm()
-    uni.pageScrollTo({ scrollTop: 0, duration: 250 })
+    if (resultUrl) uni.navigateTo({ url: resultUrl })
+    else uni.pageScrollTo({ scrollTop: 0, duration: 250 })
   } catch (error) {
-    if (pageActive && (!requestToken || getToken() === requestToken)) uni.showToast({ title: userErrorMessage(error, '提交失败，填写内容已保留，请重试'), icon: 'none' })
+    if (pageActive && (!requestToken || getToken() === requestToken)) {
+      if (resultUrl) uni.navigateTo({ url: resultUrl })
+      else uni.showToast({ title: userErrorMessage(error, '提交失败，填写内容已保留，请重试'), icon: 'none' })
+    }
   } finally { submitting.value = false; paymentController = null }
 }
 function viewBookingRecords() { uni.navigateTo({ url: '/pages/booking-records/booking-records' }) }

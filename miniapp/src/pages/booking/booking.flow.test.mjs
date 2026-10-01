@@ -6,6 +6,8 @@ async function scriptFor(path) {
   const source = await readFile(new URL(path, import.meta.url), 'utf8')
   return source.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import[^\n]+\n/gm, '')
 }
+const paymentSource = await readFile(new URL('../../utils/coursePayment.js', import.meta.url), 'utf8')
+const payment = await import(`data:text/javascript;base64,${Buffer.from(paymentSource).toString('base64')}`)
 const bookingScript = await scriptFor('./booking.vue')
 const detailScript = await scriptFor('../course-detail/course-detail.vue')
 const previewCourse = { id: 'intro', title: '演示课程', schedule: '10月17日', price: 1980 }
@@ -29,9 +31,11 @@ function createHarness({ preview = true, draft = null, h5 = false } = {}) {
       state.requests.push(payload)
       return state.booking
     },
-    createCourseBookingOrderApi: async () => ({}),
-    getCourseBookingOrderStatusApi: async () => ({ status: state.paymentState === 'success' ? 'paid' : 'pending' }),
-    createWechatPaymentController: () => ({ stop() {}, purchase: async () => ({ state: state.paymentState, message: '支付未完成' }) }),
+    createCourseBookingOrderApi: async (id) => { state.orderCreates = (state.orderCreates || 0) + 1; return state.createdOrder || { bookingId: id, payParams: {} } },
+    payWechatOrder: async () => { state.payCalls = (state.payCalls || 0) + 1; await state.payGate },
+    getCourseBookingOrderStatusApi: async (id) => { (state.checkedBookings ||= []).push(id); return { status: state.paymentState === 'success' ? 'paid' : 'pending', syncStatus: state.syncStatus } },
+    createCoursePaymentController: options => payment.createCoursePaymentController({ ...options, wait: async () => {}, paymentTimeoutMs: 20 }),
+    coursePaymentResultUrl: payment.coursePaymentResultUrl,
     userErrorMessage: (error, fallback) => error.message || fallback,
     clearBookingDraft: () => { state.clears++ },
     loadBookingDraft: () => state.draft,
@@ -149,9 +153,35 @@ function createBooking(options) {
   state.paymentState = 'cancelled'
   await page.submit()
   assert.equal(page.submitted.value, false)
+  assert.equal(state.navigations.at(-1).url, '/pages/payment-result/payment-result?bookingId=51', 'pending booking payment has an explicit result page')
   state.paymentState = 'success'
   await page.submit()
   assert.equal(state.requests.length, 1, 'retry payment reuses the saved booking')
   assert.equal(page.successTitle.value, '课程已支付，期待与你相遇')
+  assert.equal(state.navigations.at(-1).url, '/pages/payment-result/payment-result?bookingId=51')
+  assert.equal(state.payCalls, 1, 'server-paid retry does not reopen cashier')
+}
+{
+  const { state, page } = createBooking({ preview: false })
+  page.form.value = { contactName: '示例学员', phone: '13800138000', intent: '成长课', preferredTime: '', message: '' }
+  page.consent.value = true
+  state.booking = { id: '51', paymentMode: 'paid', paymentStatus: 'pending' }
+  state.syncStatus = 'retrying'
+  await page.submit()
+  assert.equal(state.orderCreates || 0, 0)
+  assert.equal(state.payCalls || 0, 0)
+  assert.equal(state.navigations.at(-1).url, '/pages/payment-result/payment-result?bookingId=51')
+}
+for (const status of ['paid', 'pending']) {
+  const { state, page } = createBooking({ preview: false })
+  page.form.value = { contactName: '示例学员', phone: '13800138000', intent: '成长课', preferredTime: '', message: '' }
+  page.consent.value = true
+  state.booking = { id: '51', paymentMode: 'paid', paymentStatus: 'pending' }
+  state.createdOrder = { bookingId: '48', status, ...(status === 'pending' ? { syncStatus: 'retrying' } : {}) }
+  await page.submit()
+  assert.equal(state.navigations.at(-1).url, '/pages/payment-result/payment-result?bookingId=48', 'result page uses the authoritative booking returned by checkout')
+  assert.equal(state.payCalls || 0, 0, 'paid or reconciling orders never open the cashier')
+  assert.equal(page.submitted.value, status === 'paid')
+  if (status === 'pending') assert.equal(state.checkedBookings.at(-1), '48', 'confirmation follows the returned order identity')
 }
 console.log('Booking and course-detail flow tests passed')

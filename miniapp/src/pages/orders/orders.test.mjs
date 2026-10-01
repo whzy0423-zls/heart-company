@@ -31,13 +31,14 @@ function harness() {
     getToken: () => state.token, clearToken: () => { state.token = '' },
     listMiniappOrdersApi: (query) => { state.calls.push(query); return state.list(query) },
     getCourseBookingOrderStatusApi: (id) => { state.checks.push(id); return state.status(id) },
-    createCourseBookingOrderApi: async (id) => { state.creates.push(id); await state.createGate; return { outTradeNo: 'new-order' } },
+    createCourseBookingOrderApi: async (id) => { state.creates.push(id); await state.createGate; return { bookingId: id, outTradeNo: 'new-order', payParams: {} } },
     payWechatOrder: async () => { state.pays = (state.pays || 0) + 1 },
     devPayCourseBookingOrderApi: async (outTradeNo) => { state.devPays.push(outTradeNo) },
-    createWechatPaymentController: (options) => {
+    coursePaymentResultUrl: (order) => order?.bookingId ? `/pages/payment-result/payment-result?bookingId=${order.bookingId}` : '',
+    createCoursePaymentController: (options) => {
       state.controllerCount++
       state.controllerOptions = options
-      return { purchase: async () => { const created = await options.create(); await options.pay(created); return state.purchase(options) }, stop: () => { state.stops++ } }
+      return { purchase: async () => { const created = await options.create(); await options.pay(created); return { ...(await state.purchase(options)), order: created } }, resume: () => { state.resumes = (state.resumes || 0) + 1 }, stop: () => { state.stops++ } }
     },
     userErrorMessage: (error, fallback) => error?.message || fallback,
     uni: {
@@ -131,6 +132,7 @@ function harness() {
   assert.deepEqual(state.checks, ['101'], 'continue payment checks service status first')
   assert.equal(state.controllerCount, 0, 'already-paid order never opens payment controller')
   assert.equal(state.creates.length, 0, 'already-paid order never creates another order')
+  assert.equal(state.navigation.at(-1).url, '/pages/payment-result/payment-result?bookingId=101')
   assert.equal(page.orders.value[0].status, 'paid')
   assert.equal(page.canContinue(page.orders.value[0]), false)
   page.openCourse(page.orders.value[0])
@@ -143,7 +145,7 @@ function harness() {
   assert.equal(state.creates[0], '101')
   assert.equal(page.orders.value[0].status, 'pending', 'cancellation retains pending order for a later retry')
   assert.equal(page.payingId.value, '')
-  assert.match(state.toasts.at(-1).title, /已取消支付/)
+  assert.equal(state.navigation.at(-1).url, '/pages/payment-result/payment-result?bookingId=101', 'uncertain native payment opens result page')
 }
 {
   const { state, page } = harness()
@@ -156,6 +158,7 @@ function harness() {
   const listCalls = state.calls.length
   await state.show()
   assert.equal(state.calls.length, listCalls, 'wallet return onShow does not cancel an in-flight payment')
+  assert.equal(state.resumes, 1, 'wallet return starts independent status recovery')
   state.list = async () => ({ items: [order(1, { status: 'paid' })], total: 1, page: 1 })
   payment.resolve({ state: 'success', status: { status: 'paid' } })
   await pending
@@ -216,5 +219,13 @@ function harness() {
   await pending
   assert.equal(state.pays || 0, 0, 'account switch during order creation never opens the old account cashier')
   assert.equal(page.orders.value.length, 0)
+}
+{
+  const { state, page } = harness()
+  await state.show()
+  state.status = async () => ({ status: 'pending', syncStatus: 'retrying' })
+  await page.continuePayment(page.orders.value[0])
+  assert.equal(state.creates.length, 0, 'uncertain upstream status must not trigger another cashier')
+  assert.equal(state.navigation.at(-1).url, '/pages/payment-result/payment-result?bookingId=101')
 }
 console.log('Miniapp orders session, pagination and payment tests passed')

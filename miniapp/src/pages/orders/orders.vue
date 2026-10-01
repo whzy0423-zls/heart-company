@@ -4,7 +4,8 @@ import { onShow, onUnload, onPullDownRefresh, onReachBottom } from '@dcloudio/un
 import NxIcon from '../../components/NxIcon.vue'
 import { getToken, clearToken } from '../../utils/auth'
 import { listMiniappOrdersApi, createCourseBookingOrderApi, devPayCourseBookingOrderApi, getCourseBookingOrderStatusApi } from '../../api'
-import { createWechatPaymentController, payWechatOrder } from '../../utils/payment'
+import { payWechatOrder } from '../../utils/payment'
+import { createCoursePaymentController, coursePaymentResultUrl } from '../../utils/coursePayment'
 import { userErrorMessage } from '../../utils/userMessage'
 
 const filters = [{ value: '', label: '全部订单' }, { value: 'pending', label: '待支付' }, { value: 'paid', label: '已支付' }]
@@ -141,6 +142,11 @@ function openCourse(order) {
   uni.navigateTo({ url: `/pages/course-detail/course-detail?id=${encodeURIComponent(order.courseId)}` })
 }
 function browseCourses() { uni.switchTab({ url: '/pages/booking/booking' }) }
+function viewPaymentResult(order) {
+  if (disposed || !sessionToken || sessionToken !== getToken()) { handleSessionChange(sessionToken); return }
+  const url = coursePaymentResultUrl(order)
+  if (url) uni.navigateTo({ url })
+}
 function paymentCurrent(ticket, token) { return !disposed && ticket === paymentTicket && sessionToken === token && getToken() === token }
 function paid(status) { return status?.status === 'paid' || status?.paymentStatus === 'paid' }
 function updateOrder(order, status) {
@@ -163,47 +169,41 @@ async function continuePayment(order) {
   const ensureSession = () => {
     if (!paymentCurrent(ticket, token)) throw new Error('登录状态已更新，请重新查看订单')
   }
-  let refreshAfter = false
   try {
     const status = await getCourseBookingOrderStatusApi(order.bookingId)
     if (!paymentCurrent(ticket, token)) { handleSessionChange(token); return }
-    if (paid(status)) {
+    if (paid(status) || status?.syncStatus === 'retrying') {
       updateOrder(order, status)
-      uni.showToast({ title: '这笔订单已支付', icon: 'success' })
-      refreshAfter = true
+      viewPaymentResult(order)
       return
     }
     if (['closed', 'refunded', 'cancelled', 'failed'].includes(status?.status)) {
       updateOrder(order, status)
-      uni.showToast({ title: `订单${statusLabel(status.status)}，请重新选择课程`, icon: 'none' })
+      viewPaymentResult(order)
       return
     }
-    paymentController = createWechatPaymentController({
+    paymentController = createCoursePaymentController({
+      isCurrent: () => paymentCurrent(ticket, token),
       create: () => { ensureSession(); return createCourseBookingOrderApi(order.bookingId) },
       pay: (created) => { ensureSession(); return payWechatOrder(created, { devPay: (pending) => devPayCourseBookingOrderApi(pending.outTradeNo) }) },
       status: () => { ensureSession(); return getCourseBookingOrderStatusApi(order.bookingId) },
-      isPaid: paid,
       onChange: (snapshot) => { if (paymentCurrent(ticket, token)) paymentMessage.value = snapshot.message || '' },
     })
     const result = await paymentController.purchase()
     if (!paymentCurrent(ticket, token)) { handleSessionChange(token); return }
     if (result?.state === 'success') {
       updateOrder(order, result.status || { status: 'paid' })
-      uni.showToast({ title: '支付成功', icon: 'success' })
-      refreshAfter = true
-    } else {
-      uni.showToast({ title: result?.state === 'cancelled' ? '已取消支付，可稍后继续' : result?.message || '支付结果待确认，请刷新订单', icon: 'none' })
     }
+    if (result?.order) viewPaymentResult(result.order)
   } catch (error) {
     if (!paymentCurrent(ticket, token)) { handleSessionChange(token, error); return }
     if (isAuthError(error)) { handleSessionChange(token, error); return }
-    uni.showToast({ title: userErrorMessage(error, '支付暂未完成，请重试'), icon: 'none' })
+    viewPaymentResult(order)
   } finally {
     if (paymentCurrent(ticket, token)) {
       paymentController = null
       payingId.value = ''
       paymentMessage.value = ''
-      if (refreshAfter) await refresh()
     }
   }
 }
@@ -212,7 +212,7 @@ onShow(() => {
   if (disposed) return
   redirecting = false
   if (sessionToken && sessionToken !== getToken()) resetSession()
-  if (payingId.value && sessionToken === getToken()) return
+  if (payingId.value && sessionToken === getToken()) { paymentController?.resume(); return }
   return refresh()
 })
 onPullDownRefresh(async () => { try { await refresh() } finally { uni.stopPullDownRefresh() } })
@@ -232,7 +232,7 @@ onUnload(() => { disposed = true; resetSession() })
         <view class="order-top"><text>{{ productLabel(order.product) }}</text><text :class="['order-status', `order-status--${order.status}`]">{{ statusLabel(order.status) }}</text></view>
         <view class="order-body"><image v-if="order.cover && !failedCovers[order.id]" class="order-cover" :src="order.cover" mode="aspectFill" @error="failedCovers[order.id] = true" /><view v-else class="order-cover order-cover--empty"><NxIcon name="book" :size="28" /></view><view class="order-copy"><text class="order-title">{{ order.title || productLabel(order.product) }}</text><text class="order-date">{{ order.createTime }} 下单</text><text v-if="order.status === 'paid' && order.paidAt" class="order-date">{{ order.paidAt }} 支付</text></view></view>
         <text class="order-number">订单号 {{ order.outTradeNo }}</text>
-        <view class="order-bottom"><view><text class="amount-label">{{ order.status === 'paid' ? '实付' : '订单金额' }}</text><text class="order-amount"><text>¥</text>{{ amountYuan(order.amount) }}</text></view><view class="order-actions"><button v-if="order.product === 'course_booking' && order.courseId" class="small-button" :disabled="!!payingId" @click="openCourse(order)">查看课程</button><button v-if="canContinue(order)" class="small-button small-button--primary" :loading="payingId === String(order.id)" :disabled="!!payingId || loadingMore" @click="continuePayment(order)">{{ payingId === String(order.id) ? '确认中' : '继续支付' }}</button></view></view>
+        <view class="order-bottom"><view><text class="amount-label">{{ order.status === 'paid' ? '实付' : '订单金额' }}</text><text class="order-amount"><text>¥</text>{{ amountYuan(order.amount) }}</text></view><view class="order-actions"><button v-if="order.product === 'course_booking' && order.courseId" class="small-button" :disabled="!!payingId" @click="openCourse(order)">查看课程</button><button v-if="order.product === 'course_booking' && order.bookingId" class="small-button" :disabled="!!payingId" @click="viewPaymentResult(order)">支付结果</button><button v-if="canContinue(order)" class="small-button small-button--primary" :loading="payingId === String(order.id)" :disabled="!!payingId || loadingMore" @click="continuePayment(order)">{{ payingId === String(order.id) ? '确认中' : '继续支付' }}</button></view></view>
         <text v-if="payingId === String(order.id) && paymentMessage" class="payment-message" role="status">{{ paymentMessage }}</text>
       </view>
       <view v-if="moreError" class="load-more"><text class="muted">{{ moreError }}</text><button :disabled="!!payingId" class="text-button" @click="loadMore">重试加载</button></view>
@@ -243,5 +243,5 @@ onUnload(() => { disposed = true; resetSession() })
 </template>
 
 <style scoped>
-.orders-page{box-sizing:border-box;min-height:100vh;padding:36rpx 32rpx calc(48rpx + env(safe-area-inset-bottom));background:var(--nx-page-bg);color:var(--nx-text)}button{margin:0;border:0;line-height:1.5;box-sizing:border-box}button::after{border:0}button[disabled]{opacity:.5}.orders-header{padding:10rpx 4rpx 32rpx}.eyebrow{display:block;color:var(--nx-brand-700);font-size:19rpx;letter-spacing:3rpx}.page-title{display:block;margin-top:14rpx;font-family:'Songti SC','STSong',serif;font-size:46rpx;line-height:1.4}.page-description{display:block;margin-top:14rpx;color:var(--nx-text-muted);font-size:24rpx;line-height:1.7}.order-tabs{display:flex;gap:20rpx;margin-bottom:28rpx;border-bottom:1rpx solid var(--nx-border)}.order-tab{flex:1;min-height:88rpx;padding:18rpx 0;background:transparent;color:var(--nx-text-muted);font-size:25rpx;border-radius:0}.order-tab.active{border-bottom:4rpx solid var(--nx-brand-700);color:var(--nx-brand-700);font-weight:600}.order-card{padding:28rpx;margin-bottom:24rpx;background:var(--nx-surface);border:1rpx solid var(--nx-border);border-radius:22rpx}.order-top{display:flex;justify-content:space-between;align-items:center;gap:16rpx;font-size:21rpx;color:var(--nx-text-muted)}.order-status{color:var(--nx-text-muted)}.order-status--pending{color:var(--nx-brand-700)}.order-status--paid{color:#63744B}.order-body{display:flex;gap:22rpx;margin:28rpx 0}.order-cover{flex:0 0 136rpx;width:136rpx;height:136rpx;background:#EFEADF;border-radius:12rpx}.order-cover--empty{display:flex;align-items:center;justify-content:center}.order-copy{min-width:0;flex:1}.order-title{display:block;font-size:28rpx;font-weight:500;line-height:1.55;word-break:break-word}.order-date{display:block;margin-top:11rpx;color:var(--nx-text-muted);font-size:20rpx;line-height:1.6}.order-number{display:block;font-size:19rpx;line-height:1.6;color:var(--nx-text-muted);word-break:break-all}.order-bottom{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14rpx;padding-top:22rpx;margin-top:18rpx;border-top:1rpx solid var(--nx-border)}.amount-label{font-size:20rpx;color:var(--nx-text-muted);margin-right:12rpx}.order-amount{font-size:33rpx;color:var(--nx-brand-700);font-family:Georgia,serif}.order-amount>text{font-size:22rpx;margin-right:4rpx}.order-actions{display:flex;gap:12rpx;margin-left:auto}.small-button{display:flex;align-items:center;justify-content:center;min-height:76rpx;padding:14rpx 19rpx;border:1rpx solid var(--nx-border);border-radius:12rpx;background:transparent;font-size:22rpx;color:var(--nx-text)}.small-button--primary{background:var(--nx-brand-700);border-color:var(--nx-brand-700);color:#fff}.payment-message{display:block;margin-top:18rpx;color:var(--nx-brand-700);font-size:22rpx;line-height:1.6}.state-panel{display:flex;flex-direction:column;align-items:center;gap:22rpx;padding:70rpx 28rpx;text-align:center;background:var(--nx-surface);border-radius:22rpx;font-size:26rpx}.state-title{font-size:30rpx;line-height:1.6}.muted{color:var(--nx-text-muted);font-size:23rpx;line-height:1.8}.outline-button{min-height:88rpx;padding:20rpx 30rpx;background:transparent;border:1rpx solid var(--nx-border);border-radius:12rpx;font-size:25rpx;color:var(--nx-brand-700)}.text-button{display:flex;align-items:center;justify-content:center;min-height:88rpx;background:transparent;color:var(--nx-brand-700);font-size:24rpx}.load-more{width:100%;text-align:center}.list-ending{display:block;text-align:center;font-size:21rpx;color:var(--nx-text-muted);padding:20rpx 0 0}@media(min-width:600px){.orders-page{max-width:800rpx;margin:auto}}@media(prefers-reduced-motion:reduce){.orders-page{scroll-behavior:auto!important}}
+.orders-page{box-sizing:border-box;min-height:100vh;padding:36rpx 32rpx calc(48rpx + env(safe-area-inset-bottom));background:var(--nx-page-bg);color:var(--nx-text)}button{margin:0;border:0;line-height:1.5;box-sizing:border-box}button::after{border:0}button[disabled]{opacity:.5}.orders-header{padding:10rpx 4rpx 32rpx}.eyebrow{display:block;color:var(--nx-brand-700);font-size:19rpx;letter-spacing:3rpx}.page-title{display:block;margin-top:14rpx;font-family:'Songti SC','STSong',serif;font-size:46rpx;line-height:1.4}.page-description{display:block;margin-top:14rpx;color:var(--nx-text-muted);font-size:24rpx;line-height:1.7}.order-tabs{display:flex;gap:20rpx;margin-bottom:28rpx;border-bottom:1rpx solid var(--nx-border)}.order-tab{flex:1;min-height:88rpx;padding:18rpx 0;background:transparent;color:var(--nx-text-muted);font-size:25rpx;border-radius:0}.order-tab.active{border-bottom:4rpx solid var(--nx-brand-700);color:var(--nx-brand-700);font-weight:600}.order-card{padding:28rpx;margin-bottom:24rpx;background:var(--nx-surface);border:1rpx solid var(--nx-border);border-radius:22rpx}.order-top{display:flex;justify-content:space-between;align-items:center;gap:16rpx;font-size:21rpx;color:var(--nx-text-muted)}.order-status{color:var(--nx-text-muted)}.order-status--pending{color:var(--nx-brand-700)}.order-status--paid{color:#63744B}.order-body{display:flex;gap:22rpx;margin:28rpx 0}.order-cover{flex:0 0 136rpx;width:136rpx;height:136rpx;background:#EFEADF;border-radius:12rpx}.order-cover--empty{display:flex;align-items:center;justify-content:center}.order-copy{min-width:0;flex:1}.order-title{display:block;font-size:28rpx;font-weight:500;line-height:1.55;word-break:break-word}.order-date{display:block;margin-top:11rpx;color:var(--nx-text-muted);font-size:20rpx;line-height:1.6}.order-number{display:block;font-size:19rpx;line-height:1.6;color:var(--nx-text-muted);word-break:break-all}.order-bottom{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14rpx;padding-top:22rpx;margin-top:18rpx;border-top:1rpx solid var(--nx-border)}.amount-label{font-size:20rpx;color:var(--nx-text-muted);margin-right:12rpx}.order-amount{font-size:33rpx;color:var(--nx-brand-700);font-family:Georgia,serif}.order-amount>text{font-size:22rpx;margin-right:4rpx}.order-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:12rpx;margin-left:auto}.small-button{display:flex;align-items:center;justify-content:center;min-height:76rpx;padding:14rpx 19rpx;border:1rpx solid var(--nx-border);border-radius:12rpx;background:transparent;font-size:22rpx;color:var(--nx-text)}.small-button--primary{background:var(--nx-brand-700);border-color:var(--nx-brand-700);color:#fff}.payment-message{display:block;margin-top:18rpx;color:var(--nx-brand-700);font-size:22rpx;line-height:1.6}.state-panel{display:flex;flex-direction:column;align-items:center;gap:22rpx;padding:70rpx 28rpx;text-align:center;background:var(--nx-surface);border-radius:22rpx;font-size:26rpx}.state-title{font-size:30rpx;line-height:1.6}.muted{color:var(--nx-text-muted);font-size:23rpx;line-height:1.8}.outline-button{min-height:88rpx;padding:20rpx 30rpx;background:transparent;border:1rpx solid var(--nx-border);border-radius:12rpx;font-size:25rpx;color:var(--nx-brand-700)}.text-button{display:flex;align-items:center;justify-content:center;min-height:88rpx;background:transparent;color:var(--nx-brand-700);font-size:24rpx}.load-more{width:100%;text-align:center}.list-ending{display:block;text-align:center;font-size:21rpx;color:var(--nx-text-muted);padding:20rpx 0 0}@media(min-width:600px){.orders-page{max-width:800rpx;margin:auto}}@media(prefers-reduced-motion:reduce){.orders-page{scroll-behavior:auto!important}}
 </style>
