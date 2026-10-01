@@ -124,6 +124,8 @@ type Server struct {
 	miniappAdmin               miniappAdminReader
 	wx                         *wechat.Client
 	pay                        *wxpay.Client
+	coursePay                  coursePaymentGateway
+	courseSync                 coursePaymentSyncCache
 	payNotifyParser            func(http.Header, []byte) (wxpay.CallbackResult, error)
 	ragGen                     rag.Generator
 	storyGen                   llm.JSONCompleter

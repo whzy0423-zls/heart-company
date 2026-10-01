@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/config"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
@@ -24,19 +26,29 @@ var (
 )
 
 type courseOrderResponse struct {
-	OutTradeNo string             `json:"outTradeNo"`
-	Product    string             `json:"product"`
-	RefID      string             `json:"refId"`
-	BookingID  string             `json:"bookingId"`
-	Title      string             `json:"title"`
-	Amount     int                `json:"amount"`
-	PayParams  wxpay.PrepayResult `json:"payParams"`
+	OutTradeNo string              `json:"outTradeNo"`
+	Product    string              `json:"product"`
+	RefID      string              `json:"refId"`
+	BookingID  string              `json:"bookingId"`
+	Title      string              `json:"title"`
+	Amount     int                 `json:"amount"`
+	PayParams  *wxpay.PrepayResult `json:"payParams,omitempty"`
+	Status     string              `json:"status"`
+	CourseID   string              `json:"courseId"`
+	PaidAt     string              `json:"paidAt,omitempty"`
+	SyncStatus string              `json:"syncStatus,omitempty"`
+	Message    string              `json:"message,omitempty"`
 }
 type courseOrderStatusResponse struct {
 	Status     string `json:"status"`
 	Amount     int    `json:"amount"`
 	OutTradeNo string `json:"outTradeNo,omitempty"`
 	BookingID  string `json:"bookingId"`
+	Title      string `json:"title"`
+	CourseID   string `json:"courseId"`
+	PaidAt     string `json:"paidAt,omitempty"`
+	SyncStatus string `json:"syncStatus,omitempty"`
+	Message    string `json:"message,omitempty"`
 }
 type courseOrderRequest struct {
 	BookingID string `json:"bookingId"`
@@ -76,10 +88,7 @@ func (s *Server) readMiniappCourse(ctx context.Context, id string) (siteconfig.M
 }
 
 func (s *Server) courseOrderCreate(w http.ResponseWriter, r *http.Request) {
-	if !s.requireMiniappPayment(w, r) {
-		return
-	}
-	if s.miniapp == nil || s.pay == nil {
+	if s.miniapp == nil {
 		httpx.Fail(w, http.StatusServiceUnavailable, "course payment is not configured")
 		return
 	}
@@ -95,6 +104,38 @@ func (s *Server) courseOrderCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uid := userFromRequest(r).ID
+	if uid <= 0 {
+		httpx.Fail(w, http.StatusUnauthorized, "请先登录")
+		return
+	}
+	var targetBookingID int64
+	if body.BookingID != "" {
+		var parseErr error
+		targetBookingID, parseErr = parseBookingID(body.BookingID)
+		if parseErr != nil {
+			httpx.Fail(w, http.StatusBadRequest, parseErr.Error())
+			return
+		}
+		if _, err := s.miniapp.CourseBooking(r.Context(), uid, targetBookingID); err != nil {
+			writeCourseOrderError(w, err)
+			return
+		}
+	}
+	if existing, done, err := s.existingCourseCheckout(r.Context(), uid, body.CourseID, targetBookingID); err != nil {
+		writeCourseOrderError(w, err)
+		return
+	} else if done {
+		httpx.OK(w, existing)
+		return
+	}
+	if !s.requireMiniappPayment(w, r) {
+		return
+	}
+	gateway := s.coursePaymentClient()
+	if gateway == nil {
+		httpx.Fail(w, http.StatusServiceUnavailable, "course payment is not configured")
+		return
+	}
 	var booking miniapp.CourseBooking
 	var course siteconfig.MiniappCourse
 	var err error
@@ -122,6 +163,13 @@ func (s *Server) courseOrderCreate(w http.ResponseWriter, r *http.Request) {
 			course, err = s.readMiniappCourse(r.Context(), booking.CourseID)
 		}
 	}
+	if errors.Is(err, miniapp.ErrOrderAlreadyOwned) {
+		if paid, lookupErr := s.findCourseOrderSnapshot(r.Context(), uid, body.CourseID, targetBookingID); lookupErr == nil && paid.Status == "paid" {
+			paid.SyncStatus = "confirmed"
+			httpx.OK(w, paid)
+			return
+		}
+	}
 	if err != nil {
 		writeCourseOrderError(w, err)
 		return
@@ -132,7 +180,12 @@ func (s *Server) courseOrderCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if booking.PaymentStatus == "paid" {
-		httpx.Fail(w, http.StatusConflict, "该报名已支付")
+		paid, err := s.findCourseOrderSnapshot(r.Context(), uid, "", id)
+		if err != nil {
+			writeCourseOrderError(w, err)
+			return
+		}
+		httpx.OK(w, paid)
 		return
 	}
 	if course.PaymentMode != booking.PaymentMode || course.PriceCents != booking.PriceCents {
@@ -159,7 +212,12 @@ func (s *Server) courseOrderCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	order, err := s.miniapp.CreateOrReusePendingOrder(r.Context(), uid, outTradeNo, miniapp.ProductCourseBooking, id, booking.CourseTitle, booking.PriceCents)
 	if errors.Is(err, miniapp.ErrOrderAlreadyOwned) {
-		httpx.Fail(w, http.StatusConflict, "该报名已支付")
+		if paid, lookupErr := s.findCourseOrderSnapshot(r.Context(), uid, booking.CourseID, 0); lookupErr == nil && paid.Status == "paid" {
+			paid.SyncStatus = "confirmed"
+			httpx.OK(w, paid)
+			return
+		}
+		writeCourseOrderError(w, err)
 		return
 	}
 	if errors.Is(err, miniapp.ErrPendingOrderSnapshotChanged) {
@@ -170,19 +228,64 @@ func (s *Server) courseOrderCreate(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, "创建课程订单失败")
 		return
 	}
-	prepay, err := s.pay.Prepay(r.Context(), order.OutTradeNo, openid, "九型课堂报名·"+order.Title, order.Amount)
+	response := courseOrderFromPending(order, booking)
+	syncOutcome := s.syncCoursePayment(r.Context(), response, false)
+	latest, err := s.findCourseOrderSnapshot(r.Context(), uid, "", id)
 	if err != nil {
-		httpx.Fail(w, http.StatusBadGateway, "微信支付下单失败")
+		writeCourseOrderError(w, err)
+		return
+	}
+	if latest.Status == "paid" {
+		latest.SyncStatus = "confirmed"
+		httpx.OK(w, latest)
+		return
+	}
+	if syncOutcome.Retry {
+		response.SyncStatus = "retrying"
+		response.Message = "正在同步微信支付结果，请稍后查看"
+		httpx.OK(w, response)
+		return
+	}
+	prepayCtx, cancel := context.WithTimeout(r.Context(), 7*time.Second)
+	prepay, err := gateway.Prepay(prepayCtx, order.OutTradeNo, openid, "九型课堂报名·"+order.Title, order.Amount)
+	cancel()
+	if err != nil {
+		code, httpStatus := courseProviderError(err)
+		log.Printf("[WXPAY] course prepay failed: out_trade_no=%s provider_code=%s http_status=%d", order.OutTradeNo, code, httpStatus)
+		if code == "ORDERPAID" {
+			s.syncCoursePayment(r.Context(), response, true)
+			latest, readErr := s.findCourseOrderSnapshot(r.Context(), uid, "", id)
+			if readErr != nil {
+				writeCourseOrderError(w, readErr)
+				return
+			}
+			if latest.Status == "paid" {
+				latest.SyncStatus = "confirmed"
+				httpx.OK(w, latest)
+				return
+			}
+			response.SyncStatus = "retrying"
+			response.Message = "正在同步微信支付结果，请稍后查看"
+			httpx.OK(w, response)
+			return
+		}
+		httpx.Fail(w, http.StatusBadGateway, "微信支付下单失败，请稍后重试")
 		return
 	}
 	if err := validateClassroomPaymentParams(s.env, prepay); err != nil {
 		httpx.Fail(w, http.StatusBadGateway, "invalid payment parameters")
 		return
 	}
-	httpx.OK(w, courseOrderResponse{OutTradeNo: order.OutTradeNo, Product: order.Product, RefID: order.RefID, BookingID: booking.ID, Title: order.Title, Amount: order.Amount, PayParams: prepay})
+	response.PayParams = &prepay
+	response.SyncStatus = "confirmed"
+	httpx.OK(w, response)
 }
 
 func (s *Server) courseOrderStatus(w http.ResponseWriter, r *http.Request) {
+	if userFromRequest(r).ID <= 0 {
+		httpx.Fail(w, http.StatusUnauthorized, "请先登录")
+		return
+	}
 	id, err := parseBookingID(r.URL.Query().Get("bookingId"))
 	if err != nil {
 		httpx.Fail(w, http.StatusBadRequest, err.Error())
@@ -193,25 +296,31 @@ func (s *Server) courseOrderStatus(w http.ResponseWriter, r *http.Request) {
 		writeCourseOrderError(w, err)
 		return
 	}
-	status := booking.PaymentStatus
-	order, orderErr := s.miniapp.LatestOrderForTarget(r.Context(), userFromRequest(r).ID, miniapp.ProductCourseBooking, id)
+	response := courseOrderStatusResponse{Status: booking.PaymentStatus, Amount: booking.PriceCents, BookingID: booking.ID, Title: booking.CourseTitle, CourseID: booking.CourseID, SyncStatus: "confirmed"}
+	order, orderErr := s.findCourseOrderSnapshot(r.Context(), userFromRequest(r).ID, "", id)
 	if orderErr != nil && !errors.Is(orderErr, sql.ErrNoRows) {
 		httpx.Fail(w, http.StatusInternalServerError, "读取课程订单状态失败")
 		return
 	}
 	if orderErr == nil {
-		if order.Status == "paid" {
-			status = "paid"
-		} else if status != "paid" {
-			status = order.Status
+		outcome := s.syncCoursePayment(r.Context(), order, false)
+		order, orderErr = s.findCourseOrderSnapshot(r.Context(), userFromRequest(r).ID, "", id)
+		if orderErr != nil {
+			httpx.Fail(w, http.StatusInternalServerError, "读取课程订单状态失败")
+			return
+		}
+		response.Status = order.Status
+		response.Amount = order.Amount
+		response.Title = order.Title
+		response.OutTradeNo = order.OutTradeNo
+		response.PaidAt = order.PaidAt
+		if outcome.Retry && order.Status != "paid" {
+			response.Status = "pending"
+			response.SyncStatus = "retrying"
+			response.Message = "正在同步微信支付结果，请稍后查看"
 		}
 	}
-	httpx.OK(w, courseOrderStatusResponse{Status: status, Amount: booking.PriceCents, OutTradeNo: func() string {
-		if orderErr == nil {
-			return order.OutTradeNo
-		}
-		return ""
-	}(), BookingID: booking.ID})
+	httpx.OK(w, response)
 }
 
 func (s *Server) courseOrderDevPay(w http.ResponseWriter, r *http.Request) {

@@ -139,7 +139,7 @@ func TestCourseCheckoutPostgresDirectPaymentAndOrderVisibility(t *testing.T) {
 		t.Fatalf("other user can see order: %s", other.Body.String())
 	}
 	repeat := courseCheckoutRequest(mux, 1, http.MethodPost, "/api/miniapp/course/orders", `{"courseId":"paid-course"}`)
-	if repeat.Code != http.StatusConflict {
+	if repeat.Code != http.StatusOK || !strings.Contains(repeat.Body.String(), `"status":"paid"`) {
 		t.Fatalf("paid repeat=%d %s", repeat.Code, repeat.Body.String())
 	}
 	forbidden := courseCheckoutRequest(mux, 2, http.MethodPost, "/api/miniapp/course/orders", `{"bookingId":"`+order.BookingID+`"}`)
