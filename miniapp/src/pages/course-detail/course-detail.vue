@@ -1,8 +1,10 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { onLoad, onShow, onUnload } from '@dcloudio/uni-app'
+import { onLoad, onShow, onHide, onUnload, onShareAppMessage, onShareTimeline } from '@dcloudio/uni-app'
 import NxIcon from '../../components/NxIcon.vue'
 import NxImagePreview from '../../components/NxImagePreview.vue'
+import NxShareActions from '../../components/NxShareActions.vue'
+import { buildShareCard, showPublicShareMenu, isTimelinePreview, requireFullMiniapp } from '../../utils/share'
 import { STUDIO_COURSES, STUDIO_TEACHER } from '../../data/teacherStudio'
 import { UI_PREVIEW } from '../../utils/uiPreview'
 import { getCachedSiteConfig, getStoredSiteConfig } from '../../utils/siteConfig'
@@ -16,6 +18,7 @@ import { payWechatOrder } from '../../utils/payment'
 import { createCoursePaymentController, coursePaymentResultUrl } from '../../utils/coursePayment'
 import { userErrorMessage } from '../../utils/userMessage'
 
+const timelinePreview = isTimelinePreview()
 const courseId = ref('')
 const config = ref(getStoredSiteConfig() || {})
 const loading = ref(false)
@@ -23,13 +26,16 @@ const paying = ref(false)
 const enrollment = ref(null)
 const enrollmentLoading = ref(false)
 const enrollmentError = ref('')
-const enrollmentChecked = ref(UI_PREVIEW || !getToken())
+const enrollmentChecked = ref(timelinePreview || UI_PREVIEW || !getToken())
 let paymentController = null
 let active = true
-let enrollmentToken = getToken()
+let sharePageVisible = true
+onHide(() => { sharePageVisible = false })
+let enrollmentToken = timelinePreview ? '' : getToken()
 let enrollmentTicket = 0
 onUnload(() => {
   active = false
+  sharePageVisible = false
   paymentController?.stop()
   enrollmentTicket += 1
   enrollment.value = null
@@ -39,6 +45,8 @@ onUnload(() => {
 })
 onShow(() => {
   if (!active) return
+  sharePageVisible = true
+  showPublicShareMenu(courseShareable.value)
   if (paying.value) {
     if (enrollmentToken !== getToken()) resetEnrollmentSession()
     paymentController?.resume()
@@ -50,6 +58,13 @@ const activeSection = ref('intro')
 const sections = [{ id: 'intro', label: '课程介绍' }, { id: 'outline', label: '学习内容' }, { id: 'notice', label: '报名须知' }]
 const courses = computed(() => UI_PREVIEW ? STUDIO_COURSES : normalizeMiniappCourses(config.value))
 const course = computed(() => courses.value.find((item) => String(item.id) === courseId.value))
+const courseShareable = computed(() => !loading.value && !!course.value && /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(courseId.value))
+function courseShareCard() {
+  if (!courseShareable.value) return buildShareCard({ kind: 'home' })
+  return buildShareCard({ kind: 'course', id: course.value.id, title: course.value.title, imageUrl: course.value.cover })
+}
+onShareAppMessage(() => courseShareCard().appMessage)
+onShareTimeline(() => courseShareCard().timeline)
 const teacher = computed(() => UI_PREVIEW ? STUDIO_TEACHER : normalizeTeachers(config.value)[0])
 const teacherAvatar = computed(() => {
   const avatar = teacher.value?.avatar || ''
@@ -84,10 +99,16 @@ const enrollmentCaption = computed(() => {
 })
 onLoad(async (query) => {
   courseId.value = String(query?.id || '')
-  if (UI_PREVIEW) return
+  if (UI_PREVIEW) { showPublicShareMenu(courseShareable.value); return }
   loading.value = true
+  showPublicShareMenu(false)
   try { const updated = await getCachedSiteConfig(); if (active) config.value = updated || {} } catch { /* Keep cached content visible. */ }
-  finally { if (active) loading.value = false }
+  finally {
+    if (active) {
+      loading.value = false
+      if (sharePageVisible) showPublicShareMenu(courseShareable.value)
+    }
+  }
 })
 function resetEnrollmentSession() {
   enrollmentTicket += 1
@@ -114,6 +135,7 @@ function validEnrollment(value, requestedCourse) {
 }
 async function refreshEnrollment(whilePaying = false) {
   if (!active || (paying.value && !whilePaying)) return false
+  if (timelinePreview) { enrollmentChecked.value = true; return true }
   const token = getToken()
   const requestedCourse = courseId.value
   const ticket = ++enrollmentTicket
@@ -143,18 +165,21 @@ async function refreshEnrollment(whilePaying = false) {
   }
 }
 function openMyCourse() {
+  if (!requireFullMiniapp()) return
   if (!active) return
   if (enrollmentToken !== getToken()) { resetEnrollmentSession(); return }
   if (!isEnrolled.value || !enrollment.value?.bookingId) return
   uni.navigateTo({ url: `/pages/my-course/my-course?bookingId=${encodeURIComponent(enrollment.value.bookingId)}` })
 }
 function showPendingPayment() {
+  if (!requireFullMiniapp()) return
   if (!active || enrollmentToken !== getToken()) { if (active) resetEnrollmentSession(); return }
   const url = coursePaymentResultUrl(enrollment.value)
   if (url) uni.navigateTo({ url })
   else return refreshEnrollment()
 }
 function goBack() {
+  if (!requireFullMiniapp()) return
   uni.navigateBack({ fail: () => uni.switchTab({ url: '/pages/booking/booking' }) })
 }
 function chooseSection(section) {
@@ -162,6 +187,7 @@ function chooseSection(section) {
   uni.pageScrollTo({ selector: `#section-${section}`, duration: 250, offsetTop: -24 })
 }
 async function enroll() {
+  if (!requireFullMiniapp()) return
   if (!active || paying.value) return
   if (enrollmentToken !== getToken()) { await refreshEnrollment(); return }
   if (enrollmentPending.value) return
@@ -217,7 +243,7 @@ async function enroll() {
   }
   uni.switchTab({ url: '/pages/booking/booking' })
 }
-function teacherDetail() { uni.navigateTo({ url: '/pages/teacher/teacher' }) }
+function teacherDetail() { if (!requireFullMiniapp()) return; uni.navigateTo({ url: '/pages/teacher/teacher' }) }
 function previewTeacherAvatar() {
   if (teacherAvatarFailed.value) return
   if (isWechatDevtools()) {
@@ -256,6 +282,7 @@ function outlineDescription(item) { return typeof item === 'object' && item ? it
       <view class="course-cover" role="button" aria-label="预览课程封面" @click="previewCourseCover"><image :src="course.cover" mode="aspectFill" class="cover-image" :aria-label="course.title" @error="courseCoverFailed = true" /><view class="cover-shade" /><view class="cover-caption"><text>认识自己，是一生的功课。</text><text class="caption-en">A JOURNEY TO YOURSELF</text></view></view>
       <view class="detail-content">
         <view class="course-heading"><view class="title-meta"><text>{{ course.tag || '主题课程' }}</text><text class="meta-divider" /><text>{{ course.format || '主题共学' }}</text></view><text class="course-title">{{ course.title }}</text><text class="course-subtitle">{{ course.subtitle || course.description }}</text><view class="course-info"><view><NxIcon name="calendar" :size="18" /><text>{{ course.schedule || '排期请咨询工作室' }}</text></view><view><NxIcon name="clock" :size="18" /><text>{{ course.duration }}</text></view></view><view v-if="course.location" class="location-line"><text>{{ course.location }}</text><text v-if="UI_PREVIEW" class="demo-badge">演示排期 · 以实际发布为准</text></view></view>
+        <NxShareActions :disabled="!courseShareable" />
         <view class="section-tabs"><button v-for="section in sections" :key="section.id" :class="['section-tab', { active: activeSection === section.id }]" @click="chooseSection(section.id)">{{ section.label }}</button></view>
         <view id="section-intro" class="content-section"><text class="eyebrow">ABOUT THE COURSE</text><text class="section-title">从认识，到真正理解</text><text class="body-copy">{{ course.description }}</text><view v-if="highlights.length" class="highlight-list"><view v-for="item in highlights" :key="item" class="highlight-item"><view class="highlight-icon"><NxIcon name="check" :size="15" /></view><text>{{ item }}</text></view></view></view>
         <button v-if="teacher" class="teacher-card" @click="teacherDetail"><view v-if="teacherAvatar && !teacherAvatarFailed" class="teacher-avatar-action" :aria-label="`预览${teacher.name}老师头像`" @click.stop="previewTeacherAvatar"><image class="teacher-avatar" :src="teacherAvatar" mode="aspectFill" :aria-label="teacher.name" @error="teacherAvatarFailed = true" /></view><view v-else class="teacher-avatar teacher-avatar--fallback">{{ teacher.name.slice(0, 1) }}</view><view class="teacher-copy"><text class="teacher-overline">你的学习向导</text><text class="teacher-name">{{ teacher.name }}</text><text class="teacher-title">{{ teacher.title }}</text></view><NxIcon name="arrow" :size="21" /></button>
@@ -264,7 +291,7 @@ function outlineDescription(item) { return typeof item === 'object' && item ? it
         <view id="section-notice" class="content-section notice-section"><text class="eyebrow">BEFORE WE MEET</text><text class="section-title">相遇之前，你可能想知道</text><view class="notice-item"><text class="notice-label">如何报名</text><text class="body-copy">{{ course.notice || (course.paymentMode === 'paid' ? '完成微信支付后，可在我的订单中查看报名信息与支付状态。' : '提交报名意向后，工作室会联系你确认课程、时间与费用。意向提交不等于支付或席位确认。') }}</text></view><view class="notice-item"><text class="notice-label">课程安排</text><text class="body-copy">{{ UI_PREVIEW ? '当前页面的排期、地点与价格为界面演示数据。正式开课信息，请以工作室实际发布与确认为准。' : '具体开课时间、地点、费用及调整规则，以工作室实际发布与确认为准。' }}</text></view><view class="notice-item"><text class="notice-label">学习建议</text><text class="body-copy">带着好奇和真实问题来，不需要提前确定自己的性格类型。九型人格帮助自我觉察，不替代专业心理诊疗。</text></view></view>
         <view class="page-ending"><view /><text>期待，与你在课堂相遇</text><view /></view>
       </view>
-      <view class="enroll-bar">
+      <view v-if="!timelinePreview" class="enroll-bar">
         <view class="enroll-price">
           <text v-if="isEnrolled" class="enrolled-status">已报名</text>
           <text v-else-if="enrollmentPending || enrollmentError" class="consult-price">报名状态待确认</text>

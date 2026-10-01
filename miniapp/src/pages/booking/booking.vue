@@ -112,6 +112,11 @@ function scheduleDraftSave() {
 function flushDraftSave() { cancelPendingDraftSave(); persistDraft() }
 watch([kindIndex, form], scheduleDraftSave, { deep: true })
 onShow(() => {
+  // #ifdef MP-WEIXIN
+  if (typeof uni !== 'undefined' && typeof uni.hideShareMenu === 'function') {
+    uni.hideShareMenu({ menus: ['shareAppMessage', 'shareTimeline'] })
+  }
+  // #endif
   paymentController?.resume()
   refreshNavigation()
   applyBookingIntent()

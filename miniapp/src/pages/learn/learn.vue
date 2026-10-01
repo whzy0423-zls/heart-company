@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { onShow } from '@dcloudio/uni-app'
+import { onShow, onShareAppMessage, onShareTimeline } from '@dcloudio/uni-app'
 import { listClassroomRecentApi } from '../../api'
 import { TYPES_INFO } from '../../data/enneagramGame'
 import studioVideos from '../../data/studioVideos.json'
@@ -30,6 +30,8 @@ import { previewImage } from '../../utils/imagePreview'
 import { isWechatDevtools } from '../../utils/imagePreview'
 import NxIcon from '../../components/NxIcon.vue'
 import NxImagePreview from '../../components/NxImagePreview.vue'
+import NxShareActions from '../../components/NxShareActions.vue'
+import { buildShareCard, showPublicShareMenu, requireFullMiniapp } from '../../utils/share'
 import NxStudioHeader from '../../components/NxStudioHeader.vue'
 import { UI_PREVIEW } from '../../utils/uiPreview'
 import { useStudioNavigation } from '../../utils/studioNavigation'
@@ -209,12 +211,14 @@ function toggleTeacher() {
 }
 
 function openTypeDetail(id) {
+  if (!requireFullMiniapp()) return
   const typeId = Number(id)
   if (!Number.isInteger(typeId) || !TYPES_INFO[typeId]) return
   uni.navigateTo({ url: `/pages/enneagram-detail/enneagram-detail?type=${typeId}` })
 }
 
 function openPublishedCourse(course) {
+  if (!requireFullMiniapp()) return
   const url = classroomContentRoute({
     id: course?.classroomId || course?.id,
     contentType: course?.materialTypes?.includes('音频') ? 'audio' : 'video',
@@ -223,6 +227,7 @@ function openPublishedCourse(course) {
 }
 
 function openPublishedMaterial(material) {
+  if (!requireFullMiniapp()) return
   const url = classroomContentRoute({
     id: material?.contentId,
     contentType: material?.contentType,
@@ -293,7 +298,12 @@ async function loadContent(options = {}) {
   if (requestGuard.isLatest(ticket)) loading.value = false
 }
 
-onShow(consumeNavigationIntent)
+function dailyShareCard() {
+  return buildShareCard({ kind: 'daily', title: `${teacher.value?.name || '老师'}的日常分享｜九型芯之力`, imageUrl: teacherPreviewImage.value })
+}
+onShow(() => { consumeNavigationIntent(); showPublicShareMenu() })
+onShareAppMessage(() => dailyShareCard().appMessage)
+onShareTimeline(() => dailyShareCard().timeline)
 
 onMounted(() => {
   refreshNavigation()
@@ -317,6 +327,8 @@ onMounted(() => {
         <text class="learn-header__title">跟着老韩，慢慢成长</text>
         <text class="learn-header__intro">把课堂里的看见，带回每一天的生活。</text>
       </view>
+
+      <NxShareActions />
 
       <view class="learn-tabs" role="tablist" aria-label="学习内容分类">
         <button v-if="classroomEnabled" id="learn-tab-course" class="learn-tab" :class="{ 'learn-tab--active': activeCategory === 'course' }" role="tab" aria-controls="learn-panel-course" :aria-selected="activeCategory === 'course'" :tabindex="activeCategory === 'course' ? 0 : -1" @click="selectCategory('course')" @keydown="onTabKeydown($event, 'course')">老师日常</button>

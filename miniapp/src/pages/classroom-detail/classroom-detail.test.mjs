@@ -233,6 +233,13 @@ const modulePath = join(dir, "detail-state.mjs");
 const prelude = `
 const ref = (value) => ({ value })
 const computed = (getter) => ({ get value() { return getter() } })
+const watch = () => {}
+const onShareAppMessage = () => {}
+const onShareTimeline = () => {}
+const buildShareCard = input => ({ appMessage: input, timeline: input })
+const showPublicShareMenu = () => {}
+const isTimelinePreview = () => false
+const requireFullMiniapp = () => true
 const onLoad = (handler) => { globalThis.__detailHarness.lifecycle.load = handler }
 const onHide = (handler) => { globalThis.__detailHarness.lifecycle.hide = handler }
 const onShow = (handler) => { globalThis.__detailHarness.lifecycle.show = handler }

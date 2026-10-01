@@ -1,7 +1,10 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { onShow, onShareAppMessage, onShareTimeline } from '@dcloudio/uni-app'
 import NxIcon from '../../components/NxIcon.vue'
 import NxImagePreview from '../../components/NxImagePreview.vue'
+import NxShareActions from '../../components/NxShareActions.vue'
+import { buildShareCard, showPublicShareMenu, isTimelinePreview, requireFullMiniapp } from '../../utils/share'
 import { STUDIO_TEACHER } from '../../data/teacherStudio'
 import { getStoredSiteConfig, refreshSiteConfig } from '../../utils/siteConfig'
 import { normalizeTeachers } from '../../utils/teacherCourseware'
@@ -10,6 +13,7 @@ import { setBookingIntent, clearBookingIntent } from '../../utils/bookingIntent'
 import { previewImage } from '../../utils/imagePreview'
 import { isWechatDevtools } from '../../utils/imagePreview'
 
+const timelinePreview = isTimelinePreview()
 const config = ref(getStoredSiteConfig() || {})
 const imageFailed = ref(false)
 const previewVisible = ref(false)
@@ -27,9 +31,15 @@ const portrait = computed(() => {
   if (/teacher-poster/i.test(avatar)) return STUDIO_TEACHER.avatar
   return /\/avatars\//.test(avatar) ? '' : avatar
 })
+function teacherShareCard() {
+  return buildShareCard({ kind: 'teacher', title: teacher.value ? `${teacher.value.name}｜${teacher.value.title || '认识你的学习向导'}` : '九型芯之力｜认识老师', imageUrl: portrait.value })
+}
+onShow(() => showPublicShareMenu())
+onShareAppMessage(() => teacherShareCard().appMessage)
+onShareTimeline(() => teacherShareCard().timeline)
 onMounted(async () => { try { const updated = await refreshSiteConfig(); config.value = getStoredSiteConfig() || updated || {}; imageFailed.value = false } catch { /* Retain verified local or cached introduction. */ } })
-function book() { setBookingIntent({ kind: 'consult', intentText: '' }); uni.switchTab({ url: '/pages/booking/booking', fail: clearBookingIntent }) }
-function daily() { uni.switchTab({ url: '/pages/learn/learn' }) }
+function book() { if (!requireFullMiniapp()) return; setBookingIntent({ kind: 'consult', intentText: '' }); uni.switchTab({ url: '/pages/booking/booking', fail: clearBookingIntent }) }
+function daily() { if (!requireFullMiniapp()) return; uni.switchTab({ url: '/pages/learn/learn' }) }
 function preview() {
   if (isWechatDevtools()) {
     previewVisible.value = true
@@ -47,13 +57,14 @@ function previewMentorPhoto() { previewImage(mentorPhoto) }
         <view class="teacher-intro-copy"><text class="eyebrow">MEET YOUR MENTOR</text><text class="teacher-name">{{ teacher.name }}</text><text v-if="isLaohan" class="teacher-alias">你也可以，叫我老韩。</text><text class="teacher-role">{{ teacher.title }}</text><view class="signature-line" /></view>
         <button class="portrait-button" aria-label="点击查看老师大图" hover-class="portrait-button--pressed" @click="preview"><image v-if="portrait && !imageFailed" class="portrait-image" :src="portrait" mode="aspectFill" @error="imageFailed = true" /><text v-else class="portrait-placeholder">{{ teacher.name.slice(0,1) }}</text><text v-if="portrait && !imageFailed" class="portrait-hint">点击查看大图</text></button>
       </view>
+      <NxShareActions />
       <view class="intro-statement"><text class="quote">“</text><text>{{ '看懂自己，\n是理解这个世界的开始。' }}</text></view>
       <view class="section about"><text class="eyebrow">ABOUT THE TEACHER</text><text class="section-title">从认识性格，到看见一个人</text><text class="body-copy">{{ teacher.bio }}</text><view class="tags"><text v-for="tag in teacher.tags" :key="tag">{{ tag }}</text></view></view>
       <view class="section approach"><text class="eyebrow">WAYS WE CAN GROW</text><text class="section-title">把理解，带回你的生活</text><view class="approach-row"><view class="approach-icon"><NxIcon name="spark" :size="25" /></view><view><text class="row-title">个人成长</text><text class="row-copy">理解自己的反应模式，练习更有觉察地选择。</text></view></view><view class="approach-row"><view class="approach-icon"><NxIcon name="heart" :size="25" /></view><view><text class="row-title">家庭与关系</text><text class="row-copy">在亲子、伴侣的相处里，学会倾听与表达。</text></view></view><view class="approach-row"><view class="approach-icon"><NxIcon name="grid" :size="25" /></view><view><text class="row-title">团队与协作</text><text class="row-copy">看见彼此动机，让沟通成为团队的共同语言。</text></view></view></view>
       <view v-if="isLaohan" class="section journey"><text class="eyebrow">A LIFELONG PRACTICE</text><text class="section-title">学习，是一条一直走的路</text><view class="timeline"><view v-for="item in STUDIO_TEACHER.timeline" :key="item.year" class="timeline-item"><text class="year">{{ item.year }}</text><view class="timeline-copy"><text class="row-title">{{ item.title }}</text><text class="row-copy">{{ item.text }}</text></view></view></view><image class="mentor-photo" :src="mentorPhoto" mode="widthFix" aria-label="韩常青与陈伟志博士合影" @click="previewMentorPhoto" /><text class="photo-caption">与恩师陈伟志博士合影 · 学习与传承</text></view>
       <button v-if="classroomEnabled" class="daily-link" @click="daily"><view><text class="row-title">先从一段日常分享认识我</text><text class="row-copy">关于性格、情绪，还有生活中的小事</text></view><NxIcon name="arrow" :size="22" /></button>
       <text class="source-note">老师介绍整理自九型芯之力已有官网资料</text>
-      <view class="teacher-cta"><view><text class="cta-title">给成长，留一点时间</text><text class="cta-note">从一次真诚的交流开始</text></view><button @click="book">预约聊聊<NxIcon name="arrow" :size="18" color="#FFFFFF" /></button></view>
+      <view v-if="!timelinePreview" class="teacher-cta"><view><text class="cta-title">给成长，留一点时间</text><text class="cta-note">从一次真诚的交流开始</text></view><button @click="book">预约聊聊<NxIcon name="arrow" :size="18" color="#FFFFFF" /></button></view>
     </template>
     <view v-else class="empty">老师介绍正在整理中，欢迎先看看日常分享。<button @click="daily">浏览日常</button></view>
     <NxImagePreview v-if="portrait && !imageFailed" :visible="previewVisible" :src="portrait" :alt="`${teacher?.name || '老师'}头像`" @close="closePreview" />

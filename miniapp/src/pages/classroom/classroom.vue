@@ -1,7 +1,9 @@
 <script setup>
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import NxAsyncState from "../../components/NxAsyncState.vue";
-import { onLoad, onShow, onUnload } from "@dcloudio/uni-app";
+import { onLoad, onShow, onHide, onUnload, onShareAppMessage, onShareTimeline } from "@dcloudio/uni-app";
+import NxShareActions from "../../components/NxShareActions.vue";
+import { buildShareCard, showPublicShareMenu, isTimelinePreview, requireFullMiniapp } from "../../utils/share";
 import {
   createClassroomOrderApi,
   devPayClassroomOrderApi,
@@ -25,6 +27,7 @@ import { getStoredSiteConfig, refreshSiteConfig } from "../../utils/siteConfig";
 import { getToken } from "../../utils/auth";
 import { userErrorMessage } from "../../utils/userMessage";
 
+const timelinePreview = isTimelinePreview();
 const activeTab = ref("standalone");
 const seriesItems = ref([]);
 const standaloneItems = ref([]);
@@ -53,6 +56,7 @@ let seriesPurchaseController = null;
 let seriesPurchaseOperation = null;
 let seriesPurchaseTicket = 0;
 let disposed = false;
+let pageVisible = true;
 let paymentRefreshTicket = 0;
 
 async function refreshPaymentAvailability() {
@@ -78,6 +82,26 @@ const emptyDescription = computed(() =>
     : "老师的公开视频和音频课件会持续整理到这里，欢迎先浏览现有内容。",
 );
 const seriesPaymentBusy = computed(() => seriesPurchaseInFlight.value);
+const classroomShareable = computed(() => {
+  if (loading.value || loadError.value || !loadedTabs.value[activeTab.value]) return false;
+  if (activeTab.value !== "series" || !selectedSeries.value) return true;
+  const series = expandedSeries.value?.series;
+  return !seriesLoading.value && !seriesError.value && !!series?.title
+    && /^[1-9]\d*$/.test(String(series.id)) && series.id === selectedSeries.value.id;
+});
+function classroomShareCard() {
+  if (!classroomShareable.value) return buildShareCard({ kind: "home" });
+  const series = activeTab.value === "series" && selectedSeries.value ? expandedSeries.value?.series : null;
+  return buildShareCard({ kind: "classroom", seriesId: series?.id,
+    title: series?.title || "老师课堂｜视频与音频课件",
+    imageUrl: series?.coverUrl || activeItems.value[0]?.coverUrl });
+}
+function syncClassroomShareMenu() {
+  if (!disposed && pageVisible) showPublicShareMenu(classroomShareable.value);
+}
+watch(classroomShareable, syncClassroomShareMenu, { flush: "sync" });
+onShareAppMessage(() => classroomShareCard().appMessage);
+onShareTimeline(() => classroomShareCard().timeline);
 
 function responseItems(response) {
   return Array.isArray(response?.items) ? response.items : [];
@@ -96,7 +120,7 @@ function normalizeContinueItem(value = {}) {
 
 async function loadContinueLearning() {
   const ticket = ++continueTicket;
-  if (!getToken()) {
+  if (timelinePreview || !getToken()) {
     continueItem.value = null;
     continueLoading.value = false;
     continueError.value = "";
@@ -256,11 +280,13 @@ function retrySelectedSeries() {
 }
 
 function openContent(item) {
+  if (!requireFullMiniapp()) return;
   const url = classroomContentRoute(item);
   if (url) uni.navigateTo({ url });
 }
 
 function openContinueLearning(item) {
+  if (!requireFullMiniapp()) return;
   const url = classroomContentRoute(item);
   if (!url) return;
   const position = Math.max(0, Math.floor(Number(item?.positionSeconds) || 0));
@@ -331,6 +357,7 @@ function trackSeriesPurchase(run) {
 }
 
 function startSeriesPurchase(item) {
+  if (!requireFullMiniapp()) return;
   if (!paymentEnabled.value) return;
   if (!item?.id || itemAction(item).type !== "purchase") return;
   if (seriesPurchaseOperation) return;
@@ -342,6 +369,7 @@ function startSeriesPurchase(item) {
 }
 
 function retrySeriesPurchase(item) {
+  if (!requireFullMiniapp()) return;
   if (!paymentEnabled.value) return;
   if (seriesPurchaseOperation) return;
   if (seriesPaymentTargetId.value !== item?.id) return startSeriesPurchase(item);
@@ -365,10 +393,12 @@ function formatDuration(seconds) {
 
 onLoad(async (options = {}) => {
   disposed = false;
+  pageVisible = true;
+  syncClassroomShareMenu();
   skipNextShowRefresh = true;
   if (options.tab === "series") activeTab.value = "series";
   if (options.tab === "standalone") activeTab.value = "standalone";
-  const requestedSeriesId = /^\d+$/.test(String(options.seriesId || "").trim())
+  const requestedSeriesId = /^[1-9]\d*$/.test(String(options.seriesId || "").trim())
     ? String(options.seriesId).trim()
     : "";
   loadContinueLearning();
@@ -383,7 +413,12 @@ onLoad(async (options = {}) => {
   }
 });
 
+onHide(() => { pageVisible = false; });
+
 onShow(() => {
+  if (disposed) return;
+  pageVisible = true;
+  syncClassroomShareMenu();
   paymentEnabled.value = normalizeMiniappPayment(getStoredSiteConfig()).enabled;
   void refreshPaymentAvailability();
   if (skipNextShowRefresh) {
@@ -395,6 +430,7 @@ onShow(() => {
 
 onUnload(() => {
   disposed = true;
+  pageVisible = false;
   listTicket += 1;
   seriesTicket += 1;
   continueTicket += 1;
@@ -417,6 +453,8 @@ onUnload(() => {
         <text>系列课程</text>
       </view>
     </view>
+
+    <NxShareActions :disabled="!classroomShareable" />
 
     <view
       v-if="continueLoading"
@@ -566,7 +604,7 @@ onUnload(() => {
             <view class="classroom-card__footer">
               <text class="classroom-card__teacher">{{ item.teacherName || "九型老师" }}</text>
               <button
-                v-if="activeTab === 'series' && itemAction(item).type === 'purchase'"
+                v-if="!timelinePreview && activeTab === 'series' && itemAction(item).type === 'purchase'"
                 class="series-buy"
                 :disabled="seriesPaymentBusy"
                 @click.stop="startSeriesPurchase(item)"

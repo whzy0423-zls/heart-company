@@ -17,7 +17,9 @@ function harness(priceCents, serverStatus = 'paid') {
   calls.items = [item]
   const context = vm.createContext({
     ref: value => ({ value }), computed: getter => ({ get value() { return getter() } }),
-    onLoad: fn => { calls.load = fn }, onUnload: fn => { calls.unload = fn }, onShow: fn => { calls.show = fn },
+    onHide: fn => { calls.hide = fn }, onLoad: fn => { calls.load = fn }, onUnload: fn => { calls.unload = fn }, onShow: fn => { calls.show = fn },
+    onShareAppMessage: fn => { calls.share = fn }, onShareTimeline: fn => { calls.timeline = fn },
+    showPublicShareMenu: () => {}, isTimelinePreview: () => false, requireFullMiniapp: () => true, buildShareCard: input => ({ appMessage: input, timeline: input }),
     getStoredSiteConfig: () => ({}), getCachedSiteConfig: async () => ({}),
     normalizeMiniappCourses: () => calls.items, normalizeTeachers: () => [],
     setBookingIntent: intent => { calls.intents.push(intent); return true },

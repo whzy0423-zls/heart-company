@@ -25,6 +25,13 @@ const computed = getter => ({ get value() { return getter() } })
 import { resolveHomeNavigation } from '${new URL('../../utils/homeNavigation.js', import.meta.url).href}'
 const onMounted = handler => { globalThis.__homeHarness.mount = handler }
 const onResize = handler => { globalThis.__homeHarness.resize = handler }
+const onShow = handler => { globalThis.__homeHarness.show = handler }
+const onShareAppMessage = handler => { globalThis.__homeHarness.share = handler }
+const onShareTimeline = handler => { globalThis.__homeHarness.timeline = handler }
+const showPublicShareMenu = () => {}
+const isTimelinePreview = () => false
+const requireFullMiniapp = () => true
+const buildShareCard = input => ({ appMessage: input, timeline: input })
 const getStoredSiteConfig = () => globalThis.__homeHarness.cache
 const refreshSiteConfig = () => globalThis.__homeHarness.refresh()
 const listClassroomRecentApi = query => globalThis.__homeHarness.list(query)

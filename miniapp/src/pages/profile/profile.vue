@@ -59,6 +59,11 @@ async function refreshPaymentAvailability() {
 }
 
 onShow(() => {
+  // #ifdef MP-WEIXIN
+  if (typeof uni !== 'undefined' && typeof uni.hideShareMenu === 'function') {
+    uni.hideShareMenu({ menus: ['shareAppMessage', 'shareTimeline'] })
+  }
+  // #endif
   refreshNavigation()
   paymentEnabled.value = normalizeMiniappPayment(getStoredSiteConfig()).enabled
   void refreshPaymentAvailability()

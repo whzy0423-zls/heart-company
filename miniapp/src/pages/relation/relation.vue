@@ -1,6 +1,6 @@
 <script setup>
 import { ref } from 'vue'
-import { onLoad, onUnload } from '@dcloudio/uni-app'
+import { onLoad, onShow, onUnload } from '@dcloudio/uni-app'
 import { TYPES_INFO, CENTERS } from '../../data/enneagramGame'
 import { isValidTypeId, normalizeTypeId } from '../../utils/session'
 import { previewImage } from '../../utils/imagePreview'
@@ -147,6 +147,13 @@ function reset() {
   myAvatarFailed.value = false
   taAvatarFailed.value = false
 }
+onShow(() => {
+  // #ifdef MP-WEIXIN
+  if (typeof uni !== 'undefined' && typeof uni.hideShareMenu === 'function') {
+    uni.hideShareMenu({ menus: ['shareAppMessage', 'shareTimeline'] })
+  }
+  // #endif
+})
 </script>
 
 <template>

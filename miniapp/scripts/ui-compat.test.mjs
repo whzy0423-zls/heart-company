@@ -256,7 +256,7 @@ for (const tab of learnTabs) {
 for (const category of ['老师日常', '学习资料', '课堂札记']) {
   assert.equal((learnTemplate.match(new RegExp(`>${category}<`, 'g')) || []).length, 1, `learning center should expose one ${category} tab`)
 }
-assert.match(learnPage, /onShow\(consumeNavigationIntent\)/, 'learning center should consume home navigation intent every time the tab is shown')
+assert.match(learnPage, /onShow\(\(\) => \{[^}]*consumeNavigationIntent\(\)/, 'learning center should consume home navigation intent every time the tab is shown')
 assert.match(learnPage, /readLearningNavIntent\(\)/, 'learning center should use the one-time read-and-clear navigation intent')
 assert.match(learnPage, /function\s+selectCategory\(category\)\s*\{[\s\S]*?resolveLearningCategory\(activeCategory\.value,\s*category\)/, 'category selection should retain the current valid learning category when no intent is provided')
 assert.match(learnPage, /function\s+consumeNavigationIntent\(\)\s*\{\s*selectCategory\(readLearningNavIntent\(\)\)\s*\}/, 'navigation intent should flow through the shared category visibility rules')

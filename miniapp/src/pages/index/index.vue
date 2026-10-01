@@ -1,8 +1,10 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { onResize } from '@dcloudio/uni-app'
+import { onResize, onShow, onShareAppMessage, onShareTimeline } from '@dcloudio/uni-app'
 import NxIcon from '../../components/NxIcon.vue'
 import NxImagePreview from '../../components/NxImagePreview.vue'
+import NxShareActions from '../../components/NxShareActions.vue'
+import { buildShareCard, showPublicShareMenu, requireFullMiniapp } from '../../utils/share'
 import { listClassroomRecentApi } from '../../api'
 import studioVideos from '../../data/studioVideos.json'
 import { getStoredSiteConfig, refreshSiteConfig } from '../../utils/siteConfig'
@@ -56,6 +58,12 @@ const portraitPreview = computed(() => {
   if (isLaohan.value && (!avatar || /\/avatars\/|teacher-poster|\/static\/teacher\/portrait\.jpg/i.test(avatar))) return ORIGINAL_TEACHER_PORTRAIT
   return /\/avatars\//.test(avatar) ? '' : avatar
 })
+function homeShareCard() {
+  return buildShareCard({ kind: 'home', title: teacher.value?.name ? `九型芯之力｜${teacher.value.name}的成长课堂` : '九型芯之力｜看见自己，理解彼此', imageUrl: portraitPreview.value || portrait.value })
+}
+onShow(() => showPublicShareMenu())
+onShareAppMessage(() => homeShareCard().appMessage)
+onShareTimeline(() => homeShareCard().timeline)
 const teacherDisplayName = computed(() => (teacher.value?.name || '').replace(/[（(]老韩[）)]/, ''))
 const courses = computed(() => UI_PREVIEW ? STUDIO_COURSES : normalizeMiniappCourses(config.value))
 const featuredCourse = computed(() => courses.value[0])
@@ -90,9 +98,9 @@ onMounted(() => {
   refreshNavigation()
   load()
 })
-function navigate(url) { uni.navigateTo({ url }) }
-function daily() { uni.switchTab({ url: '/pages/learn/learn' }) }
-function booking(kind = 'course') { setBookingIntent({ kind, intentText: '' }); uni.switchTab({ url: '/pages/booking/booking', fail: clearBookingIntent }) }
+function navigate(url) { if (!requireFullMiniapp()) return; uni.navigateTo({ url }) }
+function daily() { if (!requireFullMiniapp()) return; uni.switchTab({ url: '/pages/learn/learn' }) }
+function booking(kind = 'course') { if (!requireFullMiniapp()) return; setBookingIntent({ kind, intentText: '' }); uni.switchTab({ url: '/pages/booking/booking', fail: clearBookingIntent }) }
 function openCourse() { if (featuredCourse.value) navigate(`/pages/course-detail/course-detail?id=${encodeURIComponent(featuredCourse.value.id)}`); else booking() }
 function openVideo(item) { const url = classroomContentRoute(item); if (url) navigate(url) }
 function duration(value) { return `${String(Math.floor((value || 0) / 60)).padStart(2, '0')}:${String((value || 0) % 60).padStart(2, '0')}` }
@@ -168,6 +176,7 @@ function closePortraitPreview() { portraitPreviewVisible.value = false }
       </view>
 
       <button class="consult-invitation" @click="booking('consult')"><view class="consult-symbol"><NxIcon name="message" :size="27" /></view><view><text class="consult-title">有些心事，值得好好聊聊</text><text class="consult-copy">一对一沟通，从你的真实困惑开始</text></view><NxIcon name="arrow" :size="20" /></button>
+      <NxShareActions />
       <view class="home-footer"><text>向内看见，向外生长</text><text class="home-footer-en">GROW AT YOUR OWN PACE</text></view>
     </view>
   </view>

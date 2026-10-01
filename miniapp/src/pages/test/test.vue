@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, nextTick } from 'vue'
-import { onUnload } from '@dcloudio/uni-app'
+import { onShow, onUnload } from '@dcloudio/uni-app'
 import { QUESTIONS } from '../../data/enneagramGame'
 import { calcType } from '../../utils/enneagram'
 import { setLastResult } from '../../utils/session'
@@ -96,6 +96,13 @@ function finish() {
 
 onUnload(() => {
   clearAdvanceTimer()
+})
+onShow(() => {
+  // #ifdef MP-WEIXIN
+  if (typeof uni !== 'undefined' && typeof uni.hideShareMenu === 'function') {
+    uni.hideShareMenu({ menus: ['shareAppMessage', 'shareTimeline'] })
+  }
+  // #endif
 })
 </script>
 

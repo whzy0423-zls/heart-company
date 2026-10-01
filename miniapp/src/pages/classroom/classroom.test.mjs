@@ -214,7 +214,7 @@ assert.doesNotMatch(
   "card body should remove the duplicated facts row",
 );
 const cardFooter = source.match(/<view class="classroom-card__footer">[\s\S]*?<\/view>\s*<\/view>\s*<\/view>/)?.[0] || "";
-assert.match(cardFooter, /v-if="activeTab === 'series' && itemAction\(item\)\.type === 'purchase'"/, "paid series should retain their purchase action");
+assert.match(cardFooter, /v-if="!timelinePreview && activeTab === 'series' && itemAction\(item\)\.type === 'purchase'"/, "paid series should retain purchase actions outside the Timeline preview");
 assert.match(cardFooter, /v-else\s*class="classroom-card__action"/, "all other cards should retain their single primary action");
 assert.match(source, /import NxAsyncState/, "classroom list should share the async-state component");
 for (const state of ["loading", "error", "empty"]) {
@@ -468,7 +468,15 @@ const modulePath = join(dir, "classroom-state.mjs");
 const prelude = `
 const ref = (value) => ({ value })
 const computed = (getter) => ({ get value() { return getter() } })
+const watch = () => {}
+const onShareAppMessage = () => {}
+const onShareTimeline = () => {}
+const buildShareCard = input => ({ appMessage: input, timeline: input })
+const showPublicShareMenu = () => {}
+const isTimelinePreview = () => false
+const requireFullMiniapp = () => true
 const onLoad = (handler) => { globalThis.__classroomHarness.onLoad = handler }
+const onHide = (handler) => { globalThis.__classroomHarness.onHide = handler }
 const onShow = (handler) => { globalThis.__classroomHarness.onShow = handler }
 const onUnload = (handler) => { globalThis.__classroomHarness.onUnload = handler }
 const listClassroomSeriesApi = (...args) => globalThis.__classroomHarness.listSeries(...args)

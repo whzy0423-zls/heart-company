@@ -1,27 +1,39 @@
 <script setup>
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
+import { onLoad, onShow, onShareAppMessage, onShareTimeline } from '@dcloudio/uni-app'
 import { TYPES_INFO, CENTERS } from '../../data/enneagramGame'
+import { buildShareCard, showPublicShareMenu, isTimelinePreview } from '../../utils/share'
+import NxShareActions from '../../components/NxShareActions.vue'
 
-const currentPages = getCurrentPages()
-const route = currentPages[currentPages.length - 1]
-const typeId = computed(() => {
-  const value = Number(route?.options?.type || 1)
-  return TYPES_INFO[value] ? value : 1
+const typeId = ref(1)
+const timelinePreview = ref(isTimelinePreview())
+onLoad((query = {}) => {
+  typeId.value = /^[1-9]$/.test(String(query.type)) ? Number(query.type) : 1
 })
 const info = computed(() => TYPES_INFO[typeId.value])
 const center = computed(() => CENTERS[info.value.center])
 const growth = computed(() => TYPES_INFO[info.value.growth])
 const stress = computed(() => TYPES_INFO[info.value.stress])
+onShow(() => { timelinePreview.value = isTimelinePreview(); showPublicShareMenu() })
+function typeShareCard() {
+  return buildShareCard({
+    kind: 'type', type: typeId.value,
+    title: `认识 ${typeId.value} 号「${info.value.name}」｜九型人格`,
+    imageUrl: `/static/share/result-${typeId.value}.jpg`,
+  })
+}
+onShareAppMessage(() => typeShareCard().appMessage)
+onShareTimeline(() => typeShareCard().timeline)
 
-function openTest() { uni.navigateTo({ url: '/pages/test/test' }) }
-function openRelation() { uni.navigateTo({ url: `/pages/relation/relation?type=${typeId.value}` }) }
-function openOverview() { uni.navigateTo({ url: '/pages/enneagram/enneagram' }) }
+function openTest() { if (!timelinePreview.value) uni.navigateTo({ url: '/pages/test/test' }) }
+function openRelation() { if (!timelinePreview.value) uni.navigateTo({ url: `/pages/relation/relation?type=${typeId.value}` }) }
+function openOverview() { if (!timelinePreview.value) uni.navigateTo({ url: '/pages/enneagram/enneagram' }) }
 </script>
 
 <template>
   <view class="detail-page nx-page ios-page ios-safe-bottom">
     <view class="detail-shell">
-      <button class="back-button" hover-class="back-button--pressed" @click="openOverview">‹ <text>返回九型地图</text></button>
+      <button v-if="!timelinePreview" class="back-button" hover-class="back-button--pressed" @click="openOverview">‹ <text>返回九型地图</text></button>
       <view class="detail-hero" :class="`detail-hero--${info.color}`">
         <image class="detail-hero__image" :src="`/static/enneagram/${typeId}.png`" mode="aspectFill" />
         <view class="detail-hero__copy">
@@ -56,7 +68,8 @@ function openOverview() { uni.navigateTo({ url: '/pages/enneagram/enneagram' }) 
         <text class="card-copy">{{ info.keywords }}是你天然的资源。当你过度依赖它时，记得停下来问自己：我是在主动选择，还是被旧习惯推着走？</text>
       </view>
 
-      <view class="action-row"><button class="action action--primary" hover-class="action--pressed" @click="openTest">重新测一测</button><button class="action action--secondary" hover-class="action--pressed" @click="openRelation">看看关系</button></view>
+      <view v-if="!timelinePreview" class="action-row"><button class="action action--primary" hover-class="action--pressed" @click="openTest">测测我的类型</button><button class="action action--secondary" hover-class="action--pressed" @click="openRelation">看看关系</button></view>
+      <NxShareActions />
     </view>
   </view>
 </template>

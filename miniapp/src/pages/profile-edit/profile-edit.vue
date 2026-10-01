@@ -195,6 +195,11 @@ function previewProfileAvatar() {
 }
 
 onShow(() => {
+  // #ifdef MP-WEIXIN
+  if (typeof uni !== 'undefined' && typeof uni.hideShareMenu === 'function') {
+    uni.hideShareMenu({ menus: ['shareAppMessage', 'shareTimeline'] })
+  }
+  // #endif
   pageActive = true
   authRedirected = false
   sessionGeneration += 1

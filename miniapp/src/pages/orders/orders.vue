@@ -213,6 +213,11 @@ async function continuePayment(order) {
 }
 
 onShow(() => {
+  // #ifdef MP-WEIXIN
+  if (typeof uni !== 'undefined' && typeof uni.hideShareMenu === 'function') {
+    uni.hideShareMenu({ menus: ['shareAppMessage', 'shareTimeline'] })
+  }
+  // #endif
   if (disposed) return
   redirecting = false
   if (sessionToken && sessionToken !== getToken()) resetSession()

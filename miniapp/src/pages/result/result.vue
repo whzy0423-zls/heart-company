@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, computed, getCurrentInstance } from 'vue'
-import { onShareAppMessage, onShareTimeline, onShow } from '@dcloudio/uni-app'
+import { onLoad, onShareAppMessage, onShareTimeline, onShow } from '@dcloudio/uni-app'
 import { TYPES_INFO, CENTERS, RESULTS } from '../../data/enneagramGame'
 import { resultPersonaText } from '../../utils/resultPersona'
 import { getLastResult, normalizeLastResult } from '../../utils/session'
@@ -19,7 +19,21 @@ import { setBookingIntent } from '../../utils/bookingIntent'
 import { normalizeMiniappLearn, normalizeMiniappPayment } from '../../utils/miniappPages'
 import { getStoredSiteConfig, refreshSiteConfig } from '../../utils/siteConfig'
 import { previewImage } from '../../utils/imagePreview'
+import { buildShareCard, showPublicShareMenu, showTimelineShareHint, isTimelinePreview } from '../../utils/share'
+import NxShareActions from '../../components/NxShareActions.vue'
 
+const sharedMode = ref(false)
+const timelinePreview = ref(isTimelinePreview())
+const sharedType = ref(null)
+const sharedInfo = computed(() => sharedType.value ? TYPES_INFO[sharedType.value] : null)
+const sharedCenter = computed(() => sharedInfo.value ? CENTERS[sharedInfo.value.center] : null)
+const sharedGrowth = computed(() => sharedInfo.value ? TYPES_INFO[sharedInfo.value.growth] : null)
+onLoad((query = {}) => {
+  // A shared introduction must never fall back to the recipient's private result.
+  sharedMode.value = timelinePreview.value || Object.prototype.hasOwnProperty.call(query, 'shareType')
+  sharedType.value = sharedMode.value && /^[1-9]$/.test(String(query.shareType))
+    ? Number(query.shareType) : null
+})
 const result = ref(null)
 const gender = ref(null)
 const r = ref(null)
@@ -67,6 +81,10 @@ async function refreshPaymentAvailability() {
 }
 
 onShow(() => {
+  timelinePreview.value = isTimelinePreview()
+  if (timelinePreview.value) sharedMode.value = true
+  showPublicShareMenu()
+  if (sharedMode.value) return
   paymentEnabled.value = normalizeMiniappPayment(getStoredSiteConfig()).enabled
   void refreshPaymentAvailability()
 })
@@ -80,6 +98,7 @@ const reportState = computed(() => reportDisplayState({
 }))
 
 onMounted(() => {
+  if (sharedMode.value) return
   const siteConfig = getStoredSiteConfig()
   classroomEnabled.value = normalizeMiniappLearn(siteConfig).classroom.enabled
   paymentEnabled.value = normalizeMiniappPayment(siteConfig).enabled
@@ -104,6 +123,7 @@ onMounted(() => {
 })
 
 function loadClassroomRecommendations() {
+  if (sharedMode.value) return Promise.resolve([])
   if (classroomRecommendationPromise) return classroomRecommendationPromise
 
   classroomRecommendationLoading.value = true
@@ -129,7 +149,7 @@ function loadClassroomRecommendations() {
 }
 
 async function saveRecord() {
-  if (saving.value || saved.value) return
+  if (sharedMode.value || saving.value || saved.value) return
   saving.value = true
   try {
     await ensureLogin()
@@ -153,7 +173,7 @@ async function saveRecord() {
 }
 
 async function refreshReportStatus() {
-  if (!recordId.value) return
+  if (sharedMode.value || !recordId.value) return
   reportStatusLoading.value = true
   reportStatusError.value = ''
   reportPriceCents.value = null
@@ -175,7 +195,7 @@ async function refreshReportStatus() {
 }
 
 async function loadReportContent() {
-  if (reportLoading.value || reportContent.value) return
+  if (sharedMode.value || reportLoading.value || reportContent.value) return
   reportLoading.value = true
   reportError.value = ''
   try {
@@ -190,7 +210,7 @@ async function loadReportContent() {
 }
 
 async function unlockReport() {
-  if (paying.value || !paymentEnabled.value) return
+  if (sharedMode.value || paying.value || !paymentEnabled.value) return
   paying.value = true
   try {
     await ensureLogin()
@@ -233,6 +253,7 @@ function openClassroomRecommendation(item) {
   if (url) uni.navigateTo({ url })
 }
 function restart() {
+  if (timelinePreview.value) return
   uni.redirectTo({ url: '/pages/test/test' })
 }
 
@@ -249,7 +270,7 @@ function resultShareImage(type) {
 }
 
 function resultAvatarSource() {
-  const type = Number(result.value?.type)
+  const type = Number(sharedMode.value ? sharedType.value : result.value?.type)
   return Number.isInteger(type) && type >= 1 && type <= 9
     ? `/static/enneagram/${type}.png`
     : ''
@@ -262,22 +283,21 @@ function previewResultAvatar() {
   previewImage(source, { urls: [source] })
 }
 
-// 微信好友转发
-onShareAppMessage(() => ({
-  title: `我是 ${result.value?.type} 号「${r.value?.title}」｜你是哪一型？`,
-  path: '/pages/index/index',
-  imageUrl: resultShareImage(result.value?.type),
-}))
-// 朋友圈分享
-onShareTimeline(() => ({
-  title: `九型芯之力｜我是 ${result.value?.type} 号「${r.value?.title}」`,
-  query: '',
-  imageUrl: resultShareImage(result.value?.type),
-}))
+function resultShareCard() {
+  const type = sharedMode.value ? sharedType.value : result.value?.type
+  const typeInfo = TYPES_INFO[type]
+  return buildShareCard({
+    kind: 'result', type,
+    title: typeInfo ? `认识 ${type} 号「${typeInfo.name}」｜你是哪一型？` : '认识九型人格，一起发现内在的自己',
+    imageUrl: resultShareImage(type),
+  })
+}
+onShareAppMessage(() => resultShareCard().appMessage)
+onShareTimeline(() => resultShareCard().timeline)
 
 // 生成分享海报（canvas 2d）
 async function makePoster() {
-  if (posterLoading.value) return
+  if (sharedMode.value || posterLoading.value) return
   posterLoading.value = true
   posterShow.value = true
   posterError.value = ''
@@ -310,7 +330,40 @@ function savePoster() {
 </script>
 
 <template>
-  <view class="wrap page-stack ios-page ios-safe-bottom result-page" v-if="result">
+  <view v-if="sharedMode" class="wrap page-stack ios-page ios-safe-bottom result-page result-page--shared">
+    <view class="result-hero nx-page-hero" :class="`result-hero--${sharedInfo?.color || 'blue'}`">
+      <view v-if="sharedInfo" class="result-hero__avatar-wrap">
+        <button v-if="!avatarFailed" class="result-hero__avatar-action" aria-label="预览类型头像" hover-class="result-hero__avatar-action--pressed" @click="previewResultAvatar()">
+          <image class="result-hero__avatar" :src="resultAvatarSource()" mode="aspectFill" @error="avatarFailed = true" />
+        </button>
+        <view v-else class="result-hero__avatar-fallback">{{ sharedType }}</view>
+        <view class="result-hero__number">{{ sharedType }}</view>
+      </view>
+      <text class="result-hero__eyebrow">公开类型介绍</text>
+      <text class="result-hero__title">{{ sharedInfo ? `${sharedType} 号 · ${sharedInfo.name}` : '认识九型人格' }}</text>
+      <text v-if="sharedInfo" class="result-hero__meta">{{ sharedInfo.en }} · {{ sharedInfo.keywords }}</text>
+      <text class="result-hero__summary">九种视角，九种理解自己的方式。从内在动力出发，看见习惯，也看见更多可能。</text>
+      <view class="result-hero__persona">这是类型知识介绍。你的性格倾向，需要由你自己的测试与觉察来发现。</view>
+    </view>
+    <view v-if="sharedInfo" class="drive-grid">
+      <view class="drive-card drive-card--fear"><text class="drive-card__label">基本恐惧</text><text class="drive-card__text">{{ sharedInfo.fear }}</text></view>
+      <view class="drive-card drive-card--desire"><text class="drive-card__label">核心欲望</text><text class="drive-card__text">{{ sharedInfo.desire }}</text></view>
+    </view>
+    <view v-if="sharedCenter" class="growth-insight nx-panel ios-card">
+      <text class="section-kicker">所属中心</text><text class="section-title">{{ sharedCenter.name }}</text>
+      <text class="growth-insight__text">{{ sharedCenter.desc }}。{{ sharedCenter.issue }}。</text>
+    </view>
+    <view v-if="sharedGrowth" class="growth-insight nx-panel ios-card">
+      <text class="section-kicker">成长方向</text><text class="section-title">向 {{ sharedInfo.growth }} 号 · {{ sharedGrowth.name }} 学习</text>
+      <text class="growth-insight__text">觉察熟悉的反应模式，尝试给自己更多选择。九型人格是一张探索内在动力的地图，每一种类型都有自己的资源与成长空间。</text>
+    </view>
+    <view class="result-actions">
+      <button v-if="!timelinePreview" class="result-actions__booking" @click="restart">测测我的类型</button>
+      <NxShareActions />
+    </view>
+    <text class="disclaimer">类型介绍仅供自我探索与交流，不作专业诊断。</text>
+  </view>
+  <view class="wrap page-stack ios-page ios-safe-bottom result-page" v-else-if="result">
     <view class="result-hero nx-page-hero" :class="`result-hero--${info.color}`">
       <view class="result-hero__avatar-wrap">
         <button
@@ -461,8 +514,9 @@ function savePoster() {
       <!-- #ifdef MP-WEIXIN -->
       <view class="result-actions__share-row">
         <button class="result-actions__secondary" open-type="share">分享好友</button>
-        <button class="result-actions__secondary" :loading="posterLoading" :disabled="posterLoading" @click="makePoster">生成海报</button>
+        <button class="result-actions__secondary" @click="showTimelineShareHint()">分享到朋友圈</button>
       </view>
+      <button class="result-actions__secondary" :loading="posterLoading" :disabled="posterLoading" @click="makePoster">生成海报</button>
       <!-- #endif -->
       <!-- #ifdef H5 -->
       <button class="result-actions__secondary" disabled>小程序内生成海报</button>

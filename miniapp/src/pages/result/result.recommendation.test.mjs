@@ -70,6 +70,8 @@ const executableScript = script.replace(/^import[\s\S]*?from\s+['"][^'"]+['"]\s*
 const dir = await mkdtemp(join(tmpdir(), 'nx-result-recommendations-'))
 const modulePath = join(dir, 'result-state.mjs')
 const harnessPrelude = `
+import { buildShareCard, showPublicShareMenu, showTimelineShareHint, isTimelinePreview } from "${new URL('../../utils/share.js', import.meta.url).href}"
+const onLoad = (handler) => { globalThis.__resultHarness.onLoad = handler }
 const ref = (value) => ({ value })
 const computed = (getter) => ({ get value() { return getter() } })
 const onMounted = (handler) => { globalThis.__resultHarness.onMounted = handler }
@@ -205,13 +207,13 @@ try {
     assert.equal(page.resultShareImage(1), '/static/share/result-1.jpg')
     assert.equal(page.resultShareImage('unknown'), '/static/share/result-default.jpg')
     assert.deepEqual(state.shareAppMessage(), {
-      title: '我是 1 号「一号改革者」｜你是哪一型？',
-      path: '/pages/index/index',
+      title: '认识 1 号「改革者」｜你是哪一型？',
+      path: '/pages/result/result?shareType=1',
       imageUrl: '/static/share/result-1.jpg',
     }, 'friend sharing should use the dedicated landscape result card')
     assert.deepEqual(state.shareTimeline(), {
-      title: '九型芯之力｜我是 1 号「一号改革者」',
-      query: '',
+      title: '认识 1 号「改革者」｜你是哪一型？',
+      query: 'shareType=1',
       imageUrl: '/static/share/result-1.jpg',
     }, 'timeline sharing should reuse the stable result card')
   }

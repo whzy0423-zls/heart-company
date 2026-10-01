@@ -22,6 +22,11 @@ let loadedToken = ''
 let redirecting = false
 
 onShow(() => {
+  // #ifdef MP-WEIXIN
+  if (typeof uni !== 'undefined' && typeof uni.hideShareMenu === 'function') {
+    uni.hideShareMenu({ menus: ['shareAppMessage', 'shareTimeline'] })
+  }
+  // #endif
   redirecting = false
   clearBookingSession()
   loadBookings()

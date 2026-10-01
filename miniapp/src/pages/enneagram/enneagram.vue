@@ -1,10 +1,18 @@
 <script setup>
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
+import { onShow, onShareAppMessage, onShareTimeline } from '@dcloudio/uni-app'
 import { TYPES_INFO } from '../../data/enneagramGame'
+import { buildShareCard, showPublicShareMenu, isTimelinePreview } from '../../utils/share'
+import NxShareActions from '../../components/NxShareActions.vue'
 
 const types = computed(() => Object.entries(TYPES_INFO).map(([id, info]) => ({ id: Number(id), ...info })))
+const timelinePreview = ref(isTimelinePreview())
+onShow(() => { timelinePreview.value = isTimelinePreview(); showPublicShareMenu() })
+onShareAppMessage(() => buildShareCard({ kind: 'explore', title: '认识九型人格，一起发现内在的自己' }).appMessage)
+onShareTimeline(() => buildShareCard({ kind: 'explore', title: '认识九型人格，一起发现内在的自己' }).timeline)
 
 function openType(id) {
+  if (timelinePreview.value) return
   uni.navigateTo({ url: `/pages/enneagram-detail/enneagram-detail?type=${id}` })
 }
 </script>
@@ -21,21 +29,22 @@ function openType(id) {
 
       <view class="section-heading">
         <text class="section-title">九型人格地图</text>
-        <text class="section-note">点击任意型号，查看完整介绍</text>
+        <text class="section-note">{{ timelinePreview ? '九种不同的内在动力' : '点击任意型号，查看完整介绍' }}</text>
       </view>
       <view class="type-grid">
-        <button v-for="type in types" :key="type.id" class="type-card" :class="`type-card--${type.color}`" hover-class="type-card--pressed" @click="openType(type.id)">
+        <button v-for="type in types" :key="type.id" class="type-card" :class="`type-card--${type.color}`" :disabled="timelinePreview" hover-class="type-card--pressed" @click="openType(type.id)">
           <image class="type-card__image" :src="`/static/enneagram/${type.id}.png`" mode="aspectFill" lazy-load />
           <view class="type-card__body">
             <text class="type-card__number">0{{ type.id }}</text>
             <text class="type-card__name">{{ type.name }}</text>
             <text class="type-card__keywords">{{ type.keywords }}</text>
           </view>
-          <text class="type-card__arrow" aria-hidden="true">›</text>
+          <text v-if="!timelinePreview" class="type-card__arrow" aria-hidden="true">›</text>
         </button>
       </view>
 
-      <button class="start-button" hover-class="start-button--pressed" @click="uni.navigateTo({ url: '/pages/test/test' })">还不确定？先做一次测试</button>
+      <button v-if="!timelinePreview" class="start-button" hover-class="start-button--pressed" @click="uni.navigateTo({ url: '/pages/test/test' })">还不确定？先做一次测试</button>
+      <NxShareActions />
     </view>
   </view>
 </template>

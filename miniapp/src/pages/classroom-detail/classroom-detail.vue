@@ -1,6 +1,8 @@
 <script setup>
-import { computed, ref } from "vue";
-import { onHide, onLoad, onShow, onUnload } from "@dcloudio/uni-app";
+import { computed, ref, watch } from "vue";
+import { onHide, onLoad, onShow, onUnload, onShareAppMessage, onShareTimeline } from "@dcloudio/uni-app";
+import NxShareActions from "../../components/NxShareActions.vue";
+import { buildShareCard, showPublicShareMenu, isTimelinePreview, requireFullMiniapp } from "../../utils/share";
 import {
   createClassroomOrderApi,
   devPayClassroomOrderApi,
@@ -34,6 +36,7 @@ import NxImagePreview from "../../components/NxImagePreview.vue";
 import { previewImage } from "../../utils/imagePreview";
 import { isWechatDevtools } from "../../utils/imagePreview";
 
+const timelinePreview = isTimelinePreview();
 const contentId = ref("");
 const content = ref(normalizeClassroomContent());
 const loading = ref(true);
@@ -77,6 +80,19 @@ let purchaseController = null;
 let purchaseOperation = null;
 let requestedResumePosition = 0;
 let paymentRefreshTicket = 0;
+const contentShareable = computed(() => !loading.value && !loadError.value
+  && /^[1-9]\d*$/.test(contentId.value) && content.value.id === contentId.value && !!content.value.title);
+function contentShareCard() {
+  if (!contentShareable.value) return buildShareCard({ kind: "home" });
+  return buildShareCard({ kind: "content", id: content.value.id,
+    title: content.value.title, imageUrl: content.value.coverUrl });
+}
+function syncContentShareMenu() {
+  if (!disposed && pageVisible) showPublicShareMenu(contentShareable.value);
+}
+watch(contentShareable, syncContentShareMenu, { flush: "sync" });
+onShareAppMessage(() => contentShareCard().appMessage);
+onShareTimeline(() => contentShareCard().timeline);
 
 async function refreshPaymentAvailability() {
   const previous = paymentEnabled.value;
@@ -124,6 +140,7 @@ const progressPercent = computed(() => {
 const paymentBusy = computed(() => purchaseInFlight.value);
 
 function consultTeacher() {
+  if (!requireFullMiniapp()) return;
   setBookingIntent({ kind: "consult", intentText: content.value.title });
   uni.switchTab({
     url: "/pages/booking/booking",
@@ -132,6 +149,7 @@ function consultTeacher() {
 }
 
 function openTeacherDetail() {
+  if (!requireFullMiniapp()) return;
   uni.navigateTo({ url: "/pages/teacher/teacher" });
 }
 
@@ -167,6 +185,7 @@ function setupProgress() {
   progressSyncError.value = "";
   progressPosition.value = 0;
   progressCompleted.value = false;
+  if (timelinePreview) return;
   const loggedIn = Boolean(getToken());
   if (loggedIn && requestedResumePosition > 0) {
     const duration = Math.max(0, Number(content.value.durationSeconds) || 0);
@@ -196,7 +215,7 @@ function setupProgress() {
 }
 
 async function recordProgress(position, { force = false } = {}) {
-  if (!progressTracker) return;
+  if (timelinePreview || !progressTracker) return;
   try {
     const snapshot = await progressTracker.record(position, { force });
     if (!disposed) {
@@ -209,7 +228,7 @@ async function recordProgress(position, { force = false } = {}) {
 }
 
 async function flushProgress() {
-  if (!progressTracker) return;
+  if (timelinePreview || !progressTracker) return;
   try {
     await progressTracker.flush();
     if (!disposed) progressSyncError.value = "";
@@ -344,7 +363,7 @@ async function refreshPlayback({ recovery = false } = {}) {
 
 async function loadDetail() {
   if (disposed) return;
-  if (!contentId.value) {
+  if (!/^[1-9]\d*$/.test(contentId.value)) {
     loading.value = false;
     loadError.value = "课件参数无效";
     return;
@@ -359,7 +378,7 @@ async function loadDetail() {
     const response = await getClassroomContentApi(contentId.value);
     if (disposed || ticket !== detailTicket) return;
     const normalized = normalizeClassroomContent(response);
-    if (!normalized.id) throw new Error("课件内容不存在");
+    if (!normalized.id || normalized.id !== contentId.value) throw new Error("课件内容不存在");
     content.value = normalized;
     coverImageFailed.value = false;
     purchaseController?.stop();
@@ -518,6 +537,7 @@ function trackPurchase(run) {
 }
 
 function startPurchase() {
+  if (!requireFullMiniapp()) return;
   if (disposed || purchaseOperation || !paymentEnabled.value) return;
   if (!getToken()) {
     uni.switchTab({ url: "/pages/profile/profile" });
@@ -530,6 +550,7 @@ function startPurchase() {
 }
 
 function retryPurchase() {
+  if (!requireFullMiniapp()) return;
   if (disposed || purchaseOperation || !paymentEnabled.value) return;
   const controller = ensurePurchaseController();
   if (!controller) return;
@@ -543,6 +564,7 @@ function cancelPurchase() {
 }
 
 function handleAccessAction() {
+  if (!requireFullMiniapp()) return;
   if (disposed || !paymentEnabled.value) return;
   if (accessAction.value.type === "login" || accessAction.value.type === "member") {
     uni.switchTab({ url: "/pages/profile/profile" });
@@ -558,7 +580,8 @@ onLoad((options = {}) => {
   pageVisible = true;
   paymentEnabled.value = normalizeMiniappPayment(getStoredSiteConfig()).enabled;
   contentId.value = String(options.id || "").trim();
-  requestedResumePosition = Math.max(0, Math.floor(Number(options.position) || 0));
+  requestedResumePosition = timelinePreview ? 0 : Math.max(0, Math.floor(Number(options.position) || 0));
+  syncContentShareMenu();
   loadDetail();
 });
 
@@ -575,6 +598,7 @@ onShow(() => {
   if (disposed) return;
   paymentEnabled.value = normalizeMiniappPayment(getStoredSiteConfig()).enabled;
   pageVisible = true;
+  syncContentShareMenu();
   void refreshPaymentAvailability();
   if (content.value.canPlay && !playbackUrl.value && !playbackLoading.value && !playbackError.value) {
     refreshPlayback();
@@ -718,6 +742,7 @@ onUnload(() => {
               <text v-if="content.durationSeconds">{{ formatTime(content.durationSeconds) }} · {{ content.contentType === "audio" ? "随时收听" : "随时回看" }}</text>
             </view>
             <text class="detail-head__title">{{ content.title }}</text>
+            <NxShareActions :disabled="!contentShareable" />
             <view class="content-summary__teacher" hover-class="teacher-link--pressed" aria-label="查看授课老师介绍" role="button" @click="openTeacherDetail">
               <button v-if="teacherAvatar && !teacherAvatarFailed" class="content-summary__avatar-action" aria-label="预览授课老师头像" @click.stop="previewTeacherAvatar">
                 <image class="content-summary__avatar" :src="teacherAvatar" mode="aspectFill" :aria-label="`${content.teacherName || '九型老师'}头像`" @error="teacherAvatarFailed = true" />
@@ -734,7 +759,7 @@ onUnload(() => {
         </view>
       </view>
 
-      <view v-if="!content.canPlay" class="access-panel ios-card" aria-live="polite">
+      <view v-if="!timelinePreview && !content.canPlay" class="access-panel ios-card" aria-live="polite">
         <text class="panel-eyebrow">学习方式</text>
         <text class="access-panel__title">{{ accessAction.label }}</text>
         <text class="access-panel__copy">{{ accessAction.type === "unavailable" ? "该课件暂未开放购买。" : "完成对应访问步骤后，即可进入本课件学习。" }}</text>
@@ -777,7 +802,7 @@ onUnload(() => {
         <text class="description-panel__copy">{{ content.description || "老师正在完善本课件介绍。" }}</text>
       </view>
 
-      <view v-if="content.canPlay" class="progress-panel ios-card">
+      <view v-if="!timelinePreview && content.canPlay" class="progress-panel ios-card">
         <view class="progress-panel__head">
           <text class="progress-panel__title">我的学习进度</text>
           <text class="progress-panel__value">{{ progressCompleted ? "已完成" : `${progressPercent}%` }}</text>
@@ -796,7 +821,7 @@ onUnload(() => {
         <text v-if="progressSyncError" class="progress-panel__error" aria-live="polite">{{ progressSyncError }}</text>
       </view>
 
-      <view class="detail-consult">
+      <view v-if="!timelinePreview" class="detail-consult">
         <view class="detail-consult__copy">
           <text class="detail-consult__title">想和老师再聊一聊？</text>
           <text class="detail-consult__lead">带着你的问题，找到适合的学习方向。</text>

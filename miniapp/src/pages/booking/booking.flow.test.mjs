@@ -15,6 +15,9 @@ const previewCourse = { id: 'intro', title: '演示课程', schedule: '10月17�
 function createHarness({ preview = true, draft = null, h5 = false } = {}) {
   const state = { draft, intents: [], saved: [], requests: [], clears: 0, toasts: [], failing: false, logins: 0, scrolls: [], navigations: [], setIntents: [] }
   const context = vm.createContext({
+    onShareAppMessage: () => {}, onShareTimeline: () => {},
+    buildShareCard: input => ({ appMessage: input, timeline: input }),
+    showPublicShareMenu: () => {}, isTimelinePreview: () => false, requireFullMiniapp: () => true,
     ref: (value) => ({ value }),
     computed: (getter) => ({ get value() { return getter() } }),
     watch: () => {},
