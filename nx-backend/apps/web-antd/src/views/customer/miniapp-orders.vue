@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { MiniappOrder } from '#/api';
 
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 
 import { Page } from '@vben/common-ui';
 import { IconifyIcon } from '@vben/icons';
@@ -34,6 +35,13 @@ const detailOpen = ref(false);
 const current = ref<MiniappOrder>();
 const summary = reactive({ total: 0, paid: 0, pending: 0, paidAmount: 0 });
 const query = reactive({ keyword: '', product: '', status: '', page: 1, pageSize: 20 });
+const route = useRoute();
+query.keyword = typeof route.query.keyword === 'string' ? route.query.keyword : '';
+watch(() => route.query.keyword, (keyword) => {
+  query.keyword = typeof keyword === 'string' ? keyword : '';
+  query.page = 1;
+  void load();
+});
 
 const columns = [
   { dataIndex: 'outTradeNo', title: '商户订单号', width: 220 },
@@ -56,6 +64,7 @@ const statusOptions = [
 
 const productOptions = [
   { label: '全部商品', value: '' },
+  { label: '课程报名', value: 'course_booking' },
   { label: '微信支付测试', value: 'wechat_pay_test' },
   { label: '深度报告', value: 'report' },
   { label: '课程系列', value: 'classroom_series' },
@@ -140,6 +149,7 @@ function productLabel(product?: string) {
   const labels: Record<string, string> = {
     classroom_content: '单节课件',
     classroom_series: '课程系列',
+    course_booking: '课程报名',
     member: '会员',
     report: '深度报告',
     wechat_pay_test: '微信支付测试',
@@ -174,7 +184,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <Page description="统一查看微信支付测试、报告和课堂订单，并与微信支付主动核对交易状态。" title="小程序订单">
+  <Page description="统一查看课程报名、微信支付测试、报告和课堂订单，并与微信支付主动核对交易状态。" title="小程序订单">
     <div class="order-workspace">
       <div class="summary-grid">
         <div v-for="item in summaryItems" :key="item.label" class="summary-item">
@@ -240,6 +250,9 @@ onMounted(() => {
       <Descriptions v-if="current" bordered :column="1" size="small">
         <Descriptions.Item label="商户订单号">{{ current.outTradeNo }}</Descriptions.Item>
         <Descriptions.Item label="商品">{{ current.title || productLabel(current.product) }}</Descriptions.Item>
+        <Descriptions.Item label="商品类型">{{ productLabel(current.product) }}</Descriptions.Item>
+        <Descriptions.Item v-if="current.bookingId" label="报名编号">{{ current.bookingId }}</Descriptions.Item>
+        <Descriptions.Item v-if="current.contactName" label="报名联系人">{{ current.contactName }}</Descriptions.Item>
         <Descriptions.Item label="金额">{{ amountYuan(current.amount) }}</Descriptions.Item>
         <Descriptions.Item label="用户">{{ current.nickname || '微信用户' }} / {{ current.phone || `#${current.wxUserId}` }}</Descriptions.Item>
         <Descriptions.Item label="状态"><Tag :color="statusColor(current.status)">{{ statusLabel(current.status) }}</Tag></Descriptions.Item>

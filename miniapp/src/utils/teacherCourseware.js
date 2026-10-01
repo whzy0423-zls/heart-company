@@ -238,7 +238,7 @@ function normalizeMiniappCourse(item, index) {
   const priceCents = Number.isSafeInteger(source.priceCents) && source.priceCents >= 0
     ? source.priceCents
     : 0
-  const paymentMode = source.paymentMode === 'paid' ? 'paid' : 'consult'
+  const paymentMode = priceCents > 0 ? 'paid' : 'consult'
   return {
     id: normalizedCourseID(source.id, index),
     title,

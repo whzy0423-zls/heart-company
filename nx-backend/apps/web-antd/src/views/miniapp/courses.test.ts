@@ -198,10 +198,24 @@ describe('miniapp course management', () => {
     expect(yuanToCents('12.30')).toBe(1230);
     expect(yuanToCents('0.01')).toBe(1);
     expect(yuanToCents('12.345')).toBeNull();
-    expect(yuanToCents('')).toBeNull();
+    expect(yuanToCents('-1')).toBeNull();
+    expect(yuanToCents('1000000')).toBeNull();
+    expect(yuanToCents('')).toBe(0);
+    expect(yuanToCents('0')).toBe(0);
   });
 
-  it('requires a positive price for paid courses', () => {
+  it('derives enrollment behavior from price even when saved payment mode disagrees', () => {
+    const config = createConfig({
+      miniappCourses: {
+        items: [
+          { id: 'zero', title: '咨询课', priceCents: 0, paymentMode: 'paid' },
+          { id: 'positive', title: '付费课', priceCents: 1999, paymentMode: 'consult' },
+          { id: 'blank', title: '未定价课', paymentMode: 'paid' },
+        ],
+      },
+    });
+    expect(normalizeMiniappCourses(config).items.map(({ paymentMode }) => paymentMode))
+      .toEqual(['consult', 'paid', 'consult']);
     expect(
       validateCourse({
         id: 'course-growth',
@@ -209,7 +223,7 @@ describe('miniapp course management', () => {
         paymentMode: 'paid',
         priceCents: 0,
       }),
-    ).toContain('选择付费后，课程价格必须大于 0 元');
+    ).toEqual([]);
     expect(
       validateCourse({
         id: 'course-growth',
@@ -226,6 +240,56 @@ describe('miniapp course management', () => {
         priceCents: 0,
       }),
     ).toEqual([]);
+  });
+
+  it('saves positive prices as WeChat payment and clearing a price restores consultation', async () => {
+    vi.mocked(getSiteConfigApi).mockResolvedValue(
+      createConfig({
+        preserve: { source: 'cms' },
+        miniappCourses: {
+          catalogExtension: 'retained',
+          items: [{ id: 'course-growth', title: '共学课', priceCents: 0, paymentMode: 'consult', vendorExtension: 'retained' }],
+        },
+      }) as any,
+    );
+    vi.mocked(updateSiteConfigApi).mockImplementation(async (value) => value as any);
+    const wrapper = mountVueComponent(MiniappCourses);
+    await flushVuePromises();
+    expect(document.querySelector('select')).toBeNull();
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="课程价格（元）"]');
+    expect(input).not.toBeNull();
+    const setPrice = async (value: string) => {
+      input!.value = value;
+      input!.dispatchEvent(new Event('input', { bubbles: true }));
+      await flushVuePromises();
+    };
+    const save = async () => {
+      wrapper.button('保存配置')?.click();
+      await flushVuePromises();
+    };
+    await setPrice('19.99');
+    await save();
+    expect(updateSiteConfigApi).toHaveBeenLastCalledWith(expect.objectContaining({
+      home: expect.objectContaining({
+        preserve: { source: 'cms' },
+        miniappCourses: expect.objectContaining({
+          catalogExtension: 'retained',
+          items: [expect.objectContaining({ priceCents: 1999, paymentMode: 'paid', vendorExtension: 'retained' })],
+        }),
+      }),
+    }));
+    await setPrice('');
+    await save();
+    const saved = vi.mocked(updateSiteConfigApi).mock.lastCall?.[0] as any;
+    expect(saved.home.miniappCourses.items[0]).toMatchObject({ priceCents: 0, paymentMode: 'consult' });
+    expect(wrapper.text()).toContain('咨询老师');
+
+    for (const value of ['-1', '1.234', '1000000', 'abc']) {
+      await setPrice(value);
+      await save();
+    }
+    expect(updateSiteConfigApi).toHaveBeenCalledTimes(2);
+    wrapper.unmount();
   });
 
   it('shows course-specific copy and saves the full site config', async () => {

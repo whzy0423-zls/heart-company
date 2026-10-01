@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"nine-xing/nx-backend/apps/server/internal/businessmessage"
 )
 
 type Order struct {
@@ -93,6 +95,11 @@ func (s *Store) CreateOrReusePendingOrder(ctx context.Context, userID int64, out
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if product == ProductCourseBooking {
+		if err := lockCourseBookingTarget(c, tx, userID, refID); err != nil {
+			return Order{}, err
+		}
+	}
 	lockKey := orderTargetLockKey(userID, product, refID)
 	if _, err := tx.ExecContext(c, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
 		return Order{}, err
@@ -108,7 +115,7 @@ func (s *Store) CreateOrReusePendingOrder(ctx context.Context, userID int64, out
 	}
 	if product == ProductCourseBooking {
 		var paid bool
-		if err := tx.QueryRowContext(c, `SELECT payment_status='paid' FROM bookings WHERE id=$1 AND wx_user_id=$2 FOR UPDATE`, refID, userID).Scan(&paid); err != nil {
+		if err := tx.QueryRowContext(c, `SELECT EXISTS(SELECT 1 FROM bookings paid WHERE paid.wx_user_id=b.wx_user_id AND paid.course_id=b.course_id AND paid.payment_status='paid') FROM bookings b WHERE b.id=$1 AND b.wx_user_id=$2 FOR UPDATE`, refID, userID).Scan(&paid); err != nil {
 			return Order{}, err
 		}
 		if paid {
@@ -166,6 +173,11 @@ func (s *Store) ReplacePendingOrder(ctx context.Context, userID int64, outTradeN
 		return Order{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if product == ProductCourseBooking {
+		if err := lockCourseBookingTarget(c, tx, userID, refID); err != nil {
+			return Order{}, err
+		}
+	}
 	if _, err = tx.ExecContext(c, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, orderTargetLockKey(userID, product, refID)); err != nil {
 		return Order{}, err
 	}
@@ -180,7 +192,7 @@ func (s *Store) ReplacePendingOrder(ctx context.Context, userID int64, outTradeN
 	}
 	if product == ProductCourseBooking {
 		var paid bool
-		if err := tx.QueryRowContext(c, `SELECT payment_status='paid' FROM bookings WHERE id=$1 AND wx_user_id=$2 FOR UPDATE`, refID, userID).Scan(&paid); err != nil {
+		if err := tx.QueryRowContext(c, `SELECT EXISTS(SELECT 1 FROM bookings paid WHERE paid.wx_user_id=b.wx_user_id AND paid.course_id=b.course_id AND paid.payment_status='paid') FROM bookings b WHERE b.id=$1 AND b.wx_user_id=$2 FOR UPDATE`, refID, userID).Scan(&paid); err != nil {
 			return Order{}, err
 		}
 		if paid {
@@ -291,6 +303,11 @@ func (s *Store) MarkOrderPaidDetailed(ctx context.Context, outTradeNo, transacti
 		return PaymentApplyResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if targetProduct == ProductCourseBooking {
+		if err := lockCourseBookingTarget(c, tx, targetUserID, targetRefID); err != nil {
+			return PaymentApplyResult{}, err
+		}
+	}
 	if _, err = tx.ExecContext(c, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, orderTargetLockKey(targetUserID, targetProduct, targetRefID)); err != nil {
 		return PaymentApplyResult{}, err
 	}
@@ -406,6 +423,17 @@ func (s *Store) MarkOrderPaidDetailed(ctx context.Context, outTradeNo, transacti
 		if _, err := tx.ExecContext(c, `UPDATE signups SET interest=regexp_replace(interest, ' · 待付款$', ' · 已付款') WHERE id=(SELECT signup_id FROM bookings WHERE id=$1)`, refID); err != nil {
 			return PaymentApplyResult{}, err
 		}
+		var title string
+		var amount int
+		if err := tx.QueryRowContext(c, `SELECT title,amount FROM orders WHERE id=$1`, orderID).Scan(&title, &amount); err != nil {
+			return PaymentApplyResult{}, err
+		}
+		if _, err := (businessmessage.Store{}).Create(c, tx, businessmessage.Event{
+			Type: "miniapp", Title: "课程报名支付成功", Content: fmt.Sprintf("课程《%s》已付款 ¥%d.%02d，订单号：%s", title, amount/100, amount%100, outTradeNo),
+			Platform: "miniapp", EventKey: "miniapp.course.paid", BusinessID: strconv.FormatInt(orderID, 10), BusinessType: "miniapp-order", TargetPath: "/miniapp/orders?keyword=" + outTradeNo,
+		}); err != nil {
+			return PaymentApplyResult{}, err
+		}
 	default:
 		return PaymentApplyResult{}, fmt.Errorf("unsupported payment product: %s", product)
 	}
@@ -429,8 +457,15 @@ func (s *Store) MarkOrderPaidDetailed(ctx context.Context, outTradeNo, transacti
 }
 
 func closeSiblingPendingOrders(ctx context.Context, tx *sql.Tx, userID int64, product string, refID, paidOrderID int64) ([]string, error) {
+	targetClause := "ref_id=$3"
+	if product == ProductCourseBooking {
+		// Old price snapshots have another booking ID but the same course.
+		// Keep their prepay IDs in the retry set until remote close succeeds.
+		targetClause = `ref_id IN (SELECT b.id FROM bookings b WHERE b.wx_user_id=$1
+            AND b.course_id=(SELECT course_id FROM bookings WHERE id=$3 AND wx_user_id=$1))`
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT out_trade_no FROM orders
-		WHERE wx_user_id=$1 AND product=$2 AND ref_id=$3 AND status='pending' AND id<>$4 FOR UPDATE`, userID, product, refID, paidOrderID)
+        WHERE wx_user_id=$1 AND product=$2 AND `+targetClause+` AND status='pending' AND id<>$4 FOR UPDATE`, userID, product, refID, paidOrderID)
 	if err != nil {
 		return nil, err
 	}

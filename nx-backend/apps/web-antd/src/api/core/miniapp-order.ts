@@ -14,6 +14,10 @@ export interface MiniappOrder {
   createTime: string;
   updateTime: string;
   paidAt?: string;
+  bookingId?: string;
+  courseId?: string;
+  courseTitle?: string;
+  contactName?: string;
 }
 
 export interface MiniappOrderPageResult {

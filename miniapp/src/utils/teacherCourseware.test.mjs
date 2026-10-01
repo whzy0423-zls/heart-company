@@ -337,5 +337,14 @@ assert.deepEqual(configuredMiniappCourses.map((item) => item.id), ['growth-live'
 assert.equal(configuredMiniappCourses[0].price, 199, 'miniapp catalog should convert server cents to yuan')
 assert.equal(configuredMiniappCourses[0].paymentMode, 'paid', 'miniapp catalog should preserve payment mode')
 
+for (const [priceCents, paymentMode, expected] of [
+  [undefined, 'paid', 'consult'], [null, 'paid', 'consult'], [0, 'paid', 'consult'],
+  [19900, 'consult', 'paid'], [1, undefined, 'paid'],
+]) {
+  const [course] = normalizeMiniappCourses({ home: { miniappCourses: { items: [{ id: 'price-rule', title: '金额规则', priceCents, paymentMode }] } } })
+  assert.equal(course.paymentMode, expected, 'price alone determines the checkout path')
+  assert.equal(course.price, expected === 'paid' ? priceCents / 100 : undefined)
+}
+
 console.log('teacher/courseware normalization tests passed')
 await rm(dir, { force: true, recursive: true })

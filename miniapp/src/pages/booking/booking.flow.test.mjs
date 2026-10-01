@@ -23,10 +23,15 @@ function createHarness({ preview = true, draft = null, h5 = false } = {}) {
     onLoad: (handler) => { state.load = handler },
     setTimeout, clearTimeout,
     ensureLogin: async () => { state.logins++ },
+    getToken: () => 'owner',
     createBookingApi: async (payload) => {
       if (state.failing) throw new Error('网络中断')
       state.requests.push(payload)
+      return state.booking
     },
+    createCourseBookingOrderApi: async () => ({}),
+    getCourseBookingOrderStatusApi: async () => ({ status: state.paymentState === 'success' ? 'paid' : 'pending' }),
+    createWechatPaymentController: () => ({ stop() {}, purchase: async () => ({ state: state.paymentState, message: '支付未完成' }) }),
     userErrorMessage: (error, fallback) => error.message || fallback,
     clearBookingDraft: () => { state.clears++ },
     loadBookingDraft: () => state.draft,
@@ -135,5 +140,18 @@ function createBooking(options) {
   assert.equal(state.setIntents.length, 0, 'unavailable courses cannot create a booking intent')
   await state.load({ id: 'course-1' })
   assert.equal(context.page.course.value.title, '工作室已配置的课程')
+}
+{
+  const { state, page } = createBooking({ preview: false })
+  page.form.value = { contactName: '示例学员', phone: '13800138000', intent: '成长课', preferredTime: '', message: '' }
+  page.consent.value = true
+  state.booking = { id: '51', paymentMode: 'paid', paymentStatus: 'pending' }
+  state.paymentState = 'cancelled'
+  await page.submit()
+  assert.equal(page.submitted.value, false)
+  state.paymentState = 'success'
+  await page.submit()
+  assert.equal(state.requests.length, 1, 'retry payment reuses the saved booking')
+  assert.equal(page.successTitle.value, '课程已支付，期待与你相遇')
 }
 console.log('Booking and course-detail flow tests passed')

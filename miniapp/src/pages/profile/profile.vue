@@ -228,6 +228,10 @@ function openBookingRecords() {
   uni.navigateTo({ url: '/pages/booking-records/booking-records' })
 }
 
+function openOrders() {
+  uni.navigateTo({ url: '/pages/orders/orders' })
+}
+
 function openLearn() {
   uni.switchTab({ url: '/pages/learn/learn' })
 }
@@ -306,6 +310,7 @@ async function testWechatPayment() {
         </view>
 
         <view class="profile-actions" aria-label="个人快捷操作">
+          <button class="profile-action" @click="openOrders"><view class="profile-action__icon"><NxIcon name="book" :size="25" color="#A55C3B" /></view><text class="profile-action__title">我的订单</text><text class="profile-action__desc">支付与课程记录</text></button>
           <button class="profile-action" @click="openBookingRecords"><view class="profile-action__icon"><NxIcon name="calendar" :size="25" color="#A55C3B" /></view><text class="profile-action__title">报名记录</text><text class="profile-action__desc">查看我的安排</text></button>
           <button class="profile-action" @click="openTest"><view class="profile-action__icon"><NxIcon name="spark" :size="25" color="#A55C3B" /></view><text class="profile-action__title">九型探索</text><text class="profile-action__desc">更懂自己的内心</text></button>
           <button class="profile-action" @click="openLearn"><view class="profile-action__icon"><NxIcon name="video" :size="25" color="#A55C3B" /></view><text class="profile-action__title">老师日常</text><text class="profile-action__desc">把看见带回生活</text></button>
@@ -380,7 +385,7 @@ button:focus-visible { outline: 3rpx solid #A55C3B; outline-offset: 5rpx; }
 .profile-stat__value { display: block; font-family: Georgia, serif; font-size: 44rpx; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .profile-stat__unit { padding-left: 4rpx; font-family: sans-serif; font-size: 21rpx; }
 .profile-stat__label { display: block; margin-top: 12rpx; color: #77786F; font-size: 23rpx; }
-.profile-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 26rpx; padding: 20rpx 0; }
+.profile-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 26rpx; padding: 20rpx 0; }
 .profile-action { display: flex; min-height: 152rpx; flex-direction: column; align-items: center; justify-content: center; }
 .profile-action__icon { display: flex; width: 80rpx; height: 74rpx; align-items: center; justify-content: center; }
 .profile-action__title { display: block; margin-top: 9rpx; font-size: 27rpx; font-weight: 500; }

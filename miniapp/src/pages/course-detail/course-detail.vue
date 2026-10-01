@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { onLoad } from '@dcloudio/uni-app'
+import { onLoad, onUnload } from '@dcloudio/uni-app'
 import NxIcon from '../../components/NxIcon.vue'
 import NxImagePreview from '../../components/NxImagePreview.vue'
 import { STUDIO_COURSES, STUDIO_TEACHER } from '../../data/teacherStudio'
@@ -10,10 +10,18 @@ import { normalizeMiniappCourses, normalizeTeachers } from '../../utils/teacherC
 import { setBookingIntent } from '../../utils/bookingIntent'
 import { previewImage } from '../../utils/imagePreview'
 import { isWechatDevtools } from '../../utils/imagePreview'
+import { ensureLogin, getToken } from '../../utils/auth'
+import { createCourseOrderApi, devPayCourseBookingOrderApi, getCourseBookingOrderStatusApi } from '../../api'
+import { createWechatPaymentController, payWechatOrder } from '../../utils/payment'
+import { userErrorMessage } from '../../utils/userMessage'
 
 const courseId = ref('')
 const config = ref(getStoredSiteConfig() || {})
 const loading = ref(false)
+const paying = ref(false)
+let paymentController = null
+let active = true
+onUnload(() => { active = false; paymentController?.stop() })
 const activeSection = ref('intro')
 const sections = [{ id: 'intro', label: '课程介绍' }, { id: 'outline', label: '学习内容' }, { id: 'notice', label: '报名须知' }]
 const courses = computed(() => UI_PREVIEW ? STUDIO_COURSES : normalizeMiniappCourses(config.value))
@@ -45,8 +53,46 @@ function chooseSection(section) {
   activeSection.value = section
   uni.pageScrollTo({ selector: `#section-${section}`, duration: 250, offsetTop: -24 })
 }
-function enroll() {
-  if (!course.value) return
+async function enroll() {
+  if (!course.value || paying.value) return
+  if (course.value.priceCents > 0) {
+    if (UI_PREVIEW || typeof window !== 'undefined') {
+      uni.showToast({ title: '请在微信小程序内完成支付', icon: 'none' })
+      return
+    }
+    paying.value = true
+    let paymentToken = ''
+    try {
+      await ensureLogin()
+      if (!active) return
+      paymentToken = getToken()
+      const selectedId = course.value.id
+      const requireSession = () => {
+        if (!active || !paymentToken || getToken() !== paymentToken) throw new Error('登录状态已更新，请重新支付')
+      }
+      paymentController = createWechatPaymentController({
+        create: () => { requireSession(); return createCourseOrderApi(selectedId) },
+        pay: (order) => {
+          requireSession()
+          return payWechatOrder(order, { devPay: (pending) => devPayCourseBookingOrderApi(pending.outTradeNo) })
+        },
+        status: (order) => { requireSession(); return getCourseBookingOrderStatusApi(order.bookingId) },
+        isPaid: (status) => status?.status === 'paid',
+      })
+      const result = await paymentController.purchase()
+      if (!active || getToken() !== paymentToken) return
+      if (result?.state === 'success') {
+        uni.navigateTo({ url: '/pages/orders/orders' })
+      } else {
+        uni.showToast({ title: result?.state === 'cancelled' ? '已取消，可到我的订单继续支付' : result?.message || '请到我的订单查看支付结果', icon: 'none' })
+      }
+    } catch (error) {
+      if (active && (!paymentToken || getToken() === paymentToken)) {
+        uni.showToast({ title: userErrorMessage(error, '支付未完成，请稍后重试'), icon: 'none' })
+      }
+    } finally { paying.value = false; paymentController = null }
+    return
+  }
   const detail = course.value.schedule ? `${course.value.title} · ${course.value.schedule}` : course.value.title
   const saved = setBookingIntent({ kind: 'course', courseId: course.value.id, intentText: detail })
   if (!saved) {
@@ -91,10 +137,10 @@ function outlineDescription(item) { return typeof item === 'object' && item ? it
         <button v-if="teacher" class="teacher-card" @click="teacherDetail"><view v-if="teacherAvatar && !teacherAvatarFailed" class="teacher-avatar-action" :aria-label="`预览${teacher.name}老师头像`" @click.stop="previewTeacherAvatar"><image class="teacher-avatar" :src="teacherAvatar" mode="aspectFill" :aria-label="teacher.name" @error="teacherAvatarFailed = true" /></view><view v-else class="teacher-avatar teacher-avatar--fallback">{{ teacher.name.slice(0, 1) }}</view><view class="teacher-copy"><text class="teacher-overline">你的学习向导</text><text class="teacher-name">{{ teacher.name }}</text><text class="teacher-title">{{ teacher.title }}</text></view><NxIcon name="arrow" :size="21" /></button>
         <view id="section-outline" class="content-section"><text class="eyebrow">LEARNING JOURNEY</text><text class="section-title">一步一步，把觉察带回日常</text><view v-if="outline.length" class="outline-list"><view v-for="(item, index) in outline" :key="index" class="outline-item"><text class="outline-number">0{{ index + 1 }}</text><view><text class="outline-title">{{ outlineTitle(item) }}</text><text v-if="outlineDescription(item)" class="outline-description">{{ outlineDescription(item) }}</text></view></view></view><view v-else class="outline-empty"><text class="body-copy">{{ course.description }}</text><text class="muted-copy">详细学习内容与课程安排，可在报名沟通时向工作室了解。</text></view></view>
         <view class="quote-note"><text class="quote-mark">“</text><view class="quote-copy"><text>学习不是为自己贴上标签，</text><text>而是为改变留出空间。</text></view><text class="quote-footer">让理解发生，让成长继续。</text></view>
-        <view id="section-notice" class="content-section notice-section"><text class="eyebrow">BEFORE WE MEET</text><text class="section-title">相遇之前，你可能想知道</text><view class="notice-item"><text class="notice-label">如何报名</text><text class="body-copy">{{ course.notice || (course.paymentMode === 'paid' ? '提交报名并完成微信支付后，工作室会与你确认开课时间与席位安排。' : '提交报名意向后，工作室会联系你确认课程、时间与费用。意向提交不等于支付或席位确认。') }}</text></view><view class="notice-item"><text class="notice-label">课程安排</text><text class="body-copy">{{ UI_PREVIEW ? '当前页面的排期、地点与价格为界面演示数据。正式开课信息，请以工作室实际发布与确认为准。' : '具体开课时间、地点、费用及调整规则，以工作室实际发布与确认为准。' }}</text></view><view class="notice-item"><text class="notice-label">学习建议</text><text class="body-copy">带着好奇和真实问题来，不需要提前确定自己的性格类型。九型人格帮助自我觉察，不替代专业心理诊疗。</text></view></view>
+        <view id="section-notice" class="content-section notice-section"><text class="eyebrow">BEFORE WE MEET</text><text class="section-title">相遇之前，你可能想知道</text><view class="notice-item"><text class="notice-label">如何报名</text><text class="body-copy">{{ course.notice || (course.paymentMode === 'paid' ? '完成微信支付后，可在我的订单中查看报名信息与支付状态。' : '提交报名意向后，工作室会联系你确认课程、时间与费用。意向提交不等于支付或席位确认。') }}</text></view><view class="notice-item"><text class="notice-label">课程安排</text><text class="body-copy">{{ UI_PREVIEW ? '当前页面的排期、地点与价格为界面演示数据。正式开课信息，请以工作室实际发布与确认为准。' : '具体开课时间、地点、费用及调整规则，以工作室实际发布与确认为准。' }}</text></view><view class="notice-item"><text class="notice-label">学习建议</text><text class="body-copy">带着好奇和真实问题来，不需要提前确定自己的性格类型。九型人格帮助自我觉察，不替代专业心理诊疗。</text></view></view>
         <view class="page-ending"><view /><text>期待，与你在课堂相遇</text><view /></view>
       </view>
-      <view class="enroll-bar"><view class="enroll-price"><view v-if="course.price !== undefined"><text class="currency">¥</text><text class="price">{{ course.price.toLocaleString() }}</text><text class="price-unit"> / 人</text></view><text v-else class="consult-price">预约了解课程</text><text class="price-caption">{{ UI_PREVIEW ? '演示价格 · 无需在线支付' : course.paymentMode === 'paid' ? '在线支付后确认报名' : '提交意向后确认安排' }}</text></view><button class="enroll-button" @click="enroll">{{ course.paymentMode === 'paid' ? '报名并支付' : '报名这门课程' }} <NxIcon name="arrow" :size="18" color="#FFFFFF" /></button></view>
+      <view class="enroll-bar"><view class="enroll-price"><view v-if="course.price !== undefined"><text class="currency">¥</text><text class="price">{{ course.price.toLocaleString() }}</text><text class="price-unit"> / 人</text></view><text v-else class="consult-price">咨询老师</text><text class="price-caption">{{ UI_PREVIEW ? '演示价格 · 无需在线支付' : course.paymentMode === 'paid' ? '在线支付后确认报名' : '提交意向后确认安排' }}</text></view><button class="enroll-button" :disabled="paying" :loading="paying" @click="enroll">{{ paying ? '确认支付中' : course.paymentMode === 'paid' ? '立即支付' : '咨询老师' }} <NxIcon name="arrow" :size="18" color="#FFFFFF" /></button></view>
       <NxImagePreview
         v-if="teacherAvatar && !teacherAvatarFailed"
         :visible="teacherAvatarPreviewVisible"

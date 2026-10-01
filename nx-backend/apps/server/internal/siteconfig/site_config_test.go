@@ -249,8 +249,76 @@ func TestMiniappCoursesValidatePaidPriceAndIDs(t *testing.T) {
 	if _, err := MiniappCourses(base); err != nil {
 		t.Fatal(err)
 	}
-	base.Home["miniappCourses"].(map[string]any)["items"] = []any{map[string]any{"id": "c1", "title": "课", "paymentMode": "paid", "priceCents": 0}}
+	base.Home["miniappCourses"].(map[string]any)["items"] = []any{map[string]any{"id": "c1", "title": "课", "paymentMode": "paid", "priceCents": -1}}
 	if _, err := MiniappCourses(base); err == nil {
-		t.Fatal("expected paid zero price rejection")
+		t.Fatal("expected negative price rejection")
+	}
+}
+
+func TestMiniappCoursePriceDeterminesCheckoutAndPersistedConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, want string
+		price            any
+	}{
+		{"zero overrides paid", "paid", "consult", 0},
+		{"missing price", "paid", "consult", nil},
+		{"positive overrides consult", "consult", "paid", 12800},
+		{"missing mode", "", "paid", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig()
+			item := map[string]any{"id": "course1", "title": "课程一", "enabled": true, "paymentMode": tc.mode}
+			if tc.price != nil {
+				item["priceCents"] = tc.price
+			}
+			cfg.Home["miniappCourses"] = map[string]any{"items": []any{item}}
+			courses, err := MiniappCourses(cfg)
+			if err != nil || len(courses) != 1 || courses[0].PaymentMode != tc.want {
+				t.Fatalf("courses=%+v err=%v want mode=%s", courses, err, tc.want)
+			}
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := Write(path, cfg); err != nil {
+				t.Fatal(err)
+			}
+			got, err := Read(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mode := got.Home["miniappCourses"].(map[string]any)["items"].([]any)[0].(map[string]any)["paymentMode"]
+			if mode != tc.want {
+				t.Fatalf("public/persisted mode=%v want=%s", mode, tc.want)
+			}
+		})
+	}
+}
+
+func TestMiniappCourseRejectsInvalidPriceRegardlessOfMode(t *testing.T) {
+	for _, price := range []any{-1, MaxCoursePriceCents + 1, 1.5, "100"} {
+		cfg := validConfig()
+		cfg.Home["miniappCourses"] = map[string]any{"items": []any{map[string]any{"id": "course1", "title": "课程一", "paymentMode": "consult", "priceCents": price}}}
+		if _, err := MiniappCourses(cfg); err == nil {
+			t.Fatalf("accepted invalid price %v", price)
+		}
+	}
+}
+
+func TestMiniappCourseNormalizationPreservesExtensionFields(t *testing.T) {
+	cfg := validConfig()
+	cfg.Home["miniappCourses"] = map[string]any{"layout": "compact", "extensions": map[string]any{"version": 2}, "items": []any{map[string]any{"id": "c1", "title": "课程", "priceCents": 100, "paymentMode": "consult", "customSchedule": []any{"周六", "周日"}, "teacher": map[string]any{"id": "teacher-one"}}}}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := Write(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := got.Home["miniappCourses"].(map[string]any)
+	item := catalog["items"].([]any)[0].(map[string]any)
+	if catalog["layout"] != "compact" || catalog["extensions"] == nil || item["customSchedule"] == nil || item["teacher"] == nil {
+		t.Fatalf("normalization discarded custom course configuration: %+v", catalog)
+	}
+	if item["paymentMode"] != "paid" {
+		t.Fatalf("price not normalized: %+v", item)
 	}
 }

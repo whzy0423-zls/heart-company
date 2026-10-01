@@ -146,6 +146,20 @@ try {
     auth: true,
   });
 
+  await api.createCourseOrderApi('growth-course');
+  assert.deepEqual(requestStub.calls.at(-1), {
+    url: '/miniapp/course/orders', method: 'POST', auth: true,
+    data: { courseId: 'growth-course' },
+  });
+  assert.throws(() => api.createCourseOrderApi('../invalid'), /课程参数无效/);
+  await api.listMiniappOrdersApi({ page: 2, pageSize: 20, status: 'paid' });
+  assert.deepEqual(requestStub.calls.at(-1), {
+    url: '/miniapp/orders', method: 'GET', auth: true,
+    query: { page: 2, pageSize: 20, status: 'paid' },
+  });
+  await api.listMiniappOrdersApi();
+  assert.deepEqual(requestStub.calls.at(-1).query, { page: 1, pageSize: 20 });
+
   await api.createClassroomOrderApi("series", 12);
   await api.getClassroomOrderStatusApi("content", 21);
   await api.devPayClassroomOrderApi("cls-21");

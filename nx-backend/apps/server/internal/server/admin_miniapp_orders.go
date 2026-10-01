@@ -12,6 +12,11 @@ import (
 
 type adminMiniappOrder struct {
 	ID            int64  `json:"id"`
+	RefID         string `json:"refId"`
+	BookingID     string `json:"bookingId"`
+	CourseID      string `json:"courseId"`
+	CourseTitle   string `json:"courseTitle"`
+	ContactName   string `json:"contactName"`
 	OutTradeNo    string `json:"outTradeNo"`
 	WxUserID      int64  `json:"wxUserId"`
 	Phone         string `json:"phone"`
@@ -49,19 +54,19 @@ func (s *Server) adminMiniappOrders(w http.ResponseWriter, r *http.Request) {
 	}
 	whereSQL := strings.Join(where, " AND ")
 	var total int
-	if err := s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM orders o LEFT JOIN wx_users u ON u.id=o.wx_user_id WHERE `+whereSQL, args...).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM orders o LEFT JOIN wx_users u ON u.id=o.wx_user_id LEFT JOIN bookings b ON o.product='course_booking' AND b.id=o.ref_id AND b.wx_user_id=o.wx_user_id WHERE `+whereSQL, args...).Scan(&total); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	listArgs := append([]any{}, args...)
 	listArgs = append(listArgs, pageSize, (page-1)*pageSize)
 	rows, err := s.db.QueryContext(r.Context(), `
-		SELECT o.id, o.out_trade_no, o.wx_user_id, COALESCE(u.phone,''), COALESCE(u.nickname,''),
+		SELECT o.id, o.out_trade_no, o.wx_user_id, COALESCE(NULLIF(b.phone,''),u.phone,''), COALESCE(u.nickname,''),
 		       o.product, o.title, o.amount, o.status, COALESCE(o.transaction_id,''),
 		       to_char(o.create_time AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'),
 		       to_char(o.update_time AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'),
-		       COALESCE(to_char(o.paid_at AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'), '')
-		FROM orders o LEFT JOIN wx_users u ON u.id=o.wx_user_id
+		       COALESCE(to_char(o.paid_at AT TIME ZONE 'Asia/Shanghai', 'YYYY/MM/DD HH24:MI:SS'), ''),o.ref_id::text,COALESCE(b.id::text,''),COALESCE(b.course_id,''),COALESCE(b.course_title,''),COALESCE(b.contact_name,'')
+		FROM orders o LEFT JOIN wx_users u ON u.id=o.wx_user_id LEFT JOIN bookings b ON o.product='course_booking' AND b.id=o.ref_id AND b.wx_user_id=o.wx_user_id
 		WHERE `+whereSQL+` ORDER BY o.create_time DESC, o.id DESC
 		LIMIT $`+strconv.Itoa(len(args)+1)+` OFFSET $`+strconv.Itoa(len(args)+2), listArgs...)
 	if err != nil {
@@ -73,7 +78,7 @@ func (s *Server) adminMiniappOrders(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var item adminMiniappOrder
 		var paidAt sql.NullString
-		if err := rows.Scan(&item.ID, &item.OutTradeNo, &item.WxUserID, &item.Phone, &item.Nickname, &item.Product, &item.Title, &item.Amount, &item.Status, &item.TransactionID, &item.CreateTime, &item.UpdateTime, &paidAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.OutTradeNo, &item.WxUserID, &item.Phone, &item.Nickname, &item.Product, &item.Title, &item.Amount, &item.Status, &item.TransactionID, &item.CreateTime, &item.UpdateTime, &paidAt, &item.RefID, &item.BookingID, &item.CourseID, &item.CourseTitle, &item.ContactName); err != nil {
 			httpx.Fail(w, http.StatusInternalServerError, err.Error())
 			return
 		}

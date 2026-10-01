@@ -43,7 +43,29 @@ func EnsureMiniappCourses(config *SiteConfig) {
 	if config.Home == nil {
 		config.Home = map[string]any{}
 	}
-	if _, exists := config.Home["miniappCourses"]; exists {
+	if value, exists := config.Home["miniappCourses"]; exists {
+		// Price is the single source of truth, including legacy saved modes.
+		// Keep malformed prices intact so validation still rejects them.
+		raw, err := json.Marshal(value)
+		var catalog MiniappCoursesConfig
+		if err == nil && json.Unmarshal(raw, &catalog) == nil && catalog.Items != nil {
+			// Patch only the derived field, keeping extension fields owned by
+			// other editors intact on both reads and subsequent writes.
+			var normalized map[string]any
+			_ = json.Unmarshal(raw, &normalized)
+			items, ok := normalized["items"].([]any)
+			if ok {
+				for i, course := range catalog.Items {
+					if item, ok := items[i].(map[string]any); ok {
+						item["paymentMode"] = "consult"
+						if course.PriceCents > 0 {
+							item["paymentMode"] = "paid"
+						}
+					}
+				}
+				config.Home["miniappCourses"] = normalized
+			}
+		}
 		return
 	}
 	raw, _ := json.Marshal(config.Home["courses"])
@@ -113,7 +135,7 @@ func MiniappCourses(config SiteConfig) ([]MiniappCourse, error) {
 		if item.PaymentMode != "consult" && item.PaymentMode != "paid" {
 			return nil, fmt.Errorf("course paymentMode must be consult or paid")
 		}
-		if item.PriceCents < 0 || item.PriceCents > MaxCoursePriceCents || (item.PaymentMode == "paid" && item.PriceCents == 0) {
+		if item.PriceCents < 0 || item.PriceCents > MaxCoursePriceCents {
 			return nil, fmt.Errorf("invalid course priceCents")
 		}
 		if err := validateURLField("home.miniappCourses.cover", item.Cover, urlKindMedia); err != nil {

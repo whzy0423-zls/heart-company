@@ -40,9 +40,11 @@ type courseOrderStatusResponse struct {
 }
 type courseOrderRequest struct {
 	BookingID string `json:"bookingId"`
+	CourseID  string `json:"courseId"`
 }
 
 func registerCourseOrderRoutes(mux *http.ServeMux, authn func(http.HandlerFunc) http.HandlerFunc, s *Server) {
+	mux.HandleFunc("/api/miniapp/orders", s.method(http.MethodGet, authn(s.miniappOrders)))
 	mux.HandleFunc("/api/miniapp/course/orders", s.method(http.MethodPost, authn(s.courseOrderCreate)))
 	mux.HandleFunc("/api/miniapp/course/orders/status", s.method(http.MethodGet, authn(s.courseOrderStatus)))
 	mux.HandleFunc("/api/miniapp/course/orders/dev-pay", s.method(http.MethodPost, authn(s.courseOrderDevPay)))
@@ -87,22 +89,44 @@ func (s *Server) courseOrderCreate(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
 		return
 	}
-	id, err := parseBookingID(body.BookingID)
-	if err != nil {
-		httpx.Fail(w, http.StatusBadRequest, err.Error())
+	body.BookingID, body.CourseID = strings.TrimSpace(body.BookingID), strings.TrimSpace(body.CourseID)
+	if (body.BookingID == "") == (body.CourseID == "") {
+		httpx.Fail(w, http.StatusBadRequest, "provide exactly one of courseId or bookingId")
 		return
 	}
 	uid := userFromRequest(r).ID
-	booking, err := s.miniapp.CourseBooking(r.Context(), uid, id)
+	var booking miniapp.CourseBooking
+	var course siteconfig.MiniappCourse
+	var err error
+	if body.CourseID != "" {
+		course, err = s.readMiniappCourse(r.Context(), body.CourseID)
+		if err == nil {
+			if !course.Enabled {
+				httpx.Fail(w, http.StatusConflict, "课程报名已下架")
+				return
+			}
+			if course.PriceCents <= 0 {
+				httpx.Fail(w, http.StatusConflict, "该课程需要咨询确认")
+				return
+			}
+			booking, err = s.miniapp.CreateOrReuseCourseBooking(r.Context(), uid, course)
+		}
+	} else {
+		id, parseErr := parseBookingID(body.BookingID)
+		if parseErr != nil {
+			httpx.Fail(w, http.StatusBadRequest, parseErr.Error())
+			return
+		}
+		booking, err = s.miniapp.CourseBooking(r.Context(), uid, id)
+		if err == nil {
+			course, err = s.readMiniappCourse(r.Context(), booking.CourseID)
+		}
+	}
 	if err != nil {
 		writeCourseOrderError(w, err)
 		return
 	}
-	course, err := s.readMiniappCourse(r.Context(), booking.CourseID)
-	if err != nil {
-		writeCourseOrderError(w, err)
-		return
-	}
+	id, _ := parseBookingID(booking.ID)
 	if !course.Enabled {
 		httpx.Fail(w, http.StatusConflict, "课程报名已下架")
 		return
@@ -171,6 +195,10 @@ func (s *Server) courseOrderStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	status := booking.PaymentStatus
 	order, orderErr := s.miniapp.LatestOrderForTarget(r.Context(), userFromRequest(r).ID, miniapp.ProductCourseBooking, id)
+	if orderErr != nil && !errors.Is(orderErr, sql.ErrNoRows) {
+		httpx.Fail(w, http.StatusInternalServerError, "读取课程订单状态失败")
+		return
+	}
 	if orderErr == nil {
 		if order.Status == "paid" {
 			status = "paid"

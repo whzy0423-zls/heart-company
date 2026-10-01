@@ -3,7 +3,7 @@ import { computed, ref, watch, nextTick } from 'vue'
 import { onShow, onHide, onUnload } from '@dcloudio/uni-app'
 import NxIcon from '../../components/NxIcon.vue'
 import NxImagePreview from '../../components/NxImagePreview.vue'
-import { ensureLogin } from '../../utils/auth'
+import { ensureLogin, getToken } from '../../utils/auth'
 import { createBookingApi, createCourseBookingOrderApi, devPayCourseBookingOrderApi, getCourseBookingOrderStatusApi } from '../../api'
 import { userErrorMessage } from '../../utils/userMessage'
 import { clearBookingDraft, loadBookingDraft, saveBookingDraft } from '../../utils/bookingDraft'
@@ -11,7 +11,7 @@ import { consumeBookingIntent } from '../../utils/bookingIntent'
 import { getCachedSiteConfig, getStoredSiteConfig } from '../../utils/siteConfig'
 import { normalizePersonalExpertHome } from '../../utils/personalExpertHome'
 import { normalizeMiniappCourses, normalizeTeachers } from '../../utils/teacherCourseware'
-import { createWechatPaymentController } from '../../utils/payment'
+import { createWechatPaymentController, payWechatOrder } from '../../utils/payment'
 import { normalizeMiniappLearn } from '../../utils/miniappPages'
 import { STUDIO_COURSES, STUDIO_TEACHER } from '../../data/teacherStudio'
 import { UI_PREVIEW } from '../../utils/uiPreview'
@@ -46,6 +46,10 @@ const consent = ref(false)
 const submitting = ref(false)
 const paymentMessage = ref('')
 const submitted = ref(false)
+const submittedPaid = ref(false)
+let pendingBooking = null
+let paymentController = null
+let pageActive = true
 const submittedKind = ref('course')
 const siteConfig = ref(getStoredSiteConfig() || {})
 const enterpriseView = computed(() => normalizePersonalExpertHome(siteConfig.value).enterprise)
@@ -67,7 +71,7 @@ const formTitle = computed(() => ({ course: '为下一次成长，留一个位�
 const formHint = computed(() => ({ course: '留下联系方式，我们将与你确认课程安排。', consult: '简单说说你的困惑，老师会与你沟通咨询安排。', enterprise: '告诉我们团队背景，共同讨论适合的形式。' }[currentKind.value]))
 const intentPlaceholder = computed(() => ({ course: '选择上方课程，或填写感兴趣的主题', consult: '如：自我探索 / 亲密关系 / 职场沟通', enterprise: '如：团队工作坊 / 管理者培训' }[currentKind.value]))
 const messagePlaceholder = computed(() => currentKind.value === 'enterprise' ? '团队规模、背景，或希望改善的协作议题（选填）' : '想提前告诉老师的事，或你对课程的期待（选填）')
-const successTitle = computed(() => ({ course: '你的学习意向，已收到', consult: '你的咨询预约，已收到', enterprise: '你的企业需求，已收到' }[submittedKind.value]))
+const successTitle = computed(() => submittedPaid.value ? '课程已支付，期待与你相遇' : ({ course: '你的学习意向，已收到', consult: '你的咨询预约，已收到', enterprise: '你的企业需求，已收到' }[submittedKind.value]))
 const DRAFT_SAVE_DELAY = 250
 let draftSaveTimer = null
 let configLoadId = 0
@@ -111,12 +115,13 @@ onShow(() => {
   applyBookingIntent()
 })
 onHide(flushDraftSave)
-onUnload(flushDraftSave)
+onUnload(() => { pageActive = false; paymentController?.stop(); flushDraftSave() })
 
 async function applyBookingIntent() {
   const intent = consumeBookingIntent()
   if (intent) {
     submitted.value = false
+    submittedPaid.value = false
     const index = kinds.findIndex((item) => item.value === intent.kind)
     if (index >= 0) kindIndex.value = index
     selectedCourseId.value = intent.kind === 'course' ? (intent.courseId || '') : ''
@@ -208,21 +213,39 @@ async function submit() {
   }
   submitting.value = true
   paymentMessage.value = ''
+  let requestToken = ''
   try {
     await ensureLogin()
+    if (!pageActive) return
+    requestToken = getToken()
+    const currentSession = () => pageActive && getToken() === requestToken
+    const requireSession = () => { if (!currentSession()) throw new Error('登录状态已更新，请重试') }
     const payload = currentDraft()
-    const booking = await createBookingApi(payload)
+    const fingerprint = JSON.stringify(payload)
+    const booking = pendingBooking?.token === requestToken && pendingBooking.fingerprint === fingerprint
+      ? pendingBooking.record : await createBookingApi(payload)
+    if (!currentSession()) return
     if (!UI_PREVIEW && payload.kind === 'course' && booking?.paymentMode === 'paid' && booking?.paymentStatus === 'pending') {
-      const controller = createWechatPaymentController({
-        create: () => createCourseBookingOrderApi(booking.id),
-        devPay: (order) => devPayCourseBookingOrderApi(order.outTradeNo),
-        status: () => getCourseBookingOrderStatusApi(booking.id),
-        isPaid: (status) => status?.status === 'paid' || status?.paymentStatus === 'paid',
-        onChange: (snapshot) => { paymentMessage.value = snapshot.message || '' },
-      })
-      const result = await controller.purchase()
-      if (result?.state !== 'success') throw new Error(result?.message || '支付未完成，请稍后重试')
+      pendingBooking = { token: requestToken, fingerprint, record: booking }
+      const status = await getCourseBookingOrderStatusApi(booking.id)
+      requireSession()
+      if (status?.status !== 'paid') {
+        paymentController = createWechatPaymentController({
+          create: () => { requireSession(); return createCourseBookingOrderApi(booking.id) },
+          pay: (order) => { requireSession(); return payWechatOrder(order, { devPay: (pending) => devPayCourseBookingOrderApi(pending.outTradeNo) }) },
+          status: () => { requireSession(); return getCourseBookingOrderStatusApi(booking.id) },
+          isPaid: (result) => result?.status === 'paid',
+          onChange: (snapshot) => { if (currentSession()) paymentMessage.value = snapshot.message || '' },
+        })
+        const result = await paymentController.purchase()
+        requireSession()
+        if (result?.state !== 'success') throw new Error(result?.message || '支付未完成，可到我的订单继续支付')
+      }
+      submittedPaid.value = true
+    } else {
+      submittedPaid.value = booking?.paymentStatus === 'paid'
     }
+    pendingBooking = null
     submittedKind.value = payload.kind
     cancelPendingDraftSave()
     clearBookingDraft()
@@ -230,12 +253,13 @@ async function submit() {
     resetForm()
     uni.pageScrollTo({ scrollTop: 0, duration: 250 })
   } catch (error) {
-    uni.showToast({ title: userErrorMessage(error, '提交失败，填写内容已保留，请重试'), icon: 'none' })
-  } finally { submitting.value = false }
+    if (pageActive && (!requestToken || getToken() === requestToken)) uni.showToast({ title: userErrorMessage(error, '提交失败，填写内容已保留，请重试'), icon: 'none' })
+  } finally { submitting.value = false; paymentController = null }
 }
 function viewBookingRecords() { uni.navigateTo({ url: '/pages/booking-records/booking-records' }) }
+function viewSubmittedRecord() { uni.navigateTo({ url: submittedPaid.value ? '/pages/orders/orders' : '/pages/booking-records/booking-records' }) }
 function continueClassroom() { uni.switchTab({ url: '/pages/learn/learn' }) }
-function submitAnother() { resetForm(); submitted.value = false }
+function submitAnother() { resetForm(); submitted.value = false; submittedPaid.value = false }
 </script>
 
 <template>
@@ -244,10 +268,10 @@ function submitAnother() { resetForm(); submitted.value = false }
     <view class="page-masthead"><text class="masthead-name">共学与成长</text><button class="records-link" @click="viewBookingRecords">我的报名 <NxIcon name="arrow" :size="16" /></button></view>
     <view v-if="submitted" class="booking-success">
       <view class="success-symbol"><NxIcon name="check" :size="32" /></view>
-      <text class="eyebrow">已提交 · 等待确认</text>
+      <text class="eyebrow">{{ submittedPaid ? '已支付 · 报名成功' : '已提交 · 等待确认' }}</text>
       <text class="success-title">{{ successTitle }}</text>
       <text class="success-copy">工作室将通过你留下的联系方式与你沟通。具体时间、费用与安排，以双方确认为准。</text>
-      <button class="primary-button" @click="viewBookingRecords">查看预约记录 <NxIcon name="arrow" :size="18" color="#FFFFFF" /></button>
+      <button class="primary-button" @click="viewSubmittedRecord">{{ submittedPaid ? '查看我的订单' : '查看预约记录' }} <NxIcon name="arrow" :size="18" color="#FFFFFF" /></button>
       <button v-if="classroomEnabled" class="secondary-button" @click="continueClassroom">继续浏览老师课堂</button>
       <button class="text-button" @click="submitAnother">再提交一个需求</button>
     </view>
@@ -271,7 +295,7 @@ function submitAnother() { resetForm(); submitted.value = false }
             <text class="course-title">{{ course.title }}</text>
             <text class="course-description">{{ course.subtitle || course.description }}</text>
             <view class="course-schedule"><NxIcon name="calendar" :size="15" /><text>{{ course.schedule || '具体排期请咨询工作室' }}</text><text v-if="UI_PREVIEW" class="demo-label">演示排期</text></view>
-            <view class="course-bottom"><view><text v-if="course.price !== undefined" class="course-price"><text class="currency">¥</text>{{ course.price.toLocaleString() }}</text><text v-else class="price-consult">咨询课程安排</text><text v-if="course.price !== undefined" class="price-unit"> / 人</text></view><view class="course-link"><text>了解课程</text><NxIcon name="arrow" :size="18" /></view></view>
+            <view class="course-bottom"><view><text v-if="course.price !== undefined" class="course-price"><text class="currency">¥</text>{{ course.price.toLocaleString() }}</text><text v-else class="price-consult">咨询老师</text><text v-if="course.price !== undefined" class="price-unit"> / 人</text></view><view class="course-link"><text>了解课程</text><NxIcon name="arrow" :size="18" /></view></view>
           </view>
         </button>
         <view v-if="!courses.length" class="empty-card"><NxIcon name="book" :size="30" /><text class="section-title">新的共学，正在准备</text><text class="muted-copy">留下感兴趣的学习方向，我们会与你联系。</text></view>

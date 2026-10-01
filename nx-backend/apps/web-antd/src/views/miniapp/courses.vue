@@ -47,7 +47,7 @@ function normalizeCourse(value: unknown, index: number): MiniappCourse {
     Number.isInteger(source.priceCents) && source.priceCents >= 0
       ? Number(source.priceCents)
       : 0;
-  const paymentMode = source.paymentMode === 'paid' ? 'paid' : 'consult';
+  const paymentMode = priceCents > 0 ? 'paid' : 'consult';
   return {
     ...source,
     id,
@@ -97,6 +97,7 @@ export function yuanToCents(value: string | number) {
   const input = String(value ?? '')
     .trim()
     .replace(/^¥/, '');
+  if (!input) return 0;
   if (!/^(?:0|[1-9]\d*)(?:\.\d{0,2})?$/.test(input)) return null;
   const cents = Math.round(Number(input) * 100);
   return Number.isSafeInteger(cents) && cents <= MAX_PRICE_CENTS ? cents : null;
@@ -121,17 +122,12 @@ export function validateCourse(course: Record<string, any>) {
   ) {
     errors.push('课程价格必须是 0 至 999999 元之间的金额');
   }
-  if (course.paymentMode !== 'consult' && course.paymentMode !== 'paid') {
-    errors.push('请选择课程支付方式');
-  } else if (course.paymentMode === 'paid' && priceCents <= 0) {
-    errors.push('选择付费后，课程价格必须大于 0 元');
-  }
   return errors;
 }
 </script>
 
 <script setup lang="ts">
-import { computed, watch } from 'vue';
+import { computed, reactive, watch } from 'vue';
 
 import {
   Alert,
@@ -142,7 +138,6 @@ import {
   Input,
   message,
   Row,
-  Select,
   Switch,
   Textarea,
 } from 'ant-design-vue';
@@ -153,7 +148,7 @@ import { useSiteConfigEditor } from '#/views/site-config/use-site-config-editor'
 
 const { config, linesToArray, loading, saveConfig, saving } =
   useSiteConfigEditor();
-const priceDrafts = new Map<string, string>();
+const priceDrafts = reactive(new Map<string, string>());
 const catalog = computed<MiniappCoursesConfig | undefined>(() => {
   const home = config.value?.home;
   return home && isRecord(home.miniappCourses)
@@ -162,15 +157,13 @@ const catalog = computed<MiniappCoursesConfig | undefined>(() => {
 });
 const courses = computed(() => catalog.value?.items ?? []);
 
-const paymentOptions = [
-  { label: '咨询报名（暂不在线收款）', value: 'consult' },
-  { label: '微信支付（提交后直接收款）', value: 'paid' },
-];
-
 watch(
   config,
   (current) => {
-    if (current) normalizeMiniappCourses(current);
+    if (current) {
+      normalizeMiniappCourses(current);
+      priceDrafts.clear();
+    }
   },
   { immediate: true },
 );
@@ -186,8 +179,16 @@ function setPrice(course: MiniappCourse, value: string | number) {
   const raw = String(value ?? '').trim();
   priceDrafts.set(course.id, raw);
   const cents = yuanToCents(raw);
-  if (cents !== null) course.priceCents = cents;
-  if (!raw) course.priceCents = 0;
+  if (cents !== null) {
+    course.priceCents = cents;
+    course.paymentMode = cents > 0 ? 'paid' : 'consult';
+  }
+}
+
+function priceError(course: MiniappCourse) {
+  return yuanToCents(priceText(course)) === null
+    ? '请输入 0 至 999999 元之间的金额，最多两位小数'
+    : '';
 }
 
 function addCourse() {
@@ -228,10 +229,10 @@ async function saveCourses() {
   if (!config.value || !catalog.value) return;
   const invalidPrice = catalog.value.items.find((course) => {
     const raw = priceDrafts.get(course.id);
-    return raw !== undefined && raw !== '' && yuanToCents(raw) === null;
+    return raw !== undefined && yuanToCents(raw) === null;
   });
   if (invalidPrice) {
-    message.error('课程价格请输入最多两位小数的有效金额');
+    message.error('课程价格请输入 0 至 999999 元之间的金额，最多两位小数');
     return;
   }
   const ids = new Set<string>();
@@ -253,7 +254,10 @@ async function saveCourses() {
   }
   catalog.value.items.forEach((course) => {
     const cents = yuanToCents(priceText(course));
-    if (cents !== null) course.priceCents = cents;
+    if (cents !== null) {
+      course.priceCents = cents;
+      course.paymentMode = cents > 0 ? 'paid' : 'consult';
+    }
   });
   await saveConfig('已保存小程序课程配置');
 }
@@ -269,7 +273,7 @@ async function saveCourses() {
   >
     <div v-if="catalog" class="course-editor">
       <Alert
-        message="课程默认采用咨询报名。选择微信支付后，必须填写大于 0 元的价格；价格按元输入，最多保留两位小数。"
+        message="金额留空或填写 0，小程序显示「咨询老师」；填写大于 0 元的金额，自动启用微信支付。金额按元输入，最多两位小数。"
         show-icon
         type="info"
       />
@@ -385,21 +389,23 @@ async function saveCourses() {
               </Form.Item>
             </Col>
             <Col :md="8" :xs="24">
-              <Form.Item label="支付方式">
-                <Select
-                  v-model:value="course.paymentMode"
-                  :options="paymentOptions"
+              <Form.Item
+                label="课程价格（元）"
+                :help="priceError(course) || '留空或填 0 为咨询老师；正金额自动启用微信支付'"
+                :validate-status="priceError(course) ? 'error' : undefined"
+              >
+                <Input
+                  :value="priceText(course)"
+                  aria-label="课程价格（元）"
+                  inputmode="decimal"
+                  placeholder="留空或填 0：咨询老师"
+                  @update:value="setPrice(course, $event)"
                 />
               </Form.Item>
             </Col>
             <Col :md="8" :xs="24">
-              <Form.Item label="课程价格（元）">
-                <Input
-                  :value="priceText(course)"
-                  inputmode="decimal"
-                  placeholder="咨询报名可留空"
-                  @update:value="setPrice(course, $event)"
-                />
+              <Form.Item label="小程序报名方式">
+                <span>{{ course.paymentMode === 'paid' ? '微信支付' : '咨询老师' }}</span>
               </Form.Item>
             </Col>
             <Col :md="8" :xs="24">
