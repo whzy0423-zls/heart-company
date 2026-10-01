@@ -12,6 +12,7 @@ The native friend/Moments preview displayed a broken image even though the home 
 - Full `npm run test:config`, `npm run build:mp-weixin`, and `node scripts/share-policy.test.mjs --compiled` passed. The 19 page share/privacy policies remain in place.
 - All 37 deployed images passed anonymous HTTPS GET, MIME, complete byte and SHA-256 comparisons (1,198,627 bytes total).
 - Reopened the final compiled project in Developer Tools Nightly 2.02.2606032 / WeChatLib 3.17.2. The original friend-share dialog now visibly renders the composed teacher photo and nine-type logo, using `studio-36c3f8a46b86.jpg`.
+- Opened the native right-top Moments menu and its “分享到朋友圈预览” dialog. The thumbnail visibly renders the same teacher/brand cover beside the correct title.
 - No share message was sent and no WeChat public release was published. Device-to-device receipt remains part of normal release acceptance.
 
 ## Static asset deployment

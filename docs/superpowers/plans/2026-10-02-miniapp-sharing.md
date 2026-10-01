@@ -28,7 +28,7 @@ Files and work:
 - [x] Private-page `onShow` menu policy with no share callbacks.
 - [x] Full configuration/behavior suite, relevant release media/result regressions and production WeChat build; inspect emitted hook flags and cover artifacts.
 - [x] Reopen the developer-tool project and inspect friend/Timeline controls without sending a share. Record verification results; cold public landing is covered by behavioral tests.
-- [ ] Real-device acceptance: check friend/Timeline cover rendering and open each shared card in another account, including Timeline scene 1154. The initial Developer Tools cover failure was fixed by published HTTPS covers and rechecked in the native friend preview; see the cover-fix deployment receipt. Real-device receipt is a separate acceptance check.
+- [ ] Real-device acceptance: check friend/Timeline cover rendering and open each shared card in another account, including Timeline scene 1154. The initial Developer Tools cover failure was fixed by published HTTPS covers and rechecked in both native friend and Moments previews; see the cover-fix deployment receipt. Real-device receipt is a separate acceptance check.
 Delivery uses the existing main branch. A WeChat public release remains a separate publication step.
 
 No server schema or API changes are expected; sharing uses existing database-backed public content. No new share analytics or marketing attribution is introduced.
