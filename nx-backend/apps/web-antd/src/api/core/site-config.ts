@@ -142,6 +142,7 @@ export interface MiniappCourse {
 }
 
 export interface MiniappCoursesConfig {
+  enabled?: boolean;
   items: MiniappCourse[];
   [key: string]: unknown;
 }

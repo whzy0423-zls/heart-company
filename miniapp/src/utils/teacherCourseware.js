@@ -62,7 +62,7 @@ function firstAsset(source, keys, fallback) {
     const resolved = resolveContentAsset(firstText(source, [key]))
     if (resolved) return resolved
   }
-  return fallback
+  return resolveContentAsset(fallback, fallback)
 }
 
 function normalizeTags(value) {
@@ -169,13 +169,13 @@ const COURSE_EDITORIAL = [
   },
   {
     match: /领导|团队|企业|组织/,
-    cover: '/static/editorial/course-team.webp',
+    cover: '/static/editorial/course-team.jpg',
     materialTypes: ['课件', '视频'],
     duration: '8 讲 · 约 120 分钟',
   },
   {
     match: /家庭|亲子|夫妻|婚姻|系统排列/,
-    cover: '/static/editorial/course-family.webp',
+    cover: '/static/editorial/course-family.jpg',
     materialTypes: ['课件', '视频', '音频'],
     duration: '5 讲 · 约 75 分钟',
   },
@@ -277,5 +277,5 @@ export function normalizeMiniappCourses(config) {
     badge: item.badge,
     bullets: item.bullets,
     paymentMode: 'consult',
-  })).filter((item) => item.enabled)
+  }, index)).filter((item) => item.enabled)
 }

@@ -87,6 +87,10 @@ export function normalizeMiniappCourses(config: {
   const rawItems = Array.isArray(source.items) ? source.items : [];
   const catalog: MiniappCoursesConfig = {
     ...(isRecord(home.miniappCourses) ? home.miniappCourses : {}),
+    enabled:
+      typeof home.miniappCourses?.enabled === 'boolean'
+        ? home.miniappCourses.enabled
+        : true,
     items: rawItems.map((item, index) => normalizeCourse(item, index)),
   };
   home.miniappCourses = catalog;
@@ -272,6 +276,20 @@ async function saveCourses() {
     @save="saveCourses"
   >
     <div v-if="catalog" class="course-editor">
+      <Card size="small" title="课程报名总开关">
+        <div class="course-module-control">
+          <span>显示课程报名模块</span>
+          <Switch
+            v-model:checked="catalog.enabled"
+            aria-label="显示课程报名模块"
+            checked-children="开启"
+            un-checked-children="关闭"
+          />
+        </div>
+        <p class="course-module-description">
+          关闭并保存后，小程序隐藏课程展示、课程详情和新购入口，报名页仅保留填写表单；已配置的课程、历史订单及已购权益保留。视频课堂由学习页管理中的开关单独控制。
+        </p>
+      </Card>
       <Alert
         message="金额留空或填写 0，小程序显示「咨询老师」；填写大于 0 元的金额，自动启用微信支付。金额按元输入，最多两位小数。"
         show-icon
@@ -464,6 +482,16 @@ async function saveCourses() {
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+.course-module-control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.course-module-description {
+  margin: 12px 0 0;
+  color: hsl(var(--muted-foreground));
+  line-height: 1.7;
 }
 .course-toolbar {
   display: flex;

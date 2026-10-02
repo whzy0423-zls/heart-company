@@ -184,8 +184,18 @@ func (s *Server) miniappBookings(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, http.StatusBadRequest, "Invalid JSON payload")
 			return
 		}
+		in.CourseID = strings.TrimSpace(in.CourseID)
 		if in.CourseID != "" {
-			items, courseErr := siteconfig.MiniappCoursesFromStore(r.Context(), s.db, s.env.SiteConfig)
+			config, courseErr := siteconfig.ReadStore(r.Context(), s.db, s.env.SiteConfig)
+			if courseErr != nil {
+				httpx.Fail(w, http.StatusInternalServerError, "课程配置读取失败")
+				return
+			}
+			if !siteconfig.MiniappCoursesEnabled(config) {
+				httpx.Fail(w, http.StatusConflict, "课程报名已关闭，请填写报名意向表单")
+				return
+			}
+			items, courseErr := siteconfig.MiniappCourses(config)
 			if courseErr != nil {
 				httpx.Fail(w, http.StatusInternalServerError, "课程配置读取失败")
 				return

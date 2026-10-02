@@ -29,6 +29,28 @@ const series = buildShareCard({ kind: 'classroom', seriesId: '17' })
 assert.equal(series.timeline.query, 'tab=series&seriesId=17')
 assert.equal(series.appMessage.path, '/pages/classroom/classroom?tab=series&seriesId=17')
 assert.equal(buildShareCard({ kind: 'classroom', seriesId: 'x' }).timeline.query, '')
+const relationPicker = buildShareCard({ kind: 'relation' })
+assert.equal(relationPicker.appMessage.path, '/pages/relation/relation')
+assert.equal(relationPicker.timeline.query, '')
+assert.equal(relationPicker.appMessage.title, '关系合盘｜读懂彼此')
+assert.equal(relationPicker.appMessage.imageUrl, home.appMessage.imageUrl, 'relation shares use an existing public cover')
+for (let myType = 1; myType <= 9; myType++) {
+  for (let taType = 1; taType <= 9; taType++) {
+    const pair = buildShareCard({ kind: 'relation', myType, taType: String(taType), token: 'secret', bookingId: 3, name: '私人姓名', userId: 4 })
+    assert.equal(pair.appMessage.path, `/pages/relation/relation?myType=${myType}&taType=${taType}`)
+    assert.equal(pair.timeline.query, `myType=${myType}&taType=${taType}`)
+    assert.equal(pair.appMessage.title, `${myType}号 × ${taType}号关系合盘｜看见彼此的相处方式`)
+    assert.equal(pair.timeline.title, pair.appMessage.title)
+    assert.equal(pair.appMessage.imageUrl, home.appMessage.imageUrl)
+    assert.equal(pair.timeline.imageUrl, home.appMessage.imageUrl)
+    assert.doesNotMatch(JSON.stringify(pair), /secret|私人姓名|bookingId|userId/, 'share only the ordered public type pair')
+  }
+}
+for (const invalid of [undefined, null, '', 0, 10, -1, 1.5, NaN, Infinity, true, false, '01', ' 1', '1 ', '1\n', '1.0', '1e0', '１', '1&token=secret', [1], { toString: () => '1' }]) {
+  assert.deepEqual(buildShareCard({ kind: 'relation', myType: invalid, taType: 5 }), relationPicker, 'invalid first type falls back to relation picker')
+  assert.deepEqual(buildShareCard({ kind: 'relation', myType: 2, taType: invalid }), relationPicker, 'invalid second type falls back to relation picker')
+}
+assert.equal(buildShareCard({ kind: 'relation', myType: '2', taType: 5, title: '  关系\u0000合盘  ' }).appMessage.title, '关系 合盘')
 for (const type of [1, 2, 3, 4, 5, 6, 7, 8, 9]) {
   const result = buildShareCard({ kind: 'result', type })
   assert.equal(result.appMessage.path, `/pages/result/result?shareType=${type}`)

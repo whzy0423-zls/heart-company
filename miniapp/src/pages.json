@@ -32,12 +32,6 @@
       }
     },
     {
-      "path": "pages/relation/relation",
-      "style": {
-        "navigationBarTitleText": "九型关系合盘"
-      }
-    },
-    {
       "path": "pages/learn/learn",
       "style": {
         "navigationBarTitleText": "学习中心",
@@ -119,6 +113,19 @@
       "style": {
         "navigationBarTitleText": "课程详情"
       }
+    }
+  ],
+  "subPackages": [
+    {
+      "root": "pages/relation",
+      "pages": [
+        {
+          "path": "relation",
+          "style": {
+            "navigationBarTitleText": "九型关系合盘"
+          }
+        }
+      ]
     }
   ],
   "tabBar": {

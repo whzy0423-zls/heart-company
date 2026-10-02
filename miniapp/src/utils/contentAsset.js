@@ -1,4 +1,5 @@
 import { API_BASE, DEFAULT_API_BASE } from '../config.js'
+import shareAssets from '../data/shareAssets.js'
 
 const MAX_DECODE_PASSES = 6
 const REMOTE_ASSET_PREFIXES = [
@@ -101,7 +102,18 @@ export function resolveContentAsset(value, fallback = '') {
     return httpsOrigin(asset) && isSafelyEncodedPath(asset) ? asset : safeFallback
   }
 
-  if (isSafeLocalPath(asset, '/static/')) return asset
+  if (isSafeLocalPath(asset, '/static/')) {
+    // Older course settings used WebP defaults that some WeChat clients cannot
+    // display. Migrate only these bundled defaults; keep custom covers intact.
+    const compatibleAsset = /^\/static\/editorial\/course-(?:team|family)\.webp$/.test(asset)
+      ? asset.replace(/\.webp$/, '.jpg') : asset
+    // These original covers are already published at immutable HTTPS paths.
+    // Keep their source files for H5/share generation, but omit duplicate bytes
+    // from the WeChat package. Portraits and canvas PNGs remain local.
+    const hosted = /^\/static\/(?:share\/|studio-preview\/posters\/|editorial\/course-(?:team|family)\.jpg$)/.test(compatibleAsset)
+      ? shareAssets[compatibleAsset] : ''
+    return hosted ? resolveContentAsset(hosted, safeFallback) : compatibleAsset
+  }
   if (!REMOTE_ASSET_PREFIXES.some((prefix) => isSafeLocalPath(asset, prefix))) {
     return safeFallback
   }

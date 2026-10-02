@@ -8,13 +8,14 @@ import { createBookingApi, createCourseBookingOrderApi, devPayCourseBookingOrder
 import { userErrorMessage } from '../../utils/userMessage'
 import { clearBookingDraft, loadBookingDraft, saveBookingDraft } from '../../utils/bookingDraft'
 import { consumeBookingIntent } from '../../utils/bookingIntent'
-import { getCachedSiteConfig, getStoredSiteConfig } from '../../utils/siteConfig'
+import { refreshSiteConfig, getStoredSiteConfig } from '../../utils/siteConfig'
 import { normalizePersonalExpertHome } from '../../utils/personalExpertHome'
 import { normalizeMiniappCourses, normalizeTeachers } from '../../utils/teacherCourseware'
 import { payWechatOrder } from '../../utils/payment'
 import { createCoursePaymentController, coursePaymentResultUrl } from '../../utils/coursePayment'
 import { normalizeMiniappLearn } from '../../utils/miniappPages'
 import { STUDIO_COURSES, STUDIO_TEACHER } from '../../data/teacherStudio'
+import { isCourseRegistrationEnabled } from '../../utils/courseRegistration'
 import { UI_PREVIEW } from '../../utils/uiPreview'
 import { previewImage } from '../../utils/imagePreview'
 import { isWechatDevtools } from '../../utils/imagePreview'
@@ -55,7 +56,8 @@ const submittedKind = ref('course')
 const siteConfig = ref(getStoredSiteConfig() || {})
 const enterpriseView = computed(() => normalizePersonalExpertHome(siteConfig.value).enterprise)
 const classroomEnabled = computed(() => normalizeMiniappLearn(siteConfig.value).classroom.enabled)
-const courses = computed(() => UI_PREVIEW ? STUDIO_COURSES : normalizeMiniappCourses(siteConfig.value))
+const courseRegistrationEnabled = computed(() => isCourseRegistrationEnabled(siteConfig.value))
+const courses = computed(() => courseRegistrationEnabled.value ? (UI_PREVIEW ? STUDIO_COURSES : normalizeMiniappCourses(siteConfig.value)) : [])
 const selectedCourse = computed(() => courses.value.find((course) => String(course.id) === selectedCourseId.value))
 const teacher = computed(() => UI_PREVIEW ? STUDIO_TEACHER : normalizeTeachers(siteConfig.value)[0])
 const teacherAvatar = computed(() => {
@@ -70,7 +72,7 @@ const serviceModes = computed(() => enterpriseView.value.serviceModes || [])
 const processSteps = computed(() => enterpriseView.value.processSteps || [])
 const formTitle = computed(() => ({ course: '为下一次成长，留一个位置', consult: '从你正在经历的事，聊起', enterprise: '一起找到团队的共学方向' }[currentKind.value]))
 const formHint = computed(() => ({ course: '留下联系方式，我们将与你确认课程安排。', consult: '简单说说你的困惑，老师会与你沟通咨询安排。', enterprise: '告诉我们团队背景，共同讨论适合的形式。' }[currentKind.value]))
-const intentPlaceholder = computed(() => ({ course: '选择上方课程，或填写感兴趣的主题', consult: '如：自我探索 / 亲密关系 / 职场沟通', enterprise: '如：团队工作坊 / 管理者培训' }[currentKind.value]))
+const intentPlaceholder = computed(() => ({ course: courseRegistrationEnabled.value ? '选择上方课程，或填写感兴趣的主题' : '填写感兴趣的课程或学习方向', consult: '如：自我探索 / 亲密关系 / 职场沟通', enterprise: '如：团队工作坊 / 管理者培训' }[currentKind.value]))
 const messagePlaceholder = computed(() => currentKind.value === 'enterprise' ? '团队规模、背景，或希望改善的协作议题（选填）' : '想提前告诉老师的事，或你对课程的期待（选填）')
 const successTitle = computed(() => submittedPaid.value ? '课程已支付，期待与你相遇' : ({ course: '你的学习意向，已收到', consult: '你的咨询预约，已收到', enterprise: '你的企业需求，已收到' }[submittedKind.value]))
 const DRAFT_SAVE_DELAY = 250
@@ -90,7 +92,7 @@ if (draft) {
 function currentDraft() {
   return {
     kind: currentKind.value,
-    ...(currentKind.value === 'course' && selectedCourseId.value ? { courseId: selectedCourseId.value } : {}),
+    ...(courseRegistrationEnabled.value && currentKind.value === 'course' && selectedCourseId.value ? { courseId: selectedCourseId.value } : {}),
     ...form.value,
   }
 }
@@ -119,7 +121,7 @@ onShow(() => {
   // #endif
   paymentController?.resume()
   refreshNavigation()
-  applyBookingIntent()
+  return applyBookingIntent()
 })
 onHide(flushDraftSave)
 onUnload(() => { pageActive = false; paymentController?.stop(); flushDraftSave() })
@@ -137,8 +139,8 @@ async function applyBookingIntent() {
   }
   const loadId = ++configLoadId
   try {
-    const config = await getCachedSiteConfig()
-    if (loadId === configLoadId) siteConfig.value = config || {}
+    const config = await refreshSiteConfig()
+    if (pageActive && loadId === configLoadId) applySiteConfig(config)
   } catch {
     // Cached content and the saved draft remain usable during a network interruption.
   }
@@ -147,12 +149,19 @@ async function applyBookingIntent() {
     scrollToForm()
   }
 }
+function applySiteConfig(config) {
+  siteConfig.value = config || {}
+  if (!courseRegistrationEnabled.value) {
+    selectedCourseId.value = ''
+    pendingBooking = null
+  }
+}
 function selectKind(index) {
   if (submitting.value) return
   kindIndex.value = index
   if (kinds[index]?.value !== 'course') selectedCourseId.value = ''
 }
-function viewCourse(course) { uni.navigateTo({ url: `/pages/course-detail/course-detail?id=${encodeURIComponent(course.id)}` }) }
+function viewCourse(course) { if (!courseRegistrationEnabled.value) { scrollToForm(); return }; uni.navigateTo({ url: `/pages/course-detail/course-detail?id=${encodeURIComponent(course.id)}` }) }
 function previewTeacherAvatar() {
   if (teacherAvatarFailed.value) return
   if (isWechatDevtools()) {
@@ -228,6 +237,11 @@ async function submit() {
     requestToken = getToken()
     const currentSession = () => pageActive && getToken() === requestToken
     const requireSession = () => { if (!currentSession()) throw new Error('登录状态已更新，请重试') }
+    if (selectedCourseId.value) {
+      const latest = await refreshSiteConfig()
+      requireSession()
+      applySiteConfig(latest)
+    }
     const payload = currentDraft()
     const fingerprint = JSON.stringify(payload)
     const booking = pendingBooking?.token === requestToken && pendingBooking.fingerprint === fingerprint
@@ -297,7 +311,7 @@ function submitAnother() { resetForm(); submitted.value = false; submittedPaid.v
       <button class="text-button" @click="submitAnother">再提交一个需求</button>
     </view>
     <block v-else>
-      <view class="booking-hero">
+      <view v-if="courseRegistrationEnabled" class="booking-hero">
         <text class="eyebrow">LEARN TOGETHER</text>
         <view class="hero-title"><text>把理解，</text><text>带进生活里</text></view>
         <text class="hero-description">从一次相遇开始，走向更懂自己的日常。</text>
@@ -307,7 +321,7 @@ function submitAnother() { resetForm(); submitted.value = false; submittedPaid.v
         <button v-for="(kind, index) in kinds" :key="kind.value" :class="['kind-tab', { 'is-active': kindIndex === index }]" role="tab" :aria-selected="kindIndex === index" @click="selectKind(index)">{{ kind.label }}</button>
       </view>
 
-      <view v-if="currentKind === 'course'" class="course-section">
+      <view v-if="courseRegistrationEnabled && currentKind === 'course'" class="course-section">
         <view class="section-heading"><text class="section-title">一起，在课堂里相遇</text><text class="section-meta">{{ courses.length }} 个学习方向</text></view>
         <button v-for="(course, index) in courses" :key="course.id" class="course-card" hover-class="pressed" @click="viewCourse(course)">
           <view class="course-image-wrap"><image class="course-image" :src="course.cover" mode="aspectFill" :aria-label="course.title" /><text class="course-tag">{{ course.tag || '主题课程' }}</text><text class="course-index">0{{ index + 1 }}</text></view>
@@ -322,9 +336,9 @@ function submitAnother() { resetForm(); submitted.value = false; submittedPaid.v
         <view v-if="!courses.length" class="empty-card"><NxIcon name="book" :size="30" /><text class="section-title">新的共学，正在准备</text><text class="muted-copy">留下感兴趣的学习方向，我们会与你联系。</text></view>
       </view>
 
-      <view v-else-if="currentKind === 'consult'" class="consult-section">
+      <view v-else-if="courseRegistrationEnabled && currentKind === 'consult'" class="consult-section">
         <view class="consult-card">
-          <view class="consult-top"><button v-if="teacherAvatar && !teacherAvatarFailed" class="teacher-avatar-action" aria-label="预览老师头像" @click.stop="previewTeacherAvatar"><image class="teacher-avatar" :src="teacherAvatar" mode="aspectFill" @error="teacherAvatarFailed = true" /></button><view v-else class="teacher-avatar teacher-avatar--fallback">{{ (teacher?.name || '老师').slice(0, 1) }}</view><view class="consult-teacher"><text class="teacher-name">{{ teacher?.name || '老师' }} · 一对一</text><text class="muted-copy">一段被认真倾听的时间</text></view><NxIcon name="message" :size="25" /></view>
+          <view class="consult-top"><button v-if="teacherAvatar && !teacherAvatarFailed" class="teacher-avatar-action" aria-label="预览老师头像" @click.stop="previewTeacherAvatar"><image class="teacher-avatar" :src="teacherAvatar" mode="widthFix" :aria-label="`${teacher?.name || '老师'}头像，点击查看原图`" @error="teacherAvatarFailed = true" /></button><view v-else class="teacher-avatar teacher-avatar--fallback">{{ (teacher?.name || '老师').slice(0, 1) }}</view><view class="consult-teacher"><text class="teacher-name">{{ teacher?.name || '老师' }} · 一对一</text><text class="muted-copy">一段被认真倾听的时间</text></view><NxIcon name="message" :size="25" /></view>
           <text class="consult-title">当你想更靠近真实的自己</text>
           <text class="consult-copy">从一段关系、一次情绪，或一个反复出现的困惑开始。和老师一起，看见行为背后的需要，找到属于你的下一步。</text>
           <view class="topic-tags"><text>自我探索</text><text>关系沟通</text><text>成长困惑</text></view>
@@ -333,13 +347,13 @@ function submitAnother() { resetForm(); submitted.value = false; submittedPaid.v
         <text class="section-footnote">九型人格用于自我觉察与成长，不替代专业心理诊疗。</text>
       </view>
 
-      <view v-else class="enterprise-section">
+      <view v-else-if="courseRegistrationEnabled" class="enterprise-section">
         <view class="enterprise-intro"><text class="eyebrow">GROW AS A TEAM</text><text class="section-title">{{ enterpriseView.title }}</text><text class="muted-copy">{{ enterpriseView.lead }}</text></view>
         <button v-for="(mode, index) in serviceModes" :key="mode.title" :class="['service-card', { selected: form.intent === mode.title }]" @click="selectServiceMode(mode)"><text class="service-number">0{{ index + 1 }}</text><view class="service-copy"><text class="service-title">{{ mode.title }}</text><text class="muted-copy">{{ mode.description }}</text></view><NxIcon :name="form.intent === mode.title ? 'check' : 'arrow'" :size="20" /></button>
         <view class="process-list"><view v-for="(step, index) in processSteps" :key="step.title" class="process-step"><text class="process-number">{{ index + 1 }}</text><text>{{ step.title }}</text></view></view>
       </view>
 
-      <view class="form-divider"><view /><NxIcon name="spark" :size="21" /><view /></view>
+      <view v-if="courseRegistrationEnabled" class="form-divider"><view /><NxIcon name="spark" :size="21" /><view /></view>
       <view id="booking-form" class="booking-form">
         <text class="eyebrow">LET'S BEGIN</text><text class="form-title">{{ formTitle }}</text><text class="form-hint">{{ formHint }}</text>
         <view v-if="restoredDraftNotice" class="draft-restored"><text>已恢复上次填写的内容</text><button :disabled="submitting" @click="clearRestoredDraft">清空草稿</button></view>
@@ -372,6 +386,9 @@ function submitAnother() { resetForm(); submitted.value = false; submittedPaid.v
 </template>
 
 <style scoped>
+/* Leave room around the portrait so the circular crop shows the head and upper body. */
+.consult-top .teacher-avatar-action{background:#111419}
+.teacher-avatar-action .teacher-avatar{width:72rpx;height:auto;margin:4rpx auto 0;border-radius:0}
 .booking-page{box-sizing:border-box;min-height:100vh;padding:calc(28rpx + var(--status-bar-height, 0px)) 36rpx calc(56rpx + env(safe-area-inset-bottom));padding-top:calc(144rpx + env(safe-area-inset-top, 0px));background:var(--nx-page-bg);color:var(--nx-text)}
 button{box-sizing:border-box;margin:0;border:0;line-height:1.5}button::after{border:0}button[disabled]{opacity:.48}.page-masthead{display:flex;align-items:center;justify-content:space-between;gap:16rpx}.masthead-name{font-size:24rpx;letter-spacing:3rpx}.records-link{min-height:88rpx;padding:0;display:flex;align-items:center;gap:10rpx;background:transparent;font-size:23rpx;color:var(--nx-text-muted)}.booking-hero{padding:35rpx 2rpx 40rpx}.eyebrow{display:block;color:var(--nx-brand-700);font-size:20rpx;letter-spacing:4rpx;line-height:1.6}.hero-title{display:block;margin-top:20rpx;font-family:'Songti SC','STSong',serif;font-size:64rpx;font-weight:500;line-height:1.4;letter-spacing:1rpx}.hero-title text{display:block}.hero-description{display:block;margin-top:23rpx;font-size:24rpx;line-height:1.8;color:var(--nx-text-muted)}.hero-rule{display:flex;align-items:center;gap:20rpx;margin-top:34rpx;color:var(--nx-text-muted);font-size:20rpx;letter-spacing:3rpx}.hero-rule view{width:58rpx;height:2rpx;background:var(--nx-brand-700)}.kind-tabs{display:flex;border-bottom:1rpx solid var(--nx-border);margin-bottom:36rpx;gap:28rpx}.kind-tab{position:relative;min-height:92rpx;flex:1;background:transparent;padding:20rpx 0;color:var(--nx-text-muted);font-size:27rpx;white-space:nowrap;border-radius:0}.kind-tab.is-active{color:var(--nx-brand-700);font-weight:600}.kind-tab.is-active::before{content:'';position:absolute;bottom:0;left:26%;width:48%;height:4rpx;border-radius:4rpx;background:var(--nx-brand-700)}.section-heading{display:flex;justify-content:space-between;align-items:center;gap:16rpx;margin:0 0 24rpx}.section-title{display:block;font-family:'Songti SC','STSong',serif;font-size:33rpx;line-height:1.5}.section-meta{color:var(--nx-text-muted);font-size:21rpx;flex-shrink:0}.course-card{display:block;padding:0;width:100%;margin-bottom:28rpx;border-radius:24rpx;overflow:hidden;background:var(--nx-surface);text-align:left;box-shadow:0 5rpx 20rpx rgba(56,45,32,.025)}.course-image-wrap{height:296rpx;position:relative;background:#E7E0D3}.course-image{width:100%;height:100%;display:block}.course-tag{position:absolute;top:24rpx;left:24rpx;font-size:20rpx;padding:9rpx 17rpx;border-radius:8rpx;background:rgba(255,255,255,.92);color:var(--nx-text)}.course-index{position:absolute;right:22rpx;bottom:7rpx;font-family:Georgia,serif;font-size:76rpx;color:rgba(255,255,255,.7)}.course-body{padding:29rpx 28rpx 24rpx}.course-subtitle{display:flex;align-items:center;gap:12rpx;font-size:20rpx;color:var(--nx-brand-700);letter-spacing:1rpx}.dot{color:#B5A99A}.course-title{display:block;margin-top:12rpx;font-size:36rpx;font-family:'Songti SC','STSong',serif;line-height:1.4;font-weight:600}.course-description{display:block;margin-top:12rpx;font-size:23rpx;line-height:1.65;color:var(--nx-text-muted)}.course-schedule{display:flex;align-items:center;flex-wrap:wrap;gap:9rpx;margin-top:27rpx;font-size:21rpx;color:var(--nx-text-muted)}.demo-label{font-size:17rpx;border:1rpx solid var(--nx-border);border-radius:4rpx;padding:2rpx 6rpx}.course-bottom{border-top:1rpx solid #EEEAE3;margin-top:24rpx;padding-top:21rpx;display:flex;align-items:center;justify-content:space-between}.course-price{font-family:Georgia,serif;font-size:39rpx;color:var(--nx-brand-700)}.currency{font-size:23rpx;margin-right:5rpx}.price-unit{color:var(--nx-text-muted);font-size:20rpx}.price-consult{color:var(--nx-brand-700);font-size:24rpx}.course-link{display:flex;gap:14rpx;align-items:center;font-size:22rpx}.pressed{opacity:.8}.empty-card{padding:50rpx 30rpx;display:flex;flex-direction:column;align-items:center;gap:20rpx;background:var(--nx-surface);border-radius:24rpx;text-align:center}.muted-copy{display:block;color:var(--nx-text-muted);font-size:23rpx;line-height:1.7}.consult-card{padding:32rpx;background:var(--nx-surface);border-radius:24rpx}.consult-top{display:flex;align-items:center;gap:20rpx}.teacher-avatar-action{display:block;width:90rpx;height:90rpx;flex:0 0 90rpx;padding:0;margin:0;border:0;border-radius:50%;background:transparent;overflow:hidden}.teacher-avatar-action::after{border:0}.teacher-avatar{display:block;width:90rpx;height:90rpx;border-radius:50%;background:var(--nx-border)}.teacher-avatar--fallback{display:flex;align-items:center;justify-content:center;color:var(--nx-brand-700);font-size:32rpx;background:var(--nx-page-bg)}.consult-teacher{flex:1;min-width:0}.teacher-name{display:block;margin-bottom:6rpx;font-size:26rpx}.consult-title{display:block;margin-top:38rpx;font-family:'Songti SC','STSong',serif;font-size:34rpx;line-height:1.5}.consult-copy{display:block;color:var(--nx-text-muted);font-size:25rpx;line-height:1.9;margin-top:18rpx}.topic-tags{display:flex;gap:12rpx;flex-wrap:wrap;margin-top:27rpx}.topic-tags text{background:var(--nx-page-bg);padding:10rpx 18rpx;border-radius:8rpx;color:#6A695F;font-size:21rpx}.consult-note{display:flex;align-items:center;gap:12rpx;margin-top:34rpx;padding-top:24rpx;border-top:1rpx solid var(--nx-border);color:var(--nx-text-muted);font-size:22rpx}.section-footnote{display:block;font-size:20rpx;line-height:1.7;color:var(--nx-text-muted);margin:24rpx 8rpx}.enterprise-intro{padding:16rpx 0 28rpx}.enterprise-intro .section-title{margin:16rpx 0}.service-card{padding:28rpx 24rpx;background:var(--nx-surface);border:1rpx solid transparent;border-radius:20rpx;display:flex;align-items:center;gap:20rpx;margin-bottom:16rpx;text-align:left}.service-card.selected{border-color:var(--nx-brand-700)}.service-number{font-family:Georgia,serif;font-size:31rpx;color:#AC9882;align-self:flex-start;padding-top:3rpx}.service-copy{flex:1}.service-title{display:block;font-size:27rpx;margin-bottom:9rpx}.process-list{display:flex;gap:12rpx;justify-content:space-between;padding:25rpx 0 0}.process-step{display:flex;gap:10rpx;align-items:center;font-size:20rpx;color:var(--nx-text-muted)}.process-number{width:30rpx;height:30rpx;border-radius:50%;border:1rpx solid #CBC1B3;display:flex;align-items:center;justify-content:center;font-size:18rpx}.form-divider{display:flex;align-items:center;gap:23rpx;margin:50rpx 55rpx;color:#A79884}.form-divider view{height:1rpx;background:var(--nx-border);flex:1}.booking-form{padding:32rpx 28rpx;background:var(--nx-surface);border-radius:24rpx}.form-title{display:block;margin:16rpx 0;font-family:'Songti SC','STSong',serif;font-size:36rpx;line-height:1.5}.form-hint{display:block;color:var(--nx-text-muted);font-size:23rpx;line-height:1.7;margin-bottom:34rpx}.draft-restored{display:flex;align-items:center;justify-content:space-between;gap:12rpx;background:#F3F0E9;border-radius:10rpx;padding:4rpx 18rpx;margin:0 0 24rpx;font-size:21rpx;color:var(--nx-text-muted)}.draft-restored button{min-height:88rpx;padding:10rpx 0;display:flex;align-items:center;background:transparent;color:var(--nx-brand-700);font-size:21rpx}.field{position:relative;margin-top:27rpx}.field-label{display:block;font-size:25rpx;margin-bottom:14rpx}.required{color:var(--nx-brand-700);font-size:20rpx}.optional{margin-left:10rpx;font-size:20rpx;color:#8B8B82}.field-control{box-sizing:border-box;width:100%;height:88rpx;line-height:1.5;padding:0 20rpx;background:#F8F7F3;border:1rpx solid #EEEAE3;border-radius:10rpx;font-size:24rpx;color:var(--nx-text)}.message-input{height:188rpx;min-height:188rpx;padding:20rpx 20rpx 37rpx}.message-count{position:absolute;right:16rpx;bottom:11rpx;font-size:18rpx;color:#929087}.field-error{display:block;color:#A34432;margin-top:10rpx;font-size:22rpx;line-height:1.5}.consent-row{display:flex;align-items:center;flex-wrap:wrap;gap:0;margin-top:23rpx;font-size:21rpx;color:var(--nx-text-muted)}.consent-label{display:flex;align-items:center;min-height:88rpx}.consent-label checkbox{transform:scale(.76);transform-origin:left center;margin-right:-2rpx}.privacy-link{display:flex;align-items:center;min-height:88rpx;background:transparent;padding:0 0 0 4rpx;font-size:21rpx;color:var(--nx-brand-700);text-decoration:underline}.primary-button{display:flex;align-items:center;justify-content:center;gap:22rpx;min-height:96rpx;width:100%;padding:20rpx;border-radius:14rpx;background:var(--nx-brand-700);color:#fff;font-size:27rpx;letter-spacing:1rpx;margin-top:20rpx}.form-footer{display:block;text-align:center;margin-top:21rpx;font-size:20rpx;color:var(--nx-text-muted);line-height:1.6}.draft-hint{display:block;text-align:center;margin-top:9rpx;font-size:18rpx;color:#919087}.page-ending{display:flex;flex-direction:column;align-items:center;gap:15rpx;margin-top:48rpx;color:#979186;font-family:'Songti SC','STSong',serif;font-size:25rpx;letter-spacing:2rpx}.ending-en{font-family:Arial,sans-serif;font-size:16rpx;letter-spacing:3rpx}.booking-success{display:flex;flex-direction:column;align-items:center;padding:60rpx 24rpx;text-align:center}.success-symbol{display:flex;align-items:center;justify-content:center;width:116rpx;height:116rpx;border-radius:50%;background:#EAEDE3;color:#6E785C;margin-bottom:40rpx}.success-title{font-family:'Songti SC','STSong',serif;font-size:46rpx;line-height:1.5;margin-top:18rpx}.success-copy{font-size:26rpx;line-height:1.9;color:var(--nx-text-muted);margin:24rpx 0 40rpx}.secondary-button{min-height:92rpx;width:100%;display:flex;align-items:center;justify-content:center;border:1rpx solid var(--nx-border);background:transparent;color:var(--nx-text);font-size:25rpx;border-radius:14rpx;margin-top:18rpx}.text-button{min-height:88rpx;background:transparent;color:var(--nx-text-muted);font-size:24rpx;margin-top:18rpx;display:flex;align-items:center}.booking-page :deep(.uni-input-placeholder),.booking-page :deep(.uni-textarea-placeholder){color:#96958D}
 @media(min-width:600px){.booking-page{max-width:800rpx;margin:auto}.hero-title{font-size:58rpx}}

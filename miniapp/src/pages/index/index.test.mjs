@@ -20,6 +20,7 @@ const executable = script.replace(/^import[\s\S]*?from\s+['"][^'"]+['"]\s*;?\s*$
 const dir = await mkdtemp(join(tmpdir(), 'nx-studio-home-'))
 const modulePath = join(dir, 'home-state.mjs')
 await writeFile(modulePath, `
+import { isCourseRegistrationEnabled } from '${new URL('../../utils/courseRegistration.js', import.meta.url).href}'
 const ref = value => ({ value })
 const computed = getter => ({ get value() { return getter() } })
 import { resolveHomeNavigation } from '${new URL('../../utils/homeNavigation.js', import.meta.url).href}'
@@ -57,7 +58,7 @@ const STUDIO_TEACHER = { name: '韩老师', avatar: '/static/teacher/portrait.jp
 const STUDIO_COURSES = [{ id: 'preview-course', title: '演示课程' }]
 const UI_PREVIEW = globalThis.__homeHarness.preview
 ${executable}
-export { config, videos, loading, error, teacher, portrait, portraitPreview, isLaohan, courses, classroomEnabled, dailyVideos, load, daily, booking, openVideo, openCourse, statusBarHeight, topbarStyle }
+export { config, videos, loading, error, teacher, portrait, portraitPreview, isLaohan, courses, courseRegistrationEnabled, classroomEnabled, dailyVideos, load, daily, booking, openVideo, openCourse, statusBarHeight, topbarStyle }
 `)
 
 let counter = 0
@@ -232,6 +233,16 @@ try {
     page.config.value = { teachers: [{ name: '韩常青', avatar: '/static/teacher/portrait.jpg' }] }
     assert.equal(page.portrait.value, '/static/teacher/hero-portrait.jpg', 'home should use the wide teacher composition for the portrait avatar')
     assert.equal(page.portraitPreview.value, '/static/teacher/portrait.jpg', 'home preview should keep the original portrait instead of the wide composition')
+  }
+  {
+    const { page, state } = await harness({ cache: { home: { miniappCourses: { enabled: true, items: [{ id: 'course-a', title: '共学课' }] } } } })
+    assert.equal(page.courses.value.length, 1)
+    state.cache.home.miniappCourses.enabled = false
+    await state.show()
+    assert.equal(page.courseRegistrationEnabled.value, false)
+    assert.equal(page.courses.value.length, 0, 'home refresh removes disabled course recommendations')
+    page.openCourse()
+    assert.equal(state.tabs.at(-1).url, '/pages/booking/booking', 'the remaining entry leads to a booking form')
   }
   console.log('teacher studio home state tests passed')
 } finally {

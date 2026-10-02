@@ -6,8 +6,9 @@ import NxImagePreview from '../../components/NxImagePreview.vue'
 import NxShareActions from '../../components/NxShareActions.vue'
 import { buildShareCard, showPublicShareMenu, isTimelinePreview, requireFullMiniapp } from '../../utils/share'
 import { STUDIO_COURSES, STUDIO_TEACHER } from '../../data/teacherStudio'
+import { isCourseRegistrationEnabled } from '../../utils/courseRegistration'
 import { UI_PREVIEW } from '../../utils/uiPreview'
-import { getCachedSiteConfig, getStoredSiteConfig } from '../../utils/siteConfig'
+import { refreshSiteConfig, getStoredSiteConfig } from '../../utils/siteConfig'
 import { normalizeMiniappCourses, normalizeTeachers } from '../../utils/teacherCourseware'
 import { setBookingIntent } from '../../utils/bookingIntent'
 import { previewImage } from '../../utils/imagePreview'
@@ -16,13 +17,15 @@ import { ensureLogin, getToken } from '../../utils/auth'
 import { createCourseOrderApi, devPayCourseBookingOrderApi, getCourseBookingOrderStatusApi, getCourseEnrollmentApi } from '../../api'
 import { payWechatOrder } from '../../utils/payment'
 import { createCoursePaymentController, coursePaymentResultUrl } from '../../utils/coursePayment'
+import { navigateToMyCourse } from '../../utils/courseNavigation'
 import { userErrorMessage } from '../../utils/userMessage'
 
 const timelinePreview = isTimelinePreview()
 const courseId = ref('')
 const config = ref(getStoredSiteConfig() || {})
-const loading = ref(false)
+const loading = ref(!UI_PREVIEW)
 const paying = ref(false)
+const courseNavigating = ref(false)
 const enrollment = ref(null)
 const enrollmentLoading = ref(false)
 const enrollmentError = ref('')
@@ -30,6 +33,8 @@ const enrollmentChecked = ref(timelinePreview || UI_PREVIEW || !getToken())
 let paymentController = null
 let active = true
 let sharePageVisible = true
+let configTicket = 0
+let redirectingToForm = false
 onHide(() => { sharePageVisible = false })
 let enrollmentToken = timelinePreview ? '' : getToken()
 let enrollmentTicket = 0
@@ -42,8 +47,9 @@ onUnload(() => {
   enrollmentLoading.value = false
   enrollmentError.value = ''
   enrollmentToken = ''
+  courseNavigating.value = false
 })
-onShow(() => {
+onShow(async () => {
   if (!active) return
   sharePageVisible = true
   showPublicShareMenu(courseShareable.value)
@@ -52,11 +58,12 @@ onShow(() => {
     paymentController?.resume()
     return
   }
-  return refreshEnrollment()
+  return Promise.all([loadCourseConfig(), refreshEnrollment()])
 })
 const activeSection = ref('intro')
 const sections = [{ id: 'intro', label: '课程介绍' }, { id: 'outline', label: '学习内容' }, { id: 'notice', label: '报名须知' }]
-const courses = computed(() => UI_PREVIEW ? STUDIO_COURSES : normalizeMiniappCourses(config.value))
+const courseRegistrationEnabled = computed(() => isCourseRegistrationEnabled(config.value))
+const courses = computed(() => courseRegistrationEnabled.value ? (UI_PREVIEW ? STUDIO_COURSES : normalizeMiniappCourses(config.value)) : [])
 const course = computed(() => courses.value.find((item) => String(item.id) === courseId.value))
 const courseShareable = computed(() => !loading.value && !!course.value && /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(courseId.value))
 function courseShareCard() {
@@ -81,17 +88,22 @@ const outline = computed(() => Array.isArray(course.value?.outline) ? course.val
 const isEnrolled = computed(() => enrollment.value?.owned === true && enrollment.value?.order?.status === 'paid')
 const enrollmentPending = computed(() => !enrollmentChecked.value || enrollmentLoading.value)
 const confirmationPending = computed(() => !isEnrolled.value && enrollment.value?.syncStatus === 'retrying')
-const enrollmentActionDisabled = computed(() => paying.value || enrollmentPending.value)
+const enrollmentActionLoading = computed(() => paying.value || courseNavigating.value || enrollmentPending.value || (loading.value && !isEnrolled.value))
+const enrollmentActionDisabled = computed(() => enrollmentActionLoading.value)
 const enrollmentActionText = computed(() => {
   if (paying.value) return '确认支付中'
+  if (courseNavigating.value) return '正在打开课程'
   if (enrollmentPending.value) return '确认报名状态'
+  if (loading.value && !isEnrolled.value) return '正在加载课程'
   if (enrollmentError.value) return '重试报名状态'
   if (isEnrolled.value) return '查看我的课程'
   if (confirmationPending.value) return enrollment.value?.bookingId ? '查看支付结果' : '刷新支付结果'
   return course.value?.paymentMode === 'paid' ? '立即支付' : '咨询老师'
 })
 const enrollmentCaption = computed(() => {
+  if (courseNavigating.value) return '正在打开你的课程安排'
   if (enrollmentPending.value) return '正在确认你的课程报名'
+  if (loading.value && !isEnrolled.value) return '正在获取最新课程信息'
   if (enrollmentError.value) return '请重试后查看报名状态'
   if (isEnrolled.value) return '查看课程安排与报名信息'
   if (confirmationPending.value) return '请勿重复支付，稍后刷新结果'
@@ -99,17 +111,33 @@ const enrollmentCaption = computed(() => {
 })
 onLoad(async (query) => {
   courseId.value = String(query?.id || '')
+  return loadCourseConfig()
+})
+function openBookingForm() {
+  if (!active || redirectingToForm || !requireFullMiniapp()) return
+  redirectingToForm = true
+  setBookingIntent({ kind: 'course', intentText: '' })
+  uni.switchTab({ url: '/pages/booking/booking', fail: () => { redirectingToForm = false } })
+}
+async function loadCourseConfig() {
   if (UI_PREVIEW) { showPublicShareMenu(courseShareable.value); return }
+  const ticket = ++configTicket
   loading.value = true
   showPublicShareMenu(false)
-  try { const updated = await getCachedSiteConfig(); if (active) config.value = updated || {} } catch { /* Keep cached content visible. */ }
+  try {
+    const updated = await refreshSiteConfig()
+    if (active && ticket === configTicket) config.value = updated || {}
+  } catch { /* Keep the last confirmed configuration. Server checkout checks it again. */ }
   finally {
-    if (active) {
+    if (active && ticket === configTicket) {
       loading.value = false
-      if (sharePageVisible) showPublicShareMenu(courseShareable.value)
+      if (sharePageVisible) {
+        showPublicShareMenu(courseShareable.value)
+        if (!courseRegistrationEnabled.value && !timelinePreview) openBookingForm()
+      }
     }
   }
-})
+}
 function resetEnrollmentSession() {
   enrollmentTicket += 1
   enrollment.value = null
@@ -166,10 +194,26 @@ async function refreshEnrollment(whilePaying = false) {
 }
 function openMyCourse() {
   if (!requireFullMiniapp()) return
-  if (!active) return
+  if (!active || courseNavigating.value) return
   if (enrollmentToken !== getToken()) { resetEnrollmentSession(); return }
   if (!isEnrolled.value || !enrollment.value?.bookingId) return
-  uni.navigateTo({ url: `/pages/my-course/my-course?bookingId=${encodeURIComponent(enrollment.value.bookingId)}` })
+  const token = enrollmentToken
+  courseNavigating.value = true
+  const complete = () => { courseNavigating.value = false }
+  const fail = () => {
+    complete()
+    if (active && sharePageVisible && getToken() === token) {
+      uni.showToast({ title: '课程页面暂未打开，请重试', icon: 'none' })
+    }
+  }
+  try {
+    if (!navigateToMyCourse(enrollment.value.bookingId, {
+      success: complete,
+      complete,
+      fail,
+      isCurrent: () => active && sharePageVisible && getToken() === token,
+    })) fail()
+  } catch { fail() }
 }
 function showPendingPayment() {
   if (!requireFullMiniapp()) return
@@ -188,12 +232,14 @@ function chooseSection(section) {
 }
 async function enroll() {
   if (!requireFullMiniapp()) return
-  if (!active || paying.value) return
+  if (!active || paying.value || courseNavigating.value) return
+  if (!courseRegistrationEnabled.value) { openBookingForm(); return }
   if (enrollmentToken !== getToken()) { await refreshEnrollment(); return }
   if (enrollmentPending.value) return
   if (enrollmentError.value) { await refreshEnrollment(); return }
   if (isEnrolled.value) { openMyCourse(); return }
   if (confirmationPending.value) { return showPendingPayment() }
+  if (loading.value) return
   if (!course.value) return
   if (course.value.priceCents > 0) {
     if (UI_PREVIEW || typeof window !== 'undefined') {
@@ -269,13 +315,14 @@ function outlineDescription(item) { return typeof item === 'object' && item ? it
 
 <template>
   <view class="course-detail-page">
-    <view v-if="(loading || enrollmentPending) && !course && !isEnrolled" class="empty-state"><text class="empty-title">{{ enrollmentPending ? '正在确认课程报名…' : '正在整理课程信息…' }}</text></view>
+    <view v-if="!courseRegistrationEnabled" class="empty-state"><text class="empty-title">欢迎留下你的报名意向</text><text class="muted-copy">填写需求后，老师会与你联系确认安排。</text><button class="primary-button" @click="openBookingForm">填写报名意向</button></view>
+    <view v-else-if="(loading || enrollmentPending) && !course && !isEnrolled" class="empty-state"><text class="empty-title">{{ enrollmentPending ? '正在确认课程报名…' : '正在整理课程信息…' }}</text></view>
     <view v-else-if="!course" class="empty-state">
       <NxIcon :name="isEnrolled ? 'check' : 'book'" :size="38" />
       <text class="empty-title">{{ isEnrolled ? enrollment.order.title || '已报名课程' : enrollmentError ? '报名状态待确认' : confirmationPending ? '支付结果确认中' : '这门课程暂未开放' }}</text>
       <text class="muted-copy">{{ isEnrolled ? '你已报名这门课程，可继续查看报名信息与课程安排。' : enrollmentError || (confirmationPending ? '正在同步微信支付结果，请勿重复支付。' : '可以先看看其他学习方向，或联系工作室了解安排。') }}</text>
-      <button v-if="isEnrolled" class="primary-button" @click="openMyCourse">查看我的课程</button>
-      <button v-else-if="enrollmentError || confirmationPending" class="primary-button" :disabled="enrollmentActionDisabled" :loading="enrollmentLoading" @click="enroll">{{ enrollmentActionText }}</button>
+      <button v-if="isEnrolled" class="primary-button" :disabled="courseNavigating" :loading="courseNavigating" @click="openMyCourse">{{ courseNavigating ? '正在打开课程' : '查看我的课程' }}</button>
+      <button v-else-if="enrollmentError || confirmationPending" class="primary-button" :disabled="enrollmentActionDisabled" :loading="enrollmentActionLoading" @click="enroll">{{ enrollmentActionText }}</button>
       <button v-else class="primary-button" @click="goBack">返回课程列表</button>
     </view>
     <block v-else>
@@ -300,7 +347,7 @@ function outlineDescription(item) { return typeof item === 'object' && item ? it
           <text v-else class="consult-price">咨询老师</text>
           <text class="price-caption">{{ enrollmentCaption }}</text>
         </view>
-        <button class="enroll-button" :disabled="enrollmentActionDisabled" :loading="paying || enrollmentLoading" @click="enroll">{{ enrollmentActionText }} <NxIcon name="arrow" :size="18" color="#FFFFFF" /></button>
+        <button class="enroll-button" :disabled="enrollmentActionDisabled" :loading="enrollmentActionLoading" @click="enroll">{{ enrollmentActionText }} <NxIcon name="arrow" :size="18" color="#FFFFFF" /></button>
       </view>
       <NxImagePreview
         v-if="teacherAvatar && !teacherAvatarFailed"

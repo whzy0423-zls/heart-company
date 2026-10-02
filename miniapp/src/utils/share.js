@@ -13,6 +13,7 @@ const PAGES = {
   explore: ['enneagram', '认识九型｜看见不同的自己'],
   type: ['enneagram-detail', '九型人格｜了解一种看世界的方式'],
   result: ['result', '九型芯之力｜你是哪一型？'],
+  relation: ['relation', '关系合盘｜读懂彼此'],
 }
 
 function publicImage(value, fallback) {
@@ -30,7 +31,7 @@ function publicImage(value, fallback) {
   return asset.startsWith('https://') ? asset : fallbackUrl
 }
 
-export function buildShareCard({ kind = 'home', title, imageUrl, id, type, seriesId } = {}) {
+export function buildShareCard({ kind = 'home', title, imageUrl, id, type, seriesId, myType, taType } = {}) {
   if (!PAGES[kind]) kind = 'home'
   let query = ''
   const typeId = /^[1-9]$/.test(String(type ?? '')) ? Number(type) : 0
@@ -47,11 +48,15 @@ export function buildShareCard({ kind = 'home', title, imageUrl, id, type, serie
     query = `shareType=${typeId}`
   } else if (kind === 'type') {
     query = `type=${typeId || 1}`
+  } else if (kind === 'relation') {
+    const validType = value => ['string', 'number'].includes(typeof value) && /^[1-9]$/.test(String(value))
+    if (validType(myType) && validType(taType)) query = `myType=${myType}&taType=${taType}`
   }
   const [page, defaultTitle] = PAGES[kind]
   const cleanedTitle = typeof title === 'string' ? title.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 100) : ''
   const fallback = ['result','type'].includes(kind) ? `/static/share/result-${typeId || 'default'}.jpg` : STUDIO_COVER
-  const metadata = { title: cleanedTitle || defaultTitle, imageUrl: publicImage(imageUrl, fallback) }
+  const relationTitle = kind === 'relation' && query ? `${myType}号 × ${taType}号关系合盘｜看见彼此的相处方式` : ''
+  const metadata = { title: cleanedTitle || relationTitle || defaultTitle, imageUrl: publicImage(imageUrl, fallback) }
   return {
     appMessage: { ...metadata, path: `/pages/${page}/${page}${query ? `?${query}` : ''}` },
     timeline: { ...metadata, query },

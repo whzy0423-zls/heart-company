@@ -1,10 +1,21 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { onLoad, onShow, onHide, onUnload } from '@dcloudio/uni-app'
+import { isCourseRegistrationEnabled } from '../../utils/courseRegistration'
+import { refreshSiteConfig, getStoredSiteConfig } from '../../utils/siteConfig'
 import NxIcon from '../../components/NxIcon.vue'
 import { getToken } from '../../utils/auth'
 import { getCourseBookingOrderStatusApi } from '../../api'
 import { navigateToOrders, navigateToMyCourse } from '../../utils/courseNavigation'
+
+const registrationConfig = ref(getStoredSiteConfig() || {})
+const courseRegistrationEnabled = computed(() => isCourseRegistrationEnabled(registrationConfig.value))
+async function refreshRegistrationConfig() {
+  try {
+    const config = await refreshSiteConfig()
+    if (!disposed) registrationConfig.value = config || {}
+  } catch { /* Retain the last confirmed switch; checkout is also guarded by the server. */ }
+}
 
 const bookingId = ref('')
 const order = ref(null)
@@ -143,6 +154,8 @@ function openCourse() {
   if (disposed || !currentSession() || !order.value) return
   if (isPaid.value && /^[1-9]\d*$/.test(order.value.bookingId)) {
     navigateToMyCourse(order.value.bookingId)
+  } else if (!courseRegistrationEnabled.value) {
+    browseCourses()
   } else if (order.value.courseId) {
     uni.navigateTo({ url: `/pages/course-detail/course-detail?id=${encodeURIComponent(order.value.courseId)}` })
   }
@@ -167,7 +180,7 @@ onShow(() => {
   // #endif
   active = true
   redirecting = false
-  return startPolling()
+  return Promise.all([startPolling(), refreshRegistrationConfig()])
 })
 onHide(() => {
   active = false
@@ -214,9 +227,9 @@ onUnload(() => {
         <button v-if="isPending" class="primary-button" :loading="loading" :disabled="loading" @click="refreshResult">{{ loading ? '正在确认' : '刷新结果' }}</button>
         <button v-if="isPaid" class="primary-button" @click="openCourse">查看我的课程 <NxIcon name="arrow" :size="18" color="#FFFFFF" /></button>
         <button :class="isPending || isPaid ? 'secondary-button' : 'primary-button'" @click="goOrders">查看我的订单 <NxIcon name="arrow" :size="18" :color="isPending || isPaid ? '#A55C3B' : '#FFFFFF'" /></button>
-        <button v-if="!isPaid && order?.courseId" class="text-button" @click="openCourse">查看课程介绍 <NxIcon name="chevron" :size="16" /></button>
+        <button v-if="courseRegistrationEnabled && !isPaid && order?.courseId" class="text-button" @click="openCourse">查看课程介绍 <NxIcon name="chevron" :size="16" /></button>
       </block>
-      <button class="text-button browse-button" @click="browseCourses">返回课程列表</button>
+      <button class="text-button browse-button" @click="browseCourses">{{ courseRegistrationEnabled ? '返回课程列表' : '返回报名页' }}</button>
     </view>
     <view class="page-ending"><view /><text>让理解发生，让成长继续</text><view /></view>
   </view>

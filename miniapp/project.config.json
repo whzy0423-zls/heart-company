@@ -17,7 +17,72 @@
   "compileType": "miniprogram",
   "simulatorPluginLibVersion": {},
   "packOptions": {
-    "ignore": [],
+    "ignore": [
+      {
+        "type": "folder",
+        "value": "static/studio-preview"
+      },
+      {
+        "type": "folder",
+        "value": "static/share"
+      },
+      {
+        "type": "file",
+        "value": "static/editorial/course-team.jpg"
+      },
+      {
+        "type": "file",
+        "value": "static/editorial/course-family.jpg"
+      },
+      {
+        "type": "file",
+        "value": "static/enneagram/1.webp"
+      },
+      {
+        "type": "file",
+        "value": "static/enneagram/2.webp"
+      },
+      {
+        "type": "file",
+        "value": "static/enneagram/3.webp"
+      },
+      {
+        "type": "file",
+        "value": "static/enneagram/4.webp"
+      },
+      {
+        "type": "file",
+        "value": "static/enneagram/5.webp"
+      },
+      {
+        "type": "file",
+        "value": "static/enneagram/6.webp"
+      },
+      {
+        "type": "file",
+        "value": "static/enneagram/7.webp"
+      },
+      {
+        "type": "file",
+        "value": "static/enneagram/8.webp"
+      },
+      {
+        "type": "file",
+        "value": "static/enneagram/9.webp"
+      },
+      {
+        "type": "file",
+        "value": "static/editorial/center-gut.webp"
+      },
+      {
+        "type": "file",
+        "value": "static/editorial/center-head.webp"
+      },
+      {
+        "type": "file",
+        "value": "static/editorial/center-heart.webp"
+      }
+    ],
     "include": []
   },
   "appid": "wx7218327a92c4411d",

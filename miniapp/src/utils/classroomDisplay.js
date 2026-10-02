@@ -1,3 +1,5 @@
+import { resolveContentAsset } from './contentAsset.js';
+
 const ACCESS_LEVELS = new Set(["public", "login", "member", "paid"]);
 const CONTENT_ACCESS_LEVELS = new Set(["inherit", "public", "login", "member", "paid"]);
 const PURCHASE_STATES = new Set(["available", "owned", "purchase_required"]);
@@ -44,7 +46,7 @@ export function normalizeClassroomSeries(source = {}) {
     id: id(source.id),
     title: text(source.title),
     summary: text(source.summary),
-    coverUrl: text(source.coverUrl),
+    coverUrl: resolveContentAsset(source.coverUrl),
     teacherName: text(source.teacherName),
     coverAspectRatio: normalizeClassroomCoverAspectRatio(source.coverAspectRatio),
     effectiveAccess,
@@ -64,7 +66,7 @@ export function normalizeClassroomContent(source = {}) {
     title: text(source.title),
     description: text(source.description),
     teacherName: text(source.teacherName),
-    coverUrl: text(source.coverUrl),
+    coverUrl: resolveContentAsset(source.coverUrl),
     contentType: source.contentType === "audio" ? "audio" : "video",
     coverAspectRatio: normalizeClassroomCoverAspectRatio(source.coverAspectRatio),
     durationSeconds: nonNegativeInteger(source.durationSeconds),

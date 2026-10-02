@@ -32,10 +32,27 @@ type MiniappCourse struct {
 }
 
 type MiniappCoursesConfig struct {
-	Items []MiniappCourse `json:"items"`
+	Enabled *bool           `json:"enabled,omitempty"`
+	Items   []MiniappCourse `json:"items"`
 }
 
 var courseIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$`)
+
+// MiniappCoursesEnabled controls new enrollment, independently of catalog
+// reads used by paid receipts. Missing configuration keeps legacy behavior.
+func MiniappCoursesEnabled(config SiteConfig) bool {
+	raw, err := json.Marshal(config.Home["miniappCourses"])
+	if err != nil {
+		return true
+	}
+	var catalog struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if json.Unmarshal(raw, &catalog) != nil || catalog.Enabled == nil {
+		return true
+	}
+	return *catalog.Enabled
+}
 
 // EnsureMiniappCourses migrates legacy display cards only when the new key is absent.
 // An explicitly empty catalog is intentional and must never repopulate itself.

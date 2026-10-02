@@ -1,3 +1,4 @@
+import { isCourseRegistrationEnabled } from '../../utils/courseRegistration.js'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import vm from 'node:vm'
@@ -25,6 +26,8 @@ function harness() {
     purchase: async () => ({ state: 'cancelled', message: 'cancelled' }),
   }
   const context = vm.createContext({
+    isCourseRegistrationEnabled,
+    getStoredSiteConfig: () => state.config || {}, refreshSiteConfig: async () => state.config || {},
     ref: (value) => ({ value }), computed: (fn) => ({ get value() { return fn() } }),
     onShow: (fn) => { state.show = fn }, onUnload: (fn) => { state.unload = fn },
     onPullDownRefresh: (fn) => { state.pull = fn }, onReachBottom: (fn) => { state.bottom = fn },
@@ -241,4 +244,15 @@ console.log('Miniapp orders session, pagination and payment tests passed')
   const before=state.navigation.length
   page.openCourse(order(1, {status:'paid'}))
   assert.equal(state.navigation.length,before,'old account navigation cannot open its private enrollment')
+}
+
+{
+  const { state, page } = harness()
+  state.config = { home: { miniappCourses: { enabled: false } } }
+  await state.show()
+  assert.equal(page.canContinue(order(1)), false, 'closed registration hides pending checkout actions')
+  await page.continuePayment(order(1))
+  assert.equal(state.creates.length, 0)
+  page.openCourse(order(1, { status: 'paid' }))
+  assert.equal(state.navigation.at(-1).url, '/pages/my-course/my-course?bookingId=101', 'paid course access remains available')
 }

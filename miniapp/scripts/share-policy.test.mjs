@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import { readPackageLayout } from './wechat-package-layout.mjs'
 
-const publicPages = ['index','teacher','learn','course-detail','classroom','classroom-detail','result','enneagram','enneagram-detail']
-const privatePages = ['booking','booking-records','booking-detail','orders','my-course','payment-result','profile','profile-edit','relation','test']
+const publicPages = ['index','teacher','learn','course-detail','classroom','classroom-detail','result','enneagram','enneagram-detail','relation']
+const privatePages = ['booking','booking-records','booking-detail','orders','my-course','payment-result','profile','profile-edit','test']
 const pageConfig = JSON.parse(await readFile(new URL('../src/pages.json',import.meta.url)))
-assert.deepEqual(pageConfig.pages.map(p=>p.path.split('/')[1]).sort(), [...publicPages,...privatePages].sort(), 'Every registered page needs an explicit sharing policy')
+const layout = readPackageLayout(pageConfig)
+const routes = [...layout.mainPages, ...layout.subPackages.flatMap(pkg => pkg.pages.map(page => `${pkg.root}/${page}`))]
+assert.deepEqual(routes.sort(), [...publicPages,...privatePages].map(page => `pages/${page}/${page}`).sort(), 'Every registered main/subpackage page needs an explicit sharing policy')
 for (const page of privatePages) {
   const source = await readFile(new URL(`../src/pages/${page}/${page}.vue`,import.meta.url),'utf8')
   assert.match(source, /hideShareMenu/, `${page} must hide native sharing on entry`)

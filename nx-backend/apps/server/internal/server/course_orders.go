@@ -129,6 +129,18 @@ func (s *Server) courseOrderCreate(w http.ResponseWriter, r *http.Request) {
 		httpx.OK(w, existing)
 		return
 	}
+	// Resolve an existing successful payment first so disabling enrollment
+	// cannot hide a receipt or prevent reconciliation of an earlier payment.
+	// Every new/retried prepay must still honor the current enrollment switch.
+	config, err := siteconfig.ReadStore(r.Context(), s.db, s.env.SiteConfig)
+	if err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, "课程配置读取失败")
+		return
+	}
+	if !siteconfig.MiniappCoursesEnabled(config) {
+		httpx.Fail(w, http.StatusConflict, "课程报名已关闭，请填写报名意向表单")
+		return
+	}
 	if !s.requireMiniappPayment(w, r) {
 		return
 	}
@@ -139,7 +151,6 @@ func (s *Server) courseOrderCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	var booking miniapp.CourseBooking
 	var course siteconfig.MiniappCourse
-	var err error
 	if body.CourseID != "" {
 		course, err = s.readMiniappCourse(r.Context(), body.CourseID)
 		if err == nil {

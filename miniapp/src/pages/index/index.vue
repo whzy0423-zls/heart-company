@@ -13,11 +13,13 @@ import { normalizeMiniappLearn } from '../../utils/miniappPages'
 import { classroomContentRoute } from '../../utils/classroomDisplay'
 import { setBookingIntent, clearBookingIntent } from '../../utils/bookingIntent'
 import { STUDIO_TEACHER, STUDIO_COURSES } from '../../data/teacherStudio'
+import { isCourseRegistrationEnabled } from '../../utils/courseRegistration'
 import { UI_PREVIEW } from '../../utils/uiPreview'
 import { previewImage } from '../../utils/imagePreview'
 import { isWechatDevtools } from '../../utils/imagePreview'
 import { resolveClassroomItems } from '../../utils/classroomCourseware'
 import { resolveHomeNavigation } from '../../utils/homeNavigation'
+import { resolveContentAsset } from '../../utils/contentAsset'
 
 const LOCAL_TEACHER_PORTRAIT = '/static/teacher/hero-portrait.jpg'
 const ORIGINAL_TEACHER_PORTRAIT = '/static/teacher/portrait.jpg'
@@ -61,11 +63,15 @@ const portraitPreview = computed(() => {
 function homeShareCard() {
   return buildShareCard({ kind: 'home', title: teacher.value?.name ? `九型芯之力｜${teacher.value.name}的成长课堂` : '九型芯之力｜看见自己，理解彼此', imageUrl: portraitPreview.value || portrait.value })
 }
-onShow(() => showPublicShareMenu())
+onShow(async () => {
+  showPublicShareMenu()
+  try { config.value = await refreshSiteConfig() || {} } catch { /* Keep the last confirmed configuration. */ }
+})
 onShareAppMessage(() => homeShareCard().appMessage)
 onShareTimeline(() => homeShareCard().timeline)
 const teacherDisplayName = computed(() => (teacher.value?.name || '').replace(/[（(]老韩[）)]/, ''))
-const courses = computed(() => UI_PREVIEW ? STUDIO_COURSES : normalizeMiniappCourses(config.value))
+const courseRegistrationEnabled = computed(() => isCourseRegistrationEnabled(config.value))
+const courses = computed(() => courseRegistrationEnabled.value ? (UI_PREVIEW ? STUDIO_COURSES : normalizeMiniappCourses(config.value)) : [])
 const featuredCourse = computed(() => courses.value[0])
 const dailyVideos = computed(() => videos.value.filter(item => item.itemType !== 'series').slice(0, 2))
 let ticket = 0
@@ -148,9 +154,10 @@ function closePortraitPreview() { portraitPreviewVisible.value = false }
 
       <view class="quick-links">
         <button v-if="classroomEnabled" class="quick-link" @click="daily"><view class="quick-icon"><NxIcon name="video" :size="23" /></view><text>老师日常</text><text class="quick-note">听一段分享</text></button>
-        <button class="quick-link" @click="booking()"><view class="quick-icon"><NxIcon name="book" :size="23" /></view><text>课程报名</text><text class="quick-note">走近一堂课</text></button>
+        <button class="quick-link" @click="booking()"><view class="quick-icon"><NxIcon name="book" :size="23" /></view><text>{{ courseRegistrationEnabled ? '课程报名' : '报名咨询' }}</text><text class="quick-note">{{ courseRegistrationEnabled ? '走近一堂课' : '填写报名意向' }}</text></button>
         <button class="quick-link" @click="booking('consult')"><view class="quick-icon"><NxIcon name="message" :size="23" /></view><text>预约咨询</text><text class="quick-note">认真聊一聊</text></button>
         <button class="quick-link" @click="navigate('/pages/test/test')"><view class="quick-icon"><NxIcon name="spark" :size="23" /></view><text>认识自己</text><text class="quick-note">九型小探索</text></button>
+        <button class="quick-link" @click="navigate('/pages/relation/relation')"><view class="quick-icon"><NxIcon name="relation" :size="23" /></view><text>关系合盘</text><text class="quick-note">读懂彼此</text></button>
       </view>
 
       <view v-if="classroomEnabled" class="home-section">
@@ -160,13 +167,13 @@ function closePortraitPreview() { portraitPreviewVisible.value = false }
         <view v-else-if="!dailyVideos.length" class="quiet-state"><text>新的分享正在路上，先来认识老师吧。</text></view>
         <view v-else class="video-grid">
           <button v-for="item in dailyVideos" :key="item.id" class="video-card" @click="openVideo(item)">
-            <view class="video-cover"><image v-if="item.coverUrl && !coverErrors[item.id]" :src="item.coverUrl" mode="aspectFill" @error="coverErrors[item.id] = true" /><view v-else class="video-cover-fallback">老韩 · 日常</view><view class="video-scrim" /><view class="video-play"><NxIcon name="play" :size="15" color="#FFFFFF" /></view><text class="video-duration">{{ duration(item.durationSeconds) }}</text></view>
+            <view class="video-cover"><image v-if="item.coverUrl && !coverErrors[item.id]" :src="resolveContentAsset(item.coverUrl)" mode="aspectFill" @error="coverErrors[item.id] = true" /><view v-else class="video-cover-fallback">老韩 · 日常</view><view class="video-scrim" /><view class="video-play"><NxIcon name="play" :size="15" color="#FFFFFF" /></view><text class="video-duration">{{ duration(item.durationSeconds) }}</text></view>
             <text class="video-title">{{ item.title }}</text><text class="video-author">老韩的分享 <text class="author-dot">·</text> {{ item.category || '日常短讲' }}</text>
           </button>
         </view>
       </view>
 
-      <view class="home-section course-section">
+      <view v-if="courseRegistrationEnabled" class="home-section course-section">
         <view class="section-head"><view><text class="section-kicker">LEARN & GROW TOGETHER</text><text class="section-title">下一次，课堂见</text></view><button class="section-more" @click="booking()">全部<NxIcon name="arrow" :size="17" color="#72746B" /></button></view>
         <button v-if="featuredCourse" class="course-feature" @click="openCourse">
           <view class="course-image"><image :src="featuredCourse.cover || '/static/editorial/course-intro.webp'" mode="aspectFill" /><text class="course-image-label">{{ featuredCourse.tag || '成长课堂' }}</text></view>

@@ -13,7 +13,7 @@ const miniappRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const staticRoot = path.join(miniappRoot, 'src/static')
 const outputRoot = path.resolve(miniappRoot, '../website-react/public/assets/miniapp-share')
 const manifestPath = path.join(miniappRoot, 'src/data/shareAssets.js')
-const files = ['editorial/course-classroom.jpg']
+const files = ['editorial/course-classroom.jpg', 'editorial/course-team.jpg', 'editorial/course-family.jpg']
 for (const directory of ['share', 'studio-preview/posters']) {
   for (const entry of await readdir(path.join(staticRoot, directory), { withFileTypes: true })) {
     if (entry.isFile() && /\.(?:png|jpe?g)$/i.test(entry.name)) files.push(`${directory}/${entry.name}`)

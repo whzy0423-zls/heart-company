@@ -1,3 +1,4 @@
+import { isCourseRegistrationEnabled } from '../../utils/courseRegistration.js'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import vm from 'node:vm'
@@ -28,6 +29,8 @@ function harness({ shareAvailable = true } = {}) {
     return { route: parsed.pathname.slice(1), options: Object.fromEntries(parsed.searchParams) }
   }
   const context = vm.createContext({
+    isCourseRegistrationEnabled,
+    getStoredSiteConfig: () => state.config || {}, refreshSiteConfig: async () => state.config || {},
     ref: value => ({ value }), computed: getter => ({ get value() { return getter() } }),
     onLoad: fn => { state.load = fn }, onShow: fn => { state.show = fn },
     onHide: fn => { state.hide = fn }, onUnload: fn => { state.unload = fn },

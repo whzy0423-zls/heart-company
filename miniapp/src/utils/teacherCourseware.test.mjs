@@ -9,6 +9,7 @@ const contentAssetPath = join(dir, 'contentAsset.mjs')
 await writeFile(
   contentAssetPath,
   (await readFile(new URL('./contentAsset.js', import.meta.url), 'utf8'))
+    .replace("'../data/shareAssets.js'", JSON.stringify(new URL('../data/shareAssets.js', import.meta.url).href))
     .replace(
       /import \{ API_BASE(?:, DEFAULT_API_BASE)? \} from '\.\.\/config(?:\.js)?'/,
       "const API_BASE = 'https://api.example.test/api'; const DEFAULT_API_BASE = API_BASE",
@@ -25,6 +26,9 @@ const {
   normalizeMiniappCourses,
   normalizeTeachers,
 } = await import(`file://${modulePath}`)
+const { resolveContentAsset } = await import(`file://${contentAssetPath}`)
+
+assert.equal(normalizeMiniappCourses({ home: { courses: { items: [{ title: '新建报名课程' }] } } })[0].id, 'course-1', 'legacy courses without editorial keywords must normalize during first load')
 
 assert.ok(DEFAULT_TEACHERS.length > 0, 'stable fallback teachers should be available')
 assert.ok(DEFAULT_COURSEWARE_ITEMS.length > 0, 'stable fallback courseware should be available')
@@ -271,10 +275,10 @@ assert.deepEqual(
   enrichedCourses.map((item) => item.cover),
   [
     '/static/editorial/course-classroom.jpg',
-    '/static/editorial/course-team.webp',
-    '/static/editorial/course-family.webp',
+    resolveContentAsset('/static/editorial/course-team.jpg'),
+    resolveContentAsset('/static/editorial/course-family.jpg'),
   ],
-  'the current three course categories should receive distinct local editorial covers',
+  'the current three course categories should receive resolved editorial covers',
 )
 assert.equal(new Set(enrichedCourses.map((item) => item.duration)).size, 3, 'the three categories should receive distinct durations')
 assert.equal(new Set(enrichedCourses.map((item) => item.materialTypes.join('/'))).size, 3, 'the three categories should receive distinct material type combinations')
@@ -336,6 +340,30 @@ const configuredMiniappCourses = normalizeMiniappCourses({
 assert.deepEqual(configuredMiniappCourses.map((item) => item.id), ['growth-live'], 'miniapp catalog should hide disabled courses')
 assert.equal(configuredMiniappCourses[0].price, 199, 'miniapp catalog should convert server cents to yuan')
 assert.equal(configuredMiniappCourses[0].paymentMode, 'paid', 'miniapp catalog should preserve payment mode')
+
+for (const [title, category] of [['领导力 · 团队协作', 'team'], ['家庭关系 · 系统排列', 'family']]) {
+  const expectedCover = resolveContentAsset(`/static/editorial/course-${category}.jpg`)
+  assert.match(expectedCover, /^https:\/\/.+\.jpg$/, 'course defaults must resolve to a hosted JPEG')
+  for (const cover of [undefined, '', `/static/editorial/course-${category}.webp`]) {
+    const items = [{ id: category, title, cover }]
+    assert.equal(
+      normalizeMiniappCourses({ home: { miniappCourses: { items } } })[0].cover,
+      expectedCover,
+      'dedicated courses should resolve empty and legacy covers to the same compatible image',
+    )
+    assert.equal(
+      normalizeMiniappCourses({ home: { courses: { items } } })[0].cover,
+      expectedCover,
+      'legacy catalogs should resolve empty and legacy covers to the same compatible image',
+    )
+  }
+  const customCover = 'https://cdn.example.com/administrator-course.jpg'
+  assert.equal(
+    normalizeMiniappCourses({ home: { miniappCourses: { items: [{ title, cover: customCover }] } } })[0].cover,
+    customCover,
+    'administrator-provided course covers must remain in place',
+  )
+}
 
 for (const [priceCents, paymentMode, expected] of [
   [undefined, 'paid', 'consult'], [null, 'paid', 'consult'], [0, 'paid', 'consult'],

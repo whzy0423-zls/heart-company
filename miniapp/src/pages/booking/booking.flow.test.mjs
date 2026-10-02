@@ -1,3 +1,4 @@
+import { isCourseRegistrationEnabled } from '../../utils/courseRegistration.js'
 import assert from 'node:assert/strict'
 import vm from 'node:vm'
 import { readFile } from 'node:fs/promises'
@@ -12,9 +13,10 @@ const bookingScript = await scriptFor('./booking.vue')
 const detailScript = await scriptFor('../course-detail/course-detail.vue')
 const previewCourse = { id: 'intro', title: '演示课程', schedule: '10月17日', price: 1980 }
 
-function createHarness({ preview = true, draft = null, h5 = false } = {}) {
-  const state = { draft, intents: [], saved: [], requests: [], clears: 0, toasts: [], failing: false, logins: 0, scrolls: [], navigations: [], setIntents: [] }
+function createHarness({ preview = true, draft = null, h5 = false, config = {} } = {}) {
+  const state = { config, draft, intents: [], saved: [], requests: [], clears: 0, toasts: [], failing: false, logins: 0, scrolls: [], navigations: [], setIntents: [] }
   const context = vm.createContext({
+    isCourseRegistrationEnabled,
     onShareAppMessage: () => {}, onShareTimeline: () => {},
     buildShareCard: input => ({ appMessage: input, timeline: input }),
     showPublicShareMenu: () => {}, isTimelinePreview: () => false, requireFullMiniapp: () => true,
@@ -45,8 +47,9 @@ function createHarness({ preview = true, draft = null, h5 = false } = {}) {
     saveBookingDraft: (payload) => state.saved.push(payload),
     consumeBookingIntent: () => state.intents.shift(),
     setBookingIntent: (intent) => { state.setIntents.push(intent); return true },
-    getStoredSiteConfig: () => ({}),
-    getCachedSiteConfig: async () => ({}),
+    getStoredSiteConfig: () => state.config,
+    getCachedSiteConfig: async () => state.config,
+    refreshSiteConfig: async () => state.config,
     normalizePersonalExpertHome: () => ({ enterprise: { serviceModes: [], processSteps: [] } }),
     normalizeMiniappLearn: () => ({ classroom: { enabled: true } }),
     normalizeMiniappCourses: () => [{ title: '工作室已配置的课程', bullets: [], id: 'course-1', paymentMode: 'consult' }],
@@ -188,3 +191,25 @@ for (const status of ['paid', 'pending']) {
   if (status === 'pending') assert.equal(state.checkedBookings.at(-1), '48', 'confirmation follows the returned order identity')
 }
 console.log('Booking and course-detail flow tests passed')
+
+{
+  const { state, page } = createBooking({ preview: false, draft: { kind: 'course', courseId: 'course-1', contactName: '测试用户', phone: '13800138000', intent: '希望了解成长课' }, config: { home: { miniappCourses: { enabled: false } } } })
+  await page.applyBookingIntent()
+  assert.equal(page.courses.value.length, 0, 'closed registration must hide configured courses')
+  page.consent.value = true
+  state.booking = { id: 'form-only', paymentMode: 'consult' }
+  await page.submit()
+  assert.equal(state.requests.length, 1, 'the real form still submits when course registration is closed')
+  assert.equal(state.requests[0].courseId, undefined, 'an old draft must not bind a disabled course')
+  assert.equal(state.requests[0].intent, '希望了解成长课', 'keep the user-entered intent')
+  assert.equal(state.payCalls || 0, 0, 'form-only submission must not initiate payment')
+}
+{
+  const { state, page } = createBooking({ preview: false })
+  state.config = { home: { miniappCourses: { enabled: false } } }
+  await page.applyBookingIntent()
+  assert.equal(page.courses.value.length, 0, 'returning to the page must apply a newly closed switch')
+  state.config = { home: { miniappCourses: { enabled: true } } }
+  await page.applyBookingIntent()
+  assert.equal(page.courses.value.length, 1, 'reopening restores the configured catalog')
+}

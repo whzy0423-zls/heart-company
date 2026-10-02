@@ -134,7 +134,7 @@ import * as coursesModule from './courses.vue';
 const MiniappCourses = coursesModule.default;
 const normalizeMiniappCourses = coursesModule.normalizeMiniappCourses as (
   config: Record<string, any>,
-) => { items: Array<Record<string, any>> };
+) => { enabled: boolean; items: Array<Record<string, any>> };
 const yuanToCents = coursesModule.yuanToCents as (
   value: string | number,
 ) => number | null;
@@ -191,6 +191,115 @@ describe('miniapp course management', () => {
     expect(courses.items[0]?.id).toMatch(/^course-/);
     expect(config.home.preserve).toEqual({ source: 'cms' });
     expect(config.home.miniappCourses).toBe(courses);
+  });
+
+  it('defaults the enrollment module to enabled and preserves an explicit disabled value', () => {
+    expect(normalizeMiniappCourses(createConfig()).enabled).toBe(true);
+    expect(
+      normalizeMiniappCourses(createConfig({ miniappCourses: { items: [] } }))
+        .enabled,
+    ).toBe(true);
+    expect(
+      normalizeMiniappCourses(createConfig({ courses: { enabled: false, items: [] } }))
+        .enabled,
+    ).toBe(true);
+    expect(
+      normalizeMiniappCourses(
+        createConfig({ miniappCourses: { enabled: 'false', items: [] } }),
+      ).enabled,
+    ).toBe(true);
+    const config = createConfig({
+      miniappCourses: {
+        enabled: false,
+        catalogExtension: 'retained',
+        items: [{ id: 'course-growth', title: '共学课', priceCents: 1999 }],
+      },
+    });
+    expect(normalizeMiniappCourses(config)).toMatchObject({
+      enabled: false,
+      catalogExtension: 'retained',
+      items: [{ id: 'course-growth', enabled: true, priceCents: 1999 }],
+    });
+  });
+
+  it('persists the module switch and keeps courses editable after closing and reloading', async () => {
+    let persisted = createConfig({
+      preserve: { source: 'cms' },
+      miniappLearn: { classroom: { enabled: true } },
+      miniappCourses: {
+        catalogExtension: 'retained',
+        items: [
+          {
+            id: 'course-growth',
+            title: '共学课',
+            priceCents: 1999,
+            enabled: true,
+            vendorExtension: 'retained',
+          },
+        ],
+      },
+    });
+    vi.mocked(getSiteConfigApi).mockImplementation(async () =>
+      JSON.parse(JSON.stringify(persisted)),
+    );
+    vi.mocked(updateSiteConfigApi).mockImplementation(async (value) => {
+      persisted = JSON.parse(JSON.stringify(value));
+      return JSON.parse(JSON.stringify(persisted));
+    });
+    let wrapper = mountVueComponent(MiniappCourses);
+    await flushVuePromises();
+    const moduleSwitch = () =>
+      document.querySelector<HTMLButtonElement>(
+        'button[aria-label="显示课程报名模块"]',
+      );
+    expect(moduleSwitch()).not.toBeNull();
+    moduleSwitch()!.click();
+    await flushVuePromises();
+    wrapper.button('保存配置')?.click();
+    await flushVuePromises();
+    expect(persisted.home).toMatchObject({
+      preserve: { source: 'cms' },
+      miniappLearn: { classroom: { enabled: true } },
+      miniappCourses: {
+        enabled: false,
+        catalogExtension: 'retained',
+        items: [
+          {
+            id: 'course-growth',
+            enabled: true,
+            priceCents: 1999,
+            vendorExtension: 'retained',
+          },
+        ],
+      },
+    });
+    wrapper.unmount();
+
+    wrapper = mountVueComponent(MiniappCourses);
+    await flushVuePromises();
+    expect(wrapper.text()).toContain('报名页仅保留填写表单');
+    const priceInput = document.querySelector<HTMLInputElement>(
+      'input[aria-label="课程价格（元）"]',
+    );
+    expect(priceInput).not.toBeNull();
+    priceInput!.value = '29.99';
+    priceInput!.dispatchEvent(new Event('input', { bubbles: true }));
+    await flushVuePromises();
+    wrapper.button('保存配置')?.click();
+    await flushVuePromises();
+    expect(persisted.home.miniappCourses).toMatchObject({
+      enabled: false,
+      items: [{ id: 'course-growth', enabled: true, priceCents: 2999 }],
+    });
+    moduleSwitch()!.click();
+    await flushVuePromises();
+    wrapper.button('保存配置')?.click();
+    await flushVuePromises();
+    expect(persisted.home.miniappCourses).toMatchObject({
+      enabled: true,
+      items: [{ id: 'course-growth', enabled: true, priceCents: 2999 }],
+    });
+    wrapper.unmount();
   });
 
   it('converts yuan input to exact cents and rejects more than two decimals', () => {

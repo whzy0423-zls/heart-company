@@ -1,12 +1,23 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { onShow, onUnload, onPullDownRefresh, onReachBottom } from '@dcloudio/uni-app'
+import { isCourseRegistrationEnabled } from '../../utils/courseRegistration'
+import { refreshSiteConfig, getStoredSiteConfig } from '../../utils/siteConfig'
 import NxIcon from '../../components/NxIcon.vue'
 import { getToken, clearToken } from '../../utils/auth'
 import { listMiniappOrdersApi, createCourseBookingOrderApi, devPayCourseBookingOrderApi, getCourseBookingOrderStatusApi } from '../../api'
 import { payWechatOrder } from '../../utils/payment'
 import { createCoursePaymentController, coursePaymentResultUrl } from '../../utils/coursePayment'
 import { userErrorMessage } from '../../utils/userMessage'
+
+const registrationConfig = ref(getStoredSiteConfig() || {})
+const courseRegistrationEnabled = computed(() => isCourseRegistrationEnabled(registrationConfig.value))
+async function refreshRegistrationConfig() {
+  try {
+    const config = await refreshSiteConfig()
+    if (!disposed) registrationConfig.value = config || {}
+  } catch { /* Retain the last confirmed switch; checkout is also guarded by the server. */ }
+}
 
 const filters = [{ value: '', label: '全部订单' }, { value: 'pending', label: '待支付' }, { value: 'paid', label: '已支付' }]
 const filter = ref('')
@@ -135,7 +146,7 @@ function productLabel(product) {
 }
 function statusLabel(status) { return { pending: '待支付', paid: '已支付', closed: '已关闭', refunded: '已退款', cancelled: '已取消', failed: '未完成' }[status] || '状态确认中' }
 function amountYuan(amount) { return Number.isFinite(Number(amount)) ? (Number(amount) / 100).toFixed(2) : '—' }
-function canContinue(order) { return order.product === 'course_booking' && order.status === 'pending' && /^\d+$/.test(String(order.bookingId || '')) }
+function canContinue(order) { return courseRegistrationEnabled.value && order.product === 'course_booking' && order.status === 'pending' && /^\d+$/.test(String(order.bookingId || '')) }
 function openCourse(order) {
   if (disposed || !sessionToken || sessionToken !== getToken()) { handleSessionChange(sessionToken); return }
   if (order.product !== 'course_booking') return
@@ -143,6 +154,7 @@ function openCourse(order) {
     uni.navigateTo({ url: `/pages/my-course/my-course?bookingId=${encodeURIComponent(order.bookingId)}` })
     return
   }
+  if (!courseRegistrationEnabled.value) { browseCourses(); return }
   if (order.courseId) uni.navigateTo({ url: `/pages/course-detail/course-detail?id=${encodeURIComponent(order.courseId)}` })
 }
 function browseCourses() { uni.switchTab({ url: '/pages/booking/booking' }) }
@@ -222,7 +234,7 @@ onShow(() => {
   redirecting = false
   if (sessionToken && sessionToken !== getToken()) resetSession()
   if (payingId.value && sessionToken === getToken()) { paymentController?.resume(); return }
-  return refresh()
+  return Promise.all([refresh(), refreshRegistrationConfig()])
 })
 onPullDownRefresh(async () => { try { await refresh() } finally { uni.stopPullDownRefresh() } })
 onReachBottom(loadMore)
@@ -241,7 +253,7 @@ onUnload(() => { disposed = true; resetSession() })
         <view class="order-top"><text>{{ productLabel(order.product) }}</text><text :class="['order-status', `order-status--${order.status}`]">{{ statusLabel(order.status) }}</text></view>
         <view class="order-body"><image v-if="order.cover && !failedCovers[order.id]" class="order-cover" :src="order.cover" mode="aspectFill" @error="failedCovers[order.id] = true" /><view v-else class="order-cover order-cover--empty"><NxIcon name="book" :size="28" /></view><view class="order-copy"><text class="order-title">{{ order.title || productLabel(order.product) }}</text><text class="order-date">{{ order.createTime }} 下单</text><text v-if="order.status === 'paid' && order.paidAt" class="order-date">{{ order.paidAt }} 确认</text></view></view>
         <text class="order-number">订单号 {{ order.outTradeNo }}</text>
-        <view class="order-bottom"><view><text class="amount-label">{{ order.status === 'paid' ? '实付' : '订单金额' }}</text><text class="order-amount"><text>¥</text>{{ amountYuan(order.amount) }}</text></view><view class="order-actions"><button v-if="order.product === 'course_booking' && (order.courseId || (order.status === 'paid' && order.bookingId))" :class="['small-button', { 'small-button--primary': order.status === 'paid' }]" :disabled="!!payingId" @click="openCourse(order)">{{ order.status === 'paid' ? '查看课程' : '课程介绍' }}</button><button v-if="order.product === 'course_booking' && order.bookingId" class="small-button" :disabled="!!payingId" @click="viewPaymentResult(order)">{{ order.status === 'paid' ? '付款记录' : '支付结果' }}</button><button v-if="canContinue(order)" class="small-button small-button--primary" :loading="payingId === String(order.id)" :disabled="!!payingId || loadingMore" @click="continuePayment(order)">{{ payingId === String(order.id) ? '确认中' : '继续支付' }}</button></view></view>
+        <view class="order-bottom"><view><text class="amount-label">{{ order.status === 'paid' ? '实付' : '订单金额' }}</text><text class="order-amount"><text>¥</text>{{ amountYuan(order.amount) }}</text></view><view class="order-actions"><button v-if="order.product === 'course_booking' && ((courseRegistrationEnabled && order.courseId) || (order.status === 'paid' && order.bookingId))" :class="['small-button', { 'small-button--primary': order.status === 'paid' }]" :disabled="!!payingId" @click="openCourse(order)">{{ order.status === 'paid' ? '查看课程' : '课程介绍' }}</button><button v-if="order.product === 'course_booking' && order.bookingId" class="small-button" :disabled="!!payingId" @click="viewPaymentResult(order)">{{ order.status === 'paid' ? '付款记录' : '支付结果' }}</button><button v-if="canContinue(order)" class="small-button small-button--primary" :loading="payingId === String(order.id)" :disabled="!!payingId || loadingMore" @click="continuePayment(order)">{{ payingId === String(order.id) ? '确认中' : '继续支付' }}</button></view></view>
         <text v-if="payingId === String(order.id) && paymentMessage" class="payment-message" role="status">{{ paymentMessage }}</text>
       </view>
       <view v-if="moreError" class="load-more"><text class="muted">{{ moreError }}</text><button :disabled="!!payingId" class="text-button" @click="loadMore">重试加载</button></view>

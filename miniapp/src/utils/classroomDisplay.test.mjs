@@ -5,7 +5,9 @@ import { join } from "node:path";
 
 const dir = await mkdtemp(join(tmpdir(), "nx-classroom-display-"));
 try {
-  const source = await readFile(new URL("./classroomDisplay.js", import.meta.url), "utf8");
+  const source = (await readFile(new URL("./classroomDisplay.js", import.meta.url), "utf8")).replace(
+    "'./contentAsset.js'", JSON.stringify(new URL('./contentAsset.js', import.meta.url).href),
+  );
   const modulePath = join(dir, "classroomDisplay.mjs");
   await writeFile(modulePath, source);
   const {

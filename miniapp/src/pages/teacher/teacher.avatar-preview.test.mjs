@@ -11,8 +11,10 @@ assert.match(script, /function\s+preview\s*\(\s*\)\s*\{[\s\S]*previewImage\(port
 assert.match(script, /function\s+previewMentorPhoto\s*\(\s*\)\s*\{[\s\S]*previewImage\(/, 'mentor photo should expose a preview action')
 
 assert.match(template, /<image\b[^>]*class=["']portrait-image["'][^>]*@error=["']imageFailed\s*=\s*true["']/, 'teacher portrait should use an explicit image class and failure state')
+assert.match(template, /<image\b[^>]*class=["']portrait-image["'][^>]*mode=["']aspectFit["']/, 'teacher portrait should preserve the full vertical source image')
 assert.match(template, /<image\b[^>]*class=["']mentor-photo["'][^>]*@click=["']previewMentorPhoto["']/, 'mentor photo should be tappable for preview')
 assert.match(source, /\.portrait-button\s*\{[^}]*display:\s*flex[^}]*overflow:\s*hidden/, 'portrait button should clip the image to its rounded frame')
-assert.match(source, /\.portrait-image\s*\{[^}]*display:\s*block[^}]*width:\s*246rpx[^}]*height:\s*350rpx/, 'portrait image should fill the fixed hero frame')
+assert.match(source, /\.portrait-image\s*\{[^}]*display:\s*block[^}]*width:\s*246rpx[^}]*height:\s*420rpx/, 'portrait image should fill the vertical frame')
+assert.match(source, /\.portrait-button\s*\{[^}]*width:\s*246rpx[^}]*height:\s*420rpx[^}]*border-radius:\s*28rpx/, 'portrait frame should be a rounded vertical rectangle')
 
 console.log('teacher avatar and photo preview tests passed')

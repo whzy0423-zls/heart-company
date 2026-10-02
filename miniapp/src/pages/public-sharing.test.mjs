@@ -1,3 +1,4 @@
+import { isCourseRegistrationEnabled } from '../utils/courseRegistration.js'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
@@ -8,6 +9,7 @@ function harness(name, options = {}) {
   const hooks = { hints: 0, navigations: 0, show: [], mount: [], menus: [], cards: [], privateQueries: [], login: 0 }
   const state = { config: options.config || { teachers: [{ name: '当前老师', title: '成长导师', avatar: '/static/current-teacher.jpg' }], courses: [{ id: 'growth-lesson', title: '真实成长课', cover: '/static/course-current.jpg' }] } }
   const context = vm.createContext({
+    isCourseRegistrationEnabled,
     ref: value => ({ value }), computed: getter => ({ get value() { return getter() } }),
     onHide: fn => { hooks.hide = fn }, onLoad: fn => { hooks.load = fn }, onUnload: fn => { hooks.unload = fn }, onResize: () => {},
     onMounted: fn => hooks.mount.push(fn), onShow: fn => hooks.show.push(fn),
@@ -15,10 +17,11 @@ function harness(name, options = {}) {
     buildShareCard: input => { hooks.cards.push(input); return { appMessage: { ...input }, timeline: { ...input } } },
     isTimelinePreview: () => options.timeline === true, requireFullMiniapp: () => { if (options.timeline) { hooks.hints++; return false }; return true },
     showPublicShareMenu: enabled => hooks.menus.push(enabled === undefined ? true : enabled),
-    getStoredSiteConfig: () => state.config, refreshSiteConfig: async () => state.config,
+    getStoredSiteConfig: () => state.config, refreshSiteConfig: async () => { await options.loadGate; return state.config },
     getCachedSiteConfig: async () => { await options.loadGate; return state.config },
     normalizeTeachers: config => config.teachers || [], normalizeMiniappCourses: config => config.courses || [],
     normalizeMiniappLearn: () => ({ classroom: { enabled: true } }),
+    setBookingIntent: () => true,
     getToken: () => options.token || '', ensureLogin: async () => { hooks.login++ },
     getCourseEnrollmentApi: async query => { hooks.privateQueries.push(query); return options.enrollment || { courseId: query.courseId, owned: false, syncStatus: 'confirmed', bookingId: '', order: null } },
     resolveHomeNavigation: () => ({ statusBarHeight: 44 }),
@@ -60,10 +63,10 @@ for (const [name, kind] of [['index', 'home'], ['teacher', 'teacher'], ['learn',
   assert.equal(typeof hooks.timeline, 'function', 'course registers the native Timeline callback')
   assert.match(source, /<NxShareActions[^>]*:disabled="!courseShareable"/, 'unavailable course sharing has a disabled button')
   const loading = hooks.load({ id: 'growth-lesson', bookingId: 'secret-booking', paid: 'true' })
-  await Promise.all(hooks.show.map(fn => fn()))
+  const showing = Promise.all(hooks.show.map(fn => fn()))
   assert.equal(hooks.menus.at(-1), false, 'course sharing remains disabled while public catalog loads')
   finish()
-  await loading
+  await Promise.all([loading, showing])
   assert.equal(hooks.menus.at(-1), true)
   assert.equal(hooks.login, 0, 'cold public course entry does not force login')
   assert.equal(hooks.privateQueries.length, 0, 'guest share recipient never fetches another account enrollment')
@@ -88,12 +91,12 @@ for (const [name, kind] of [['index', 'home'], ['teacher', 'teacher'], ['learn',
   let finish
   const { hooks } = harness('course-detail', { loadGate: new Promise(resolve => { finish = resolve }) })
   const loading = hooks.load({ id: 'growth-lesson' })
-  await Promise.all(hooks.show.map(fn => fn()))
+  const showing = Promise.all(hooks.show.map(fn => fn()))
   assert.equal(typeof hooks.hide, 'function')
   hooks.hide()
   const menuUpdates = hooks.menus.length
   finish()
-  await loading
+  await Promise.all([loading, showing])
   assert.equal(hooks.menus.length, menuUpdates, 'a hidden course page never reopens menus over the active private page')
   await Promise.all(hooks.show.map(fn => fn()))
   assert.equal(hooks.menus.at(-1), true, 'returning to the loaded public course restores sharing')
@@ -112,3 +115,11 @@ for (const name of ['index', 'teacher', 'learn', 'course-detail']) {
   assert.equal(hooks.privateQueries.length, 0, 'Timeline preview never reads private enrollment even with stale storage')
 }
 console.log('public page friend and Timeline sharing tests passed')
+
+{
+  const { hooks } = harness('course-detail', { config: { home: { miniappCourses: { enabled: false } }, courses: [{ id: 'growth-lesson', title: '隐藏课程' }] } })
+  await hooks.load({ id: 'growth-lesson' })
+  assert.equal(hooks.menus.at(-1), false)
+  assert.equal(hooks.friend().kind, 'home', 'closed course links must not share a sales card')
+  assert.equal(hooks.navigations, 1, 'old public links redirect to the real booking form')
+}

@@ -121,7 +121,7 @@ func (s *Server) courseEnrollment(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		response.CatalogAvailable = true
-		if !course.Enabled && !response.Owned {
+		if (!course.Enabled || !siteconfig.MiniappCoursesEnabled(cfg)) && !response.Owned {
 			if response.Order == nil {
 				writeCourseOrderError(w, errCourseBookingNotFound)
 				return

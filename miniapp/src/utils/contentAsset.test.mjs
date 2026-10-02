@@ -6,7 +6,9 @@ import { join } from 'node:path'
 const dir = await mkdtemp(join(tmpdir(), 'nx-content-asset-'))
 try {
   const modulePath = join(dir, 'contentAsset.mjs')
-  const rawSource = await readFile(new URL('./contentAsset.js', import.meta.url), 'utf8')
+  const rawSource = (await readFile(new URL('./contentAsset.js', import.meta.url), 'utf8')).replace(
+    "'../data/shareAssets.js'", JSON.stringify(new URL('../data/shareAssets.js', import.meta.url).href),
+  )
   let source = rawSource
   source = source.replace(
     /import \{ API_BASE(?:, DEFAULT_API_BASE)? \} from '\.\.\/config(?:\.js)?'/,
@@ -28,6 +30,24 @@ try {
     'https://cdn.example.com/teacher.jpg',
   )
   assert.equal(resolveContentAsset('/static/wheel.png', fallback), '/static/wheel.png')
+  for (const category of ['team', 'family']) {
+    const cover = resolveContentAsset(`/static/editorial/course-${category}.jpg`, fallback)
+    assert.match(
+      cover,
+      new RegExp(`^https://api\\.example\\.test/assets/miniapp-share/course-${category}-[a-f0-9]+\\.jpg$`),
+      'default course covers should use hosted JPEGs without adding image bytes to the package',
+    )
+    assert.equal(
+      resolveContentAsset(`/static/editorial/course-${category}.webp`, fallback),
+      cover,
+      'existing course settings should receive the same compatible JPEG as the new default',
+    )
+  }
+  assert.equal(
+    resolveContentAsset('https://cdn.example.com/course-team.webp', fallback),
+    'https://cdn.example.com/course-team.webp',
+    'legacy compatibility must not replace administrator-provided cover URLs',
+  )
   assert.equal(
     resolveContentAsset('/assets/teacher-poster.jpg', fallback),
     'https://api.example.test/assets/teacher-poster.jpg',
