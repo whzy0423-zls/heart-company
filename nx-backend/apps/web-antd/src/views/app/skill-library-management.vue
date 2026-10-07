@@ -485,6 +485,7 @@ onMounted(load);
           <Table
             :columns="categoryColumns"
             :data-source="categories"
+            :scroll="{ x: 800 }"
             :loading="loading"
             :pagination="false"
             row-key="id"

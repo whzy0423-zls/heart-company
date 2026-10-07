@@ -200,6 +200,7 @@ onMounted(load);
     <Table
       :columns="columns"
       :data-source="menus"
+      :scroll="{ x: 1360 }"
       :pagination="false"
       row-key="id"
     >

@@ -6,6 +6,7 @@ import { preferences } from '@vben/preferences';
 import { initStores } from '@vben/stores';
 import '@vben/styles';
 import '@vben/styles/antd';
+import './styles/mobile.css';
 
 import { useTitle } from '@vueuse/core';
 
@@ -18,6 +19,8 @@ import { startAdminBrandingSync } from './branding-startup';
 import { router } from './router';
 
 async function bootstrap(namespace: string) {
+  document.body.classList.add('nx-admin-ui');
+
   // 初始化组件适配器
   await initComponentAdapter();
 

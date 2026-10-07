@@ -182,6 +182,7 @@ onMounted(load);
     <Table
       :columns="columns"
       :data-source="users"
+      :scroll="{ x: 960 }"
       :pagination="{
         current: query.page,
         pageSize: query.pageSize,

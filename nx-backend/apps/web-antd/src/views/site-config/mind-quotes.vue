@@ -299,6 +299,7 @@ async function removeQuote(q: MindQuote) {
           <Table
             :columns="quoteColumns"
             :data-source="quotes"
+            :scroll="{ x: 860 }"
             :loading="loadingQuotes"
             :pagination="false"
             row-key="id"

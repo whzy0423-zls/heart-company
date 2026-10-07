@@ -94,7 +94,7 @@ onMounted(loadDashboard);
         状态：{{ statusText(current?.status) }}；生成并发布后，芯之力会从当前激活版本检索理论内容。
       </div>
 
-      <Table :columns="columns" :data-source="cards" :loading="loading" :pagination="{ pageSize: 20 }" row-key="id">
+      <Table :scroll="{ x: 1000 }" :columns="columns" :data-source="cards" :loading="loading" :pagination="{ pageSize: 20 }" row-key="id">
         <template #bodyCell="{ column, record }">
           <Tag v-if="column.dataIndex === 'status'" :color="record.status === 'published' ? 'green' : 'orange'">
             {{ statusText(record.status) }}

@@ -58,6 +58,7 @@ onMounted(load);
     <Table
       :columns="columns"
       :data-source="items"
+      :scroll="{ x: 820 }"
       :loading="loading"
       :pagination="false"
       row-key="ID"

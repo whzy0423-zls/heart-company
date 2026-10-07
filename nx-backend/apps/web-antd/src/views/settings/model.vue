@@ -768,7 +768,7 @@ async function testChat() {
               />
             </Form.Item>
             <Row :gutter="12">
-              <Col :span="8">
+              <Col :sm="8" :xs="24">
                 <Form.Item label="语速">
                   <Input
                     v-model:value="form.xinzhiliVoice.tts.speed"
@@ -777,7 +777,7 @@ async function testChat() {
                   />
                 </Form.Item>
               </Col>
-              <Col :span="8">
+              <Col :sm="8" :xs="24">
                 <Form.Item label="格式">
                   <Input
                     v-model:value="form.xinzhiliVoice.tts.responseFormat"
@@ -785,7 +785,7 @@ async function testChat() {
                   />
                 </Form.Item>
               </Col>
-              <Col :span="8">
+              <Col :sm="8" :xs="24">
                 <Form.Item label="超时（秒）">
                   <Input
                     v-model:value="form.xinzhiliVoice.tts.timeoutSeconds"

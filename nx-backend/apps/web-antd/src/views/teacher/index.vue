@@ -356,7 +356,7 @@ onMounted(load);
           <Button type="primary" @click="loadTeachers">查询</Button>
           <Button v-if="canWrite" type="primary" @click="openCreate">新增老师</Button>
         </div>
-        <Table :columns="profileColumns" :data-source="teachers" :loading="loading" row-key="key" :pagination="{ current: query.page, pageSize: query.pageSize, total: teacherTotal }" @change="(p: any) => handleProfilePageChange(p.current ?? 1, p.pageSize ?? 20)">
+        <Table :scroll="{ x: 1040 }" :columns="profileColumns" :data-source="teachers" :loading="loading" row-key="key" :pagination="{ current: query.page, pageSize: query.pageSize, total: teacherTotal }" @change="(p: any) => handleProfilePageChange(p.current ?? 1, p.pageSize ?? 20)">
           <template #bodyCell="{ column, record }">
             <template v-if="column.dataIndex === 'enabled'"><Tag :color="record.enabled ? 'green' : 'default'">{{ record.enabled ? '启用' : '停用' }}</Tag></template>
             <template v-if="column.key === 'action'"><Space><Button v-if="canWrite" size="small" type="link" @click="openEdit(profileRecord(record))">编辑</Button><Button v-if="canWrite" size="small" type="link" @click="openBinding(profileRecord(record))">绑定用户</Button><Button v-if="canWrite" size="small" type="link" @click="toggleEnabled(profileRecord(record))">{{ record.enabled ? '停用' : '启用' }}</Button></Space></template>
@@ -370,7 +370,7 @@ onMounted(load);
           <Select v-model:value="reviewQuery.reviewStatus" placeholder="审核状态" :options="reviewStatusOptions" @change="loadReviews" />
           <Button @click="loadReviews">刷新队列</Button>
         </div>
-        <Table :columns="reviewColumns" :data-source="reviews" :loading="reviewLoading" row-key="id" :pagination="{ current: reviewQuery.page, pageSize: reviewQuery.pageSize, total: reviewTotal }" @change="(p: any) => handleReviewPageChange(p.current ?? 1, p.pageSize ?? 20)">
+        <Table :scroll="{ x: 1240 }" :columns="reviewColumns" :data-source="reviews" :loading="reviewLoading" row-key="id" :pagination="{ current: reviewQuery.page, pageSize: reviewQuery.pageSize, total: reviewTotal }" @change="(p: any) => handleReviewPageChange(p.current ?? 1, p.pageSize ?? 20)">
           <template #bodyCell="{ column, record }">
             <template v-if="column.dataIndex === 'feedType'">{{ record.feedType === 'daily' ? '日常动态' : '正式课程' }}</template>
             <template v-if="column.dataIndex === 'reviewStatus'"><Tag :color="statusColor[record.reviewStatus]">{{ statusLabel[record.reviewStatus] ?? record.reviewStatus }}</Tag></template>

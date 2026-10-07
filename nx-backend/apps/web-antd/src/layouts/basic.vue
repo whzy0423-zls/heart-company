@@ -2,7 +2,11 @@
 import type { NotificationItem } from '@vben/layouts';
 
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import {
+  isNavigationFailure,
+  NavigationFailureType,
+  useRouter,
+} from 'vue-router';
 
 import { AuthenticationLoginExpiredModal } from '@vben/common-ui';
 import { useAppConfig, useWatermark } from '@vben/hooks';
@@ -12,7 +16,11 @@ import {
   Notification,
   UserDropdown,
 } from '@vben/layouts';
-import { preferences, usePreferences } from '@vben/preferences';
+import {
+  preferences,
+  updatePreferences,
+  usePreferences,
+} from '@vben/preferences';
 import { useAccessStore, useUserStore } from '@vben/stores';
 import { openWindow } from '@vben/utils';
 
@@ -50,7 +58,18 @@ const authStore = useAuthStore();
 const accessStore = useAccessStore();
 const { apiURL } = useAppConfig(import.meta.env, import.meta.env.PROD);
 const { destroyWatermark, updateWatermark } = useWatermark();
-const { isDark } = usePreferences();
+const { isDark, isMobile } = usePreferences();
+
+// Touch navigation has no mouseleave event to close the shared sidebar.
+// Keep this behavior in the admin app; desktop sidebar preferences are unchanged.
+const removeMobileNavigationGuard = router.afterEach((_to, _from, failure) => {
+  if (
+    isMobile.value &&
+    (!failure || isNavigationFailure(failure, NavigationFailureType.duplicated))
+  ) {
+    updatePreferences({ sidebar: { collapsed: true } });
+  }
+});
 const showDot = computed(() =>
   notifications.value.some((item) => !item.isRead),
 );
@@ -408,6 +427,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  removeMobileNavigationGuard();
   if (signupNoticeTimer) {
     window.clearInterval(signupNoticeTimer);
   }

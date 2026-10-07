@@ -522,10 +522,30 @@ onMounted(() => {
 }
 
 .filter-bar {
-  display: grid;
-  grid-template-columns: minmax(220px, 360px) 160px 140px auto;
+  display: flex;
+  flex-wrap: wrap;
   gap: 10px;
-  justify-content: start;
+}
+
+.keyword-input {
+  flex: 1 0 220px;
+  min-width: 0;
+  max-width: min(360px, 100%);
+}
+
+.filter-select {
+  flex: 0 0 160px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.filter-select:nth-child(3) {
+  flex-basis: 140px;
+}
+
+.filter-actions {
+  flex: 0 0 auto;
+  max-width: 100%;
 }
 
 .keyword-input,
@@ -651,11 +671,15 @@ onMounted(() => {
   color: hsl(var(--muted-foreground));
 }
 
-@media (max-width: 640px) {
-  .filter-bar {
-    grid-template-columns: 1fr;
+@media (max-width: 767px) {
+  .filter-bar > .keyword-input,
+  .filter-bar > .filter-select {
+    flex-basis: 100%;
+    max-width: 100%;
   }
+}
 
+@media (max-width: 640px) {
   .filter-actions,
   .filter-actions :deep(.ant-space-item),
   .filter-actions :deep(.ant-btn) {

@@ -193,13 +193,13 @@ onMounted(load);
 
     <Card class="mb-4" title="型号检索预览">
       <Space.Compact block><Input v-model:value="query" placeholder="输入一个模拟问题" @press-enter="runPreview" /><Button type="primary" @click="runPreview">预览</Button></Space.Compact>
-      <Table v-if="preview.length" :columns="itemColumns.slice(0, 3)" :data-source="preview" :pagination="false" class="mt-4" row-key="contentKey" />
+      <Table :scroll="{ x: 840 }" v-if="preview.length" :columns="itemColumns.slice(0, 3)" :data-source="preview" :pagination="false" class="mt-4" row-key="contentKey" />
       <Empty v-else class="mt-4" description="输入问题查看当前型号命中内容" />
     </Card>
 
     <Card title="历史版本">
       <template #extra><Button @click="loadVersions">刷新版本</Button></template>
-      <Table :columns="versionColumns" :data-source="versions" :pagination="false" row-key="releaseId">
+      <Table :scroll="{ x: 640 }" :columns="versionColumns" :data-source="versions" :pagination="false" row-key="releaseId">
         <template #bodyCell="{ column, record }">
           <Tag v-if="column.dataIndex === 'status'" :color="record.status === 'active' ? 'green' : 'default'">{{ record.status }}</Tag>
           <Button v-if="column.key === 'action' && canPublish && record.status !== 'active'" size="small" @click="rollback(record.version)">回滚</Button>
