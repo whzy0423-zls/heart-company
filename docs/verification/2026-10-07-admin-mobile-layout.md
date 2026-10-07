@@ -19,7 +19,7 @@
 - WebKit iPhone 13 环境 3 项通过：订单、审计、老师；WebKit 使用 `scrollBy` 验证滚动容器，Chrome 使用实际鼠标滚轮。模拟环境不等同于各品牌实机全覆盖。
 - `vue-tsc`、后台生产构建、新增 CSS Stylelint、`git diff --check` 通过。
 - 原代理管理权限/布局回归 9 项通过，覆盖管理员、二级/三级代理及窄屏/桌面。三级代理新增权限仍禁用。
-- 正式构建候选使用真实登录表单和滑块测试；第一轮准确检出手机侧栏残留，修复后原 6 场景通过，最终产物增加横屏客户筛选验证。
+- 正式构建候选使用真实登录表单和滑块测试；第一轮准确检出手机侧栏残留，修复后最终 7 项通过（46.6s，退出码 0），包含横屏客户筛选。
 
 源码可重复测试：`playwright.mobile.config.ts` 和 `e2e/admin-mobile-layout.spec.ts`。设置 `ADMIN_LAYOUT_BROWSER=webkit` 可使用 WebKit 项目。需安装对应 Playwright 浏览器；Chrome 使用 `PLAYWRIGHT_CHANNEL=chrome`。测试 API 代理指向本机未监听端口，遗漏 mock 即失败，不回源真实后台。
 
@@ -27,4 +27,18 @@
 
 ## 发布边界
 
-冻结后台完整构建，以当前后台镜像为基础 COPY 静态资源，保留 Nginx 和旧哈希文件，兼容已打开页面的懒加载。仅替换 Compose 的 admin image；比较其余有效配置、运行容器 ID 和公网 App/H5 发布入口哈希；保留旧镜像和覆盖配置用于回滚。线上复测结果将在发布后补入。
+冻结后台完整构建，以当前后台镜像为基础 COPY 静态资源，保留 Nginx 和旧哈希文件，兼容已打开页面的懒加载。仅替换 Compose 的 admin image；比较其余有效配置、运行容器 ID 和公网 App/H5 发布入口哈希；保留旧镜像和覆盖配置用于回滚。
+
+## 线上发布结果
+
+2026-10-07 已合并推送 main（实现提交 `164f145`），并更新后台镜像为 `heart-company-admin:mobile-layout-20261007`。
+
+- 367 个新产物文件在运行容器中 SHA256 全部一致；Nginx 配置哈希保持原样，`nginx -t` 通过；有效 Compose 除 admin image 外相同，其他运行服务容器 ID/镜像不变。
+- 公网 `/admin/` index SHA256：`0bdd95c89b8a5eb8233f7595661a508b6fbcb7aeb4948eb7a970ac69dfd75500`；响应 no-cache/no-store。10 个入口及新增样式资源的公网哈希与冻结产物一致，MIME 正确。
+- 公网真实页面 + 模拟 API 的最终 7 项操作测试全部通过，55.1s，退出码 0；覆盖 360/390 手机、1440 桌面及 844×390 横屏。确认登录及切页始终留在 `/admin/`。未知接口、业务写请求、页面异常均为零；未登录真实后台账号。
+- `/app`、`/h5/`、`/h5/version.json`、Android 最新发布接口均与更新前内容哈希一致。
+- 初次部署预检使用了错误 Nginx 路径，未切换服务；下一次校验因 Alpine BusyBox 不支持 `sha256sum --quiet` 自动回滚。修正为实际 `/etc/nginx/nginx.conf` 和 `sha256sum -cs` 后完整发布与公网复测通过；旧版本镜像和各轮日志保留。
+
+回滚目录：`/opt/heart-company/.deploy/admin-mobile-20261007-verified/`。恢复 `default.override.before.yml` 为 `/opt/heart-company/docker-compose.override.yml` 后运行 `docker compose -f docker-compose.yml -f docker-compose.override.yml up -d --no-deps --no-build admin`，回到 `heart-company-admin:agent-scroll-20261007`。备份有效配置仅保留服务器，不进入仓库。
+
+最终发布证据：`deployment-verified.log`、`public-verified.json`、`public-browser.log`，均位于 `/tmp/nx-admin-mobile-20261007/`；本轮候选 HTTP 服务已停止。手机浏览器刷新原后台地址即可获取新页面，不需要更新 App。
