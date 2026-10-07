@@ -17,4 +17,15 @@
 
 ## 发布
 
-候选产物冻结于 `/tmp/nx-admin-agent-names-20261007/admin/`，367 文件。发布完成后补充线上校验和回滚记录。
+2026-10-07 已合并并推送主分支，实现提交 `bb96951`。生产后台更新为 `heart-company-admin:agent-names-20261007`。
+
+- 完整产物冻结于 `/tmp/nx-admin-agent-names-20261007/admin/`，367 文件在容器中 SHA256 全部一致。
+- 仅替换 admin 镜像；Nginx 配置哈希、有效 Compose 其他字段、所有其他服务容器 ID/镜像均不变，`nginx -t` 通过（沿用原有 MIME 重复定义告警）。
+- 公网 `/admin/` index SHA256：`2f40f04a49248b38869741f262f3e66a47f174b9f864bbb7ea3d735b22fb23d9`；11 个入口资源、代理管理分包及相关 CSS 的公网哈希和冻结产物一致。
+- 候选生产包真实登录表单/滑块 + 模拟业务接口：1440px、390px 两项通过。首次脚本使用中文按钮文本定位，但按钮 accessible name 为 login，改正定位后通过；不涉及业务代码修改。
+- 公网实际静态资源 + 模拟业务接口同样 2/2 通过（9.4s），验证代理号后的名称、老代理补充查询、新增弹窗取消、横向滚动、手机无页面溢出；无 JS 异常、未知接口或真实业务写入。
+- `/app`、`/h5/`、`/h5/version.json`、Android 最新发布接口内容哈希均与本次后台发布前一致。H5 保持 1.1.29+213，Android 保持 1.1.29+195。
+
+回滚：恢复 `/opt/heart-company/.deploy/admin-agent-names-20261007/default.override.before.yml` 到 `/opt/heart-company/docker-compose.override.yml`，然后在该目录执行 `docker compose -f docker-compose.yml -f docker-compose.override.yml up -d --no-deps --no-build admin`，回到 `heart-company-admin:mobile-layout-20261007`。保留旧哈希静态文件，支持已经打开页面的后续懒加载。
+
+证据目录 `/tmp/nx-admin-agent-names-20261007/`：`tests.log`、`typecheck.log`、`browser-chrome.log`、`build.log`、`production-browser-fixed.log`、`deployment.log`、`public-verified.json`、`public-browser.log` 和 `browser/admin-390.png` / `admin-1440.png`。
