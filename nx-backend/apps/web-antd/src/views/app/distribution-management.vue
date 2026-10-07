@@ -143,10 +143,9 @@ let customerSearchRequestId = 0;
 let trendChart: echarts.ECharts | undefined;
 
 const columns = [
-  { dataIndex: 'id', fixed: 'left' as const, title: '代理 ID', width: 100 },
+  { dataIndex: 'agentCode', fixed: 'left' as const, title: '代理号 / 用户昵称', width: 240 },
+  { dataIndex: 'id', title: '代理 ID', width: 100 },
   { dataIndex: 'appUserAccount', title: '代理人账号', width: 190 },
-  { dataIndex: 'agentCode', title: '代理号', width: 180 },
-  { dataIndex: 'appUserName', title: '用户名称', width: 160 },
   { dataIndex: 'level', title: '代理等级', width: 120 },
   { dataIndex: 'development', title: '发展概况', width: 260 },
   { dataIndex: 'status', title: '状态', width: 110 },
@@ -154,18 +153,16 @@ const columns = [
 ];
 
 const childAgentColumns = [
+  { dataIndex: 'agentCode', title: '代理号 / 用户昵称', width: 240 },
   { dataIndex: 'id', title: '代理 ID', width: 100 },
   { dataIndex: 'appUserAccount', title: '代理人账号', width: 180 },
-  { dataIndex: 'agentCode', title: '代理号', width: 160 },
-  { dataIndex: 'appUserName', title: '用户名称', width: 160 },
   { dataIndex: 'level', title: '代理等级', width: 120 },
   { dataIndex: 'directUserCount', title: '直属客户', width: 110 },
   { dataIndex: 'status', title: '状态', width: 110 },
 ];
 
 const rankingColumns = [
-  { dataIndex: 'agentCode', title: '代理号', width: 150 },
-  { dataIndex: 'appUserName', title: '用户名称', width: 160 },
+  { dataIndex: 'agentCode', title: '代理号 / 用户昵称', width: 240 },
   { dataIndex: 'directUserCount', title: '直属客户', width: 110 },
   { dataIndex: 'childAgentCount', title: '下级代理', width: 110 },
   { dataIndex: 'orderCount', title: '订单数', width: 100 },
@@ -658,7 +655,10 @@ onBeforeUnmount(() => {
       <Card v-if="isAgentBackoffice" :bordered="false" class="agent-share-card">
         <Space wrap align="center" size="middle">
           <Typography.Text type="secondary">我的代理号</Typography.Text>
-          <Tag color="blue" class="agent-code-tag">{{ currentAgent?.agentCode || '加载中...' }}</Tag>
+          <span class="agent-identity">
+            <Tag color="blue" class="agent-code-tag">{{ currentAgent?.agentCode || '加载中...' }}</Tag>
+            <span class="agent-identity-name">{{ agentDisplayName(currentAgent || undefined) }}</span>
+          </span>
           <Button size="small" type="primary" :disabled="!currentAgent?.agentCode" @click="copyCurrentAgentCode">
             复制代理号
           </Button>
@@ -747,10 +747,10 @@ onBeforeUnmount(() => {
         >
           <template #bodyCell="{ column, record }">
             <template v-if="column.dataIndex === 'agentCode'">
-              <Tag color="blue">{{ rankingOf(record).agentCode }}</Tag>
-            </template>
-            <template v-else-if="column.dataIndex === 'appUserName'">
-              {{ rankingDisplayName(rankingOf(record).appUserId) }}
+              <span class="agent-identity">
+                <Tag color="blue">{{ rankingOf(record).agentCode }}</Tag>
+                <span class="agent-identity-name">{{ rankingDisplayName(rankingOf(record).appUserId) }}</span>
+              </span>
             </template>
             <template v-else-if="isRankingMoneyColumn(column.dataIndex)">
               {{ rankingMoneyValue(record, column.dataIndex) }}
@@ -870,14 +870,11 @@ onBeforeUnmount(() => {
                 </Typography.Text>
               </Space>
             </template>
-            <template v-else-if="column.dataIndex === 'appUserName'">
-              {{ agentDisplayName(agentOf(record)) }}
-            </template>
             <template v-else-if="column.dataIndex === 'agentCode'">
-              <Space>
+              <span class="agent-identity">
                 <Tag color="blue">{{ agentOf(record).agentCode }}</Tag>
-                <Typography.Text type="secondary">后台自动生成</Typography.Text>
-              </Space>
+                <span class="agent-identity-name">{{ agentDisplayName(agentOf(record)) }}</span>
+              </span>
             </template>
             <template v-else-if="column.dataIndex === 'level'">
               <Tag color="purple">{{ levelText(agentOf(record).level) }}</Tag>
@@ -954,7 +951,7 @@ onBeforeUnmount(() => {
             show-icon
             type="info"
             message="一级代理下级发展情况"
-            :description="`一级代理 ${selectedParentAgent.agentCode} 当前有下级二级代理 ${selectedParentAgent.secondLevelAgentCount || 0} 人，下级三级代理 ${selectedParentAgent.thirdLevelAgentCount || 0} 人，直属客户 ${selectedParentAgent.directUserCount || 0} 人。`"
+            :description="`一级代理 ${selectedParentAgent.agentCode}（${agentDisplayName(selectedParentAgent)}）当前有下级二级代理 ${selectedParentAgent.secondLevelAgentCount || 0} 人，下级三级代理 ${selectedParentAgent.thirdLevelAgentCount || 0} 人，直属客户 ${selectedParentAgent.directUserCount || 0} 人。`"
           />
           <Table
             :columns="childAgentColumns"
@@ -969,10 +966,10 @@ onBeforeUnmount(() => {
                 {{ agentOf(record).appUserAccount || agentOf(record).appUserPhone || agentOf(record).appUserNickname || `#${agentOf(record).appUserId}` }}
               </template>
               <template v-else-if="column.dataIndex === 'agentCode'">
-                <Tag color="blue">{{ agentOf(record).agentCode }}</Tag>
-              </template>
-              <template v-else-if="column.dataIndex === 'appUserName'">
-                {{ agentDisplayName(agentOf(record)) }}
+                <span class="agent-identity">
+                  <Tag color="blue">{{ agentOf(record).agentCode }}</Tag>
+                  <span class="agent-identity-name">{{ agentDisplayName(agentOf(record)) }}</span>
+                </span>
               </template>
               <template v-else-if="column.dataIndex === 'level'">
                 <Tag color="purple">{{ levelText(agentOf(record).level) }}</Tag>
@@ -1073,6 +1070,9 @@ onBeforeUnmount(() => {
           description="客户端和代理本人只能查看，修改后立即生效；代理号必须唯一。"
         />
         <Form layout="vertical">
+          <Typography.Paragraph v-if="editingAgent">
+            当前代理：{{ editingAgent.agentCode }} · {{ agentDisplayName(editingAgent) }}
+          </Typography.Paragraph>
           <Form.Item label="代理号" required>
             <Input
               v-model:value="editingAgentCode"
@@ -1102,6 +1102,22 @@ onBeforeUnmount(() => {
 }
 .agent-share-card {
   border: 1px solid hsl(var(--border));
+}
+.agent-identity {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  min-width: 0;
+}
+.agent-identity :deep(.ant-tag) {
+  flex-shrink: 0;
+  margin-inline-end: 0;
+}
+.agent-identity-name {
+  min-width: 0;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .agent-code-tag {
   padding: 4px 12px;

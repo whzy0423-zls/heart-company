@@ -198,14 +198,18 @@ for (const role of ['admin', 'agent-level2', 'agent-level3'] as const) {
 
       if (role === 'admin') {
         const ranking = page.locator('.ant-card').filter({ has: page.getByText('代理经营排行', { exact: true }) });
-        await expect(ranking.getByRole('columnheader', { name: '用户名称', exact: true })).toBeAttached();
-        await expect(ranking.locator('tr[data-row-key="1"] td').nth(1)).toHaveText('布局测试代理 1');
-        await expect(ranking.locator('tr[data-row-key="99"] td').nth(1)).toHaveText('早期代理');
+        await expect(ranking.getByRole('columnheader', { name: '代理号 / 用户昵称', exact: true })).toBeAttached();
+        await expect(ranking.locator('tr[data-row-key="1"] td').first()).toHaveText('ABCD10布局测试代理 1');
+        await expect(ranking.locator('tr[data-row-key="99"] td').first()).toHaveText('OLDER99早期代理');
         await expect(ranking.getByRole('columnheader', { name: 'App 用户 ID', exact: true })).toHaveCount(0);
       }
       const agentList = page.locator('.ant-card').filter({ has: page.getByText('代理列表', { exact: true }) });
-      await expect(agentList.getByRole('columnheader', { name: '用户名称', exact: true })).toBeAttached();
-      await expect(agentList.locator('tr[data-row-key="1"] td').nth(3)).toHaveText('布局测试代理 1');
+      await expect(agentList.getByRole('columnheader', { name: '代理号 / 用户昵称', exact: true })).toBeAttached();
+      const firstIdentity = agentList.locator('tr[data-row-key="1"] td').first();
+      await expect(firstIdentity).toHaveText('ABCD10布局测试代理 1');
+      await firstIdentity.scrollIntoViewIfNeeded();
+      await expect(firstIdentity.locator('.agent-identity-name')).toBeInViewport();
+      expect(await agentList.locator('.ant-table-body, .ant-table-content').evaluate((el) => el.scrollLeft)).toBe(0);
 
       const dimensions = await page.evaluate(() => {
         const grid = document.querySelector('.distribution-page')!;
@@ -322,8 +326,11 @@ for (const role of ['admin', 'agent-level2', 'agent-level3'] as const) {
         await firstRow.getByRole('button', { name: '查看下级', exact: true }).click();
         const childDialog = page.getByRole('dialog');
         const childTable = childDialog.locator('.ant-table-content');
+        await expect(childDialog.locator('tr[data-row-key="2"] td').first()).toHaveText('ABCD11布局测试代理 2');
         await childDialog.locator('thead').scrollIntoViewIfNeeded();
         await childDialog.locator('thead').evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }));
+        await childDialog.locator('th').first().click({ trial: true });
+        await childTable.evaluate((el) => { el.scrollLeft = 0; });
         const childBounds = (await childTable.boundingBox())!;
         const childHeader = (await childDialog.locator('thead').boundingBox())!;
         await swipe(Math.min(childBounds.x + childBounds.width, width) - 30, childHeader.y + childHeader.height / 2, 210);
