@@ -1036,7 +1036,12 @@ onBeforeUnmount(() => {
 <style scoped>
 .distribution-page {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
+  min-width: 0;
+}
+.distribution-page > * {
+  min-width: 0;
 }
 .full-width {
   width: 100%;
