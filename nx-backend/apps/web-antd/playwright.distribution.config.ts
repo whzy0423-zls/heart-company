@@ -15,7 +15,10 @@ export default defineConfig({
     serviceWorkers: 'block',
     channel: process.env.PLAYWRIGHT_CHANNEL,
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [{
+    name: 'chromium',
+    use: { ...devices[process.env.DISTRIBUTION_TOUCH ? 'Pixel 7' : 'Desktop Chrome'] },
+  }],
   webServer: {
     command:
       'pnpm vite --mode development --host 127.0.0.1 --port 4331 --strictPort',

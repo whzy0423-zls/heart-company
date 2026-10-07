@@ -69,20 +69,6 @@
     width: 100%;
   }
 
-  /* Scroll the table, not the page. Do not hide columns or shrink their text. */
-  body.nx-admin-ui :is(.ant-table-content, .ant-table-body) {
-    overflow-x: auto !important;
-    overscroll-behavior-x: contain;
-  }
-
-  body.nx-admin-ui :is(.ant-table-cell-fix-left, .ant-table-cell-fix-right) {
-    position: static !important;
-  }
-
-  body.nx-admin-ui :is(.ant-table-cell-fix-left-last, .ant-table-cell-fix-right-first)::after {
-    display: none;
-  }
-
   body.nx-admin-ui .ant-pagination {
     flex-wrap: wrap;
     row-gap: 8px;
@@ -146,5 +132,22 @@
     height: auto;
     min-height: 40px;
     white-space: normal;
+  }
+}
+
+/* Include landscape phones and touch tablets: fixed columns can cover all of
+   a narrow table even when the viewport is wider than the mobile breakpoint. */
+@media (max-width: 767px), (pointer: coarse) {
+  body.nx-admin-ui :is(.ant-table-content, .ant-table-body) {
+    overflow-x: auto !important;
+    overscroll-behavior-x: contain;
+  }
+
+  body.nx-admin-ui :is(.ant-table-cell-fix-left, .ant-table-cell-fix-right) {
+    position: static !important;
+  }
+
+  body.nx-admin-ui :is(.ant-table-cell-fix-left-last, .ant-table-cell-fix-right-first)::after {
+    display: none;
   }
 }

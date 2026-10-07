@@ -15,6 +15,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { Page } from '@vben/common-ui';
 import { useAccessStore } from '@vben/stores';
+import { useMediaQuery } from '@vueuse/core';
 import {
   Alert,
   Button,
@@ -116,8 +117,12 @@ const selectedCustomerId = ref<number>();
 const customerOptions = ref<AppCustomer[]>([]);
 const customerSearching = ref(false);
 const trendChartRef = ref<HTMLDivElement>();
-const fixedTableScroll = { x: 820, y: 320 };
-const fixedWideTableScroll = { x: 1240, y: 360 };
+// A fixed Ant table header forwards wheel events, but cannot pan by touch.
+// Keep header and rows in one native scroll container on phones and tablets.
+const useTouchTables = useMediaQuery('(max-width: 767px), (pointer: coarse)');
+const fixedTableScroll = computed(() => useTouchTables.value ? { x: 820 } : { x: 820, y: 320 });
+const fixedWideTableScroll = computed(() => useTouchTables.value ? { x: 1240 } : { x: 1240, y: 360 });
+const childTableScroll = computed(() => useTouchTables.value ? { x: 720 } : { x: 720, y: 280 });
 const userConsumptionColumns = [
   { dataIndex: 'id', title: '用户 ID', width: 100 },
   { dataIndex: 'nickname', title: '昵称', width: 140 },
@@ -955,7 +960,7 @@ onBeforeUnmount(() => {
             :columns="childAgentColumns"
             :data-source="childAgentsForSelectedParent"
             :pagination="false"
-            :scroll="{ x: 720, y: 280 }"
+            :scroll="childTableScroll"
             row-key="id"
             size="small"
           >

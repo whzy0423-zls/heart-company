@@ -7,7 +7,7 @@ const agents = Array.from({ length: 12 }, (_, index) => ({
   appUserNickname: `布局测试代理 ${index + 1}`,
   agentCode: `ABCD${index + 10}`,
   level: 1,
-  parentAgentId: 0,
+  parentAgentId: index === 1 ? 1 : 0,
   rootAgentId: index + 1,
   path: `/${index + 1}/`,
   status: 'active',
@@ -76,11 +76,11 @@ const menus = [
 for (const role of ['admin', 'agent-level2', 'agent-level3'] as const) {
   for (const width of role === 'agent-level3'
     ? [390]
-    : [1024, 1440, 768, 390]) {
+    : process.env.DISTRIBUTION_TOUCH ? [390, 844] : [1024, 1440, 768, 390]) {
     test(`${role} actions and table remain reachable at ${width}px`, async ({
       page,
     }, testInfo) => {
-      await page.setViewportSize({ width, height: 900 });
+      await page.setViewportSize({ width, height: process.env.DISTRIBUTION_TOUCH && width === 844 ? 390 : 900 });
       await page.addInitScript(() => {
         // ECharts resizing can trigger this browser delivery notification.
         // Keep Vite's development overlay from covering the real page controls.
@@ -213,7 +213,7 @@ for (const role of ['admin', 'agent-level2', 'agent-level3'] as const) {
           ['新增代理', '新增三级代理'].includes(item.textContent?.trim() || ''),
         )!;
         const body = [
-          ...grid.querySelectorAll<HTMLElement>('.ant-table-body'),
+          ...grid.querySelectorAll<HTMLElement>('.ant-table-body, .ant-table-content'),
         ].at(-1)!;
         const rect = (element: Element) => {
           const { left, right, width } = element.getBoundingClientRect();
@@ -264,9 +264,80 @@ for (const role of ['admin', 'agent-level2', 'agent-level3'] as const) {
         await expect(page.getByRole('dialog')).not.toBeVisible();
       }
 
-      const table = page.locator('.distribution-page .ant-table-body').last();
-      await table.scrollIntoViewIfNeeded();
-      if (dimensions.table.scrollWidth > dimensions.table.clientWidth) {
+      const table = agentList.locator('.ant-table-body, .ant-table-content');
+      if (process.env.DISTRIBUTION_TOUCH) {
+        const client = await page.context().newCDPSession(page);
+        const swipe = async (x: number, y: number, distance: number, verticalDistance = 0) => {
+          await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id: 1 }] });
+          for (let step = 1; step <= 12; step++) {
+            await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x - distance * step / 12, y: y - verticalDistance * step / 12, id: 1 }] });
+            await page.waitForTimeout(18);
+          }
+          await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        };
+        // Every visible table, including empty customer/order tables, must pan
+        // from the header. Fixed headers used to ignore this real touch gesture.
+        for (const wrapper of await page.locator('.distribution-page .ant-table-wrapper').all()) {
+          const scroll = wrapper.locator('.ant-table-body, .ant-table-content');
+          const heading = wrapper.locator('thead');
+          await heading.scrollIntoViewIfNeeded();
+          await heading.evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }));
+          await scroll.evaluate((el) => { el.scrollLeft = 0; });
+          const bounds = (await scroll.boundingBox())!;
+          const headingBounds = (await heading.boundingBox())!;
+          console.log('header-touch', await heading.evaluate((el, x) => { const rect = el.getBoundingClientRect(); const hit = document.elementFromPoint(x, rect.y + rect.height / 2); return { text: el.textContent, hit: hit?.tagName, inside: el.contains(hit) }; }, Math.min(bounds.x + bounds.width, width) - 30));
+          await swipe(Math.min(bounds.x + bounds.width, width) - 30, headingBounds.y + headingBounds.height / 2, 210);
+          const maxScroll = await scroll.evaluate((el) => el.scrollWidth - el.clientWidth);
+          if (maxScroll > 0) {
+            await expect.poll(() => scroll.evaluate((el) => el.scrollLeft)).toBeGreaterThan(Math.min(100, maxScroll - 1));
+          } else {
+            await expect(heading.locator('th').last()).toBeInViewport();
+          }
+        }
+        const header = agentList.locator('thead');
+        await header.scrollIntoViewIfNeeded();
+          await header.evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }));
+        await table.evaluate((el) => { el.scrollLeft = 0; });
+        const tableBox = (await table.boundingBox())!;
+        const headerBox = (await header.boundingBox())!;
+        const x = Math.min(tableBox.x + tableBox.width, width) - 30;
+        const y = headerBox.y + headerBox.height / 2;
+        await swipe(x, y, 210);
+        await expect.poll(() => table.evaluate((el) => el.scrollLeft)).toBeGreaterThan(100);
+        const afterHeader = await table.evaluate((el) => el.scrollLeft);
+        const firstRow = agentList.locator('tr[data-row-key="1"]');
+        await firstRow.scrollIntoViewIfNeeded();
+        const rowBox = (await firstRow.boundingBox())!;
+        await swipe(x, rowBox.y + 30, 190);
+        await expect.poll(() => table.evaluate((el) => el.scrollLeft)).toBeGreaterThan(afterHeader);
+        // Continue by touch until the final action column is actually reachable.
+        for (let attempt = 0; attempt < 7; attempt++) {
+          await swipe(x, rowBox.y + 30, 210);
+        }
+        await expect(firstRow.getByRole('button', { name: '暂停', exact: true })).toBeInViewport();
+        const verticalStart = await page.evaluate(() => window.scrollY);
+        await swipe(x, rowBox.y + 90, 0, 120);
+        await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(verticalStart + 30);
+
+        await firstRow.getByRole('button', { name: '查看下级', exact: true }).click();
+        const childDialog = page.getByRole('dialog');
+        const childTable = childDialog.locator('.ant-table-content');
+        await childDialog.locator('thead').scrollIntoViewIfNeeded();
+        await childDialog.locator('thead').evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }));
+        const childBounds = (await childTable.boundingBox())!;
+        const childHeader = (await childDialog.locator('thead').boundingBox())!;
+        await swipe(Math.min(childBounds.x + childBounds.width, width) - 30, childHeader.y + childHeader.height / 2, 210);
+        const childMaxScroll = await childTable.evaluate((el) => el.scrollWidth - el.clientWidth);
+        if (childMaxScroll > 0) {
+          await expect.poll(() => childTable.evaluate((el) => el.scrollLeft)).toBeGreaterThan(Math.min(100, childMaxScroll - 1));
+        } else {
+          await expect(childDialog.locator('th').last()).toBeInViewport();
+        }
+        await childDialog.locator('button.ant-modal-close').click();
+        await expect(childDialog).not.toBeVisible();
+        await client.detach();
+      } else if (dimensions.table.scrollWidth > dimensions.table.clientWidth) {
+        await table.scrollIntoViewIfNeeded();
         expect(dimensions.table.overflowX).toBe('auto');
         await table.hover();
         await page.mouse.wheel(420, 0);
