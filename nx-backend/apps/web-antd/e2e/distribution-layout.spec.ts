@@ -48,6 +48,13 @@ const analytics = {
     pendingCommissionAmount: 1000,
   })),
 };
+// A high-performing older agent can be outside the API's latest 200 agents.
+analytics.agentRankings.push({
+  ...analytics.agentRankings[0]!,
+  agentId: 99,
+  appUserId: 9999,
+  agentCode: 'OLDER99',
+});
 
 const menus = [
   {
@@ -125,6 +132,7 @@ for (const role of ['admin', 'agent-level2', 'agent-level3'] as const) {
             },
             '/admin/distribution/analytics': analytics,
             '/app-users/list': { items: [], total: 0 },
+            '/app-users/9999': { id: 9999, nickname: '早期代理', account: 'older-fixture' },
             '/public/admin-branding': {
               name: '布局测试后台',
               logo: '',
@@ -187,6 +195,17 @@ for (const role of ['admin', 'agent-level2', 'agent-level3'] as const) {
       await expect(
         page.getByText('layout-fixture-1', { exact: true }),
       ).toBeVisible();
+
+      if (role === 'admin') {
+        const ranking = page.locator('.ant-card').filter({ has: page.getByText('代理经营排行', { exact: true }) });
+        await expect(ranking.getByRole('columnheader', { name: '用户名称', exact: true })).toBeAttached();
+        await expect(ranking.locator('tr[data-row-key="1"] td').nth(1)).toHaveText('布局测试代理 1');
+        await expect(ranking.locator('tr[data-row-key="99"] td').nth(1)).toHaveText('早期代理');
+        await expect(ranking.getByRole('columnheader', { name: 'App 用户 ID', exact: true })).toHaveCount(0);
+      }
+      const agentList = page.locator('.ant-card').filter({ has: page.getByText('代理列表', { exact: true }) });
+      await expect(agentList.getByRole('columnheader', { name: '用户名称', exact: true })).toBeAttached();
+      await expect(agentList.locator('tr[data-row-key="1"] td').nth(3)).toHaveText('布局测试代理 1');
 
       const dimensions = await page.evaluate(() => {
         const grid = document.querySelector('.distribution-page')!;

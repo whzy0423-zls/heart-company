@@ -11,7 +11,7 @@ import type {
   DistributionAnalyticsAgentRanking,
 } from '#/api/core/distribution';
 
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 import { Page } from '@vben/common-ui';
 import { useAccessStore } from '@vben/stores';
@@ -43,7 +43,7 @@ import {
 import * as echarts from 'echarts/core';
 import { CanvasRenderer } from 'echarts/renderers';
 
-import { getAppCustomerListApi } from '#/api';
+import { getAppCustomerDetailApi, getAppCustomerListApi } from '#/api';
 import DistributionPosterComposer from './distribution-poster-composer.vue';
 import {
   createAgentDistributionChildApi,
@@ -140,8 +140,8 @@ let trendChart: echarts.ECharts | undefined;
 const columns = [
   { dataIndex: 'id', fixed: 'left' as const, title: '代理 ID', width: 100 },
   { dataIndex: 'appUserAccount', title: '代理人账号', width: 190 },
-  { dataIndex: 'appUserId', title: 'App 用户 ID', width: 120 },
   { dataIndex: 'agentCode', title: '代理号', width: 180 },
+  { dataIndex: 'appUserName', title: '用户名称', width: 160 },
   { dataIndex: 'level', title: '代理等级', width: 120 },
   { dataIndex: 'development', title: '发展概况', width: 260 },
   { dataIndex: 'status', title: '状态', width: 110 },
@@ -151,8 +151,8 @@ const columns = [
 const childAgentColumns = [
   { dataIndex: 'id', title: '代理 ID', width: 100 },
   { dataIndex: 'appUserAccount', title: '代理人账号', width: 180 },
-  { dataIndex: 'appUserId', title: 'App 用户 ID', width: 120 },
   { dataIndex: 'agentCode', title: '代理号', width: 160 },
+  { dataIndex: 'appUserName', title: '用户名称', width: 160 },
   { dataIndex: 'level', title: '代理等级', width: 120 },
   { dataIndex: 'directUserCount', title: '直属客户', width: 110 },
   { dataIndex: 'status', title: '状态', width: 110 },
@@ -160,7 +160,7 @@ const childAgentColumns = [
 
 const rankingColumns = [
   { dataIndex: 'agentCode', title: '代理号', width: 150 },
-  { dataIndex: 'appUserId', title: 'App 用户 ID', width: 120 },
+  { dataIndex: 'appUserName', title: '用户名称', width: 160 },
   { dataIndex: 'directUserCount', title: '直属客户', width: 110 },
   { dataIndex: 'childAgentCount', title: '下级代理', width: 110 },
   { dataIndex: 'orderCount', title: '订单数', width: 100 },
@@ -169,6 +169,49 @@ const rankingColumns = [
   { dataIndex: 'pendingCommissionAmount', title: '待结算金额(元)', width: 140 },
   { dataIndex: 'status', title: '状态', width: 100 },
 ];
+
+// Rankings contain stable IDs; resolve the display name from the existing
+// agent response so account identity and commission calculations stay intact.
+const agentsByUserId = computed(() => new Map(
+  [...agents.value, ...(currentAgent.value ? [currentAgent.value] : [])]
+    .map((agent) => [agent.appUserId, agent]),
+));
+const rankingNames = ref(new Map<number, string>());
+const missingRankingUserIds = computed(() => {
+  if (isAgentBackoffice.value || !access.accessCodes.includes('Customer:App:List')) return [];
+  return [...new Set(analytics.value.agentRankings.map((row) => row.appUserId))]
+    .filter((id) => !agentsByUserId.value.has(id));
+});
+
+// The agent list is capped at 200; older agents can still appear in rankings.
+watch([missingRankingUserIds, loading], async ([ids, listLoading], _old, onCleanup) => {
+  let cancelled = false;
+  onCleanup(() => { cancelled = true; });
+  rankingNames.value = new Map(ids.map((id) => [id, '加载中…']));
+  if (listLoading) return;
+  const names = await Promise.all(ids.map(async (id): Promise<[number, string]> => {
+    try {
+      const customer = await getAppCustomerDetailApi(id);
+      return [id, customer.nickname?.trim() || customer.account?.trim() || customer.phone?.trim() || '未设置名称'];
+    } catch {
+      return [id, '暂无名称'];
+    }
+  }));
+  if (!cancelled) rankingNames.value = new Map(names);
+});
+
+function agentDisplayName(agent?: DistributionAgent) {
+  if (!agent) return loading.value ? '加载中…' : '暂无名称';
+  return agent.appUserNickname?.trim()
+    || agent.appUserAccount?.trim()
+    || agent.appUserPhone?.trim()
+    || '未设置名称';
+}
+
+function rankingDisplayName(appUserId: number) {
+  const agent = agentsByUserId.value.get(appUserId);
+  return agent ? agentDisplayName(agent) : rankingNames.value.get(appUserId) || agentDisplayName();
+}
 
 const activeAgentCount = computed(
   () => agents.value.filter((item) => item.status === 'active').length,
@@ -701,6 +744,9 @@ onBeforeUnmount(() => {
             <template v-if="column.dataIndex === 'agentCode'">
               <Tag color="blue">{{ rankingOf(record).agentCode }}</Tag>
             </template>
+            <template v-else-if="column.dataIndex === 'appUserName'">
+              {{ rankingDisplayName(rankingOf(record).appUserId) }}
+            </template>
             <template v-else-if="isRankingMoneyColumn(column.dataIndex)">
               {{ rankingMoneyValue(record, column.dataIndex) }}
             </template>
@@ -819,8 +865,8 @@ onBeforeUnmount(() => {
                 </Typography.Text>
               </Space>
             </template>
-            <template v-else-if="column.dataIndex === 'appUserId'">
-              #{{ agentOf(record).appUserId }}
+            <template v-else-if="column.dataIndex === 'appUserName'">
+              {{ agentDisplayName(agentOf(record)) }}
             </template>
             <template v-else-if="column.dataIndex === 'agentCode'">
               <Space>
@@ -919,6 +965,9 @@ onBeforeUnmount(() => {
               </template>
               <template v-else-if="column.dataIndex === 'agentCode'">
                 <Tag color="blue">{{ agentOf(record).agentCode }}</Tag>
+              </template>
+              <template v-else-if="column.dataIndex === 'appUserName'">
+                {{ agentDisplayName(agentOf(record)) }}
               </template>
               <template v-else-if="column.dataIndex === 'level'">
                 <Tag color="purple">{{ levelText(agentOf(record).level) }}</Tag>
