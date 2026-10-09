@@ -100,25 +100,32 @@ type Action struct {
 }
 
 type UserView struct {
-	Enabled          bool     `json:"enabled"`
-	Status           string   `json:"status"`
-	CardID           int64    `json:"cardId"`
-	ReportID         int64    `json:"reportId"`
-	Version          int      `json:"version"`
-	GeneratedAt      string   `json:"generatedAt"`
-	NextUpdateAt     string   `json:"nextUpdateAt"`
-	SourceThrough    string   `json:"sourceThrough"`
-	PeriodStart      string   `json:"periodStart"`
-	PeriodEnd        string   `json:"periodEnd"`
-	Timezone         string   `json:"timezone"`
-	Summary          string   `json:"summary"`
-	WeeklyReview     string   `json:"weeklyReview"`
-	TrendExplanation string   `json:"trendExplanation"`
-	Strengths        []string `json:"strengths"`
-	StressPoints     []string `json:"stressPoints"`
-	GrowthAdvice     []string `json:"growthAdvice"`
-	AwarenessPrompts []string `json:"awarenessPrompts"`
-	Actions          []Action `json:"actions"`
+	Enabled          bool              `json:"enabled"`
+	Status           string            `json:"status"`
+	CardID           int64             `json:"cardId"`
+	ReportID         int64             `json:"reportId"`
+	Version          int               `json:"version"`
+	GeneratedAt      string            `json:"generatedAt"`
+	NextUpdateAt     string            `json:"nextUpdateAt"`
+	SourceThrough    string            `json:"sourceThrough"`
+	PeriodStart      string            `json:"periodStart"`
+	PeriodEnd        string            `json:"periodEnd"`
+	Timezone         string            `json:"timezone"`
+	Summary          string            `json:"summary"`
+	WeeklyReview     string            `json:"weeklyReview"`
+	TrendExplanation string            `json:"trendExplanation"`
+	Strengths        []string          `json:"strengths"`
+	StressPoints     []string          `json:"stressPoints"`
+	GrowthAdvice     []string          `json:"growthAdvice"`
+	AwarenessPrompts []string          `json:"awarenessPrompts"`
+	Actions          []Action          `json:"actions"`
+	FeedbackProgress *FeedbackProgress `json:"feedbackProgress,omitempty"`
+}
+
+type FeedbackProgress struct {
+	TotalCount    int `json:"totalCount"`
+	IncludedCount int `json:"includedCount"`
+	PendingCount  int `json:"pendingCount"`
 }
 
 type ConsentState struct {

@@ -95,6 +95,17 @@ func TestGrowthLoopPostgresHTTPPublicationFeedbackAndExpiredPrivacy(t *testing.T
 	if err != nil || view.Actions[0].Outcome != "helpful" {
 		t.Fatalf("feedback did not persist: %+v %v", view, err)
 	}
+	w = request(http.MethodGet, fmt.Sprintf("/api/app/growth-loop?cardId=%d", cardID), "")
+	if w.Code != 200 {
+		t.Fatalf("feedback progress view %d %s", w.Code, w.Body)
+	}
+	if err = json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	progress := result.Data.FeedbackProgress
+	if progress == nil || progress.TotalCount != 1 || progress.IncludedCount != 0 || progress.PendingCount != 1 {
+		t.Fatalf("saved feedback must remain pending before a new publication: %+v", progress)
+	}
 	if err = store.Tick(context.Background(), complete, now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -110,12 +121,15 @@ func TestGrowthLoopPostgresHTTPPublicationFeedbackAndExpiredPrivacy(t *testing.T
 		t.Fatal(err)
 	}
 	w = request(http.MethodGet, fmt.Sprintf("/api/app/growth-loop?cardId=%d", cardID), "")
-	if w.Code != 403 || strings.Contains(w.Body.String(), claim.Text) {
+	if w.Code != 403 || strings.Contains(w.Body.String(), claim.Text) || strings.Contains(w.Body.String(), "feedbackProgress") {
 		t.Fatalf("expired paid view %d %s", w.Code, w.Body)
 	}
 	w = request(http.MethodGet, "/api/app/growth-loop/consent", "")
 	if w.Code != 200 || !strings.Contains(w.Body.String(), fmt.Sprintf(`"reportId":%d`, v.ReportID)) {
 		t.Fatalf("expired privacy state %d %s", w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), "feedbackProgress") {
+		t.Fatal("paid feedback progress leaked through privacy metadata")
 	}
 	w = request(http.MethodPost, "/api/app/growth-loop/feedback", fmt.Sprintf(`{"reportId":%d,"kind":"inaccurate","note":"That only happened once"}`, v.ReportID))
 	if w.Code != 200 {

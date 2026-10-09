@@ -58,9 +58,22 @@ func (s *Store) SetConsent(ctx context.Context, userID int64, enabled bool) (boo
 }
 
 func (s *Store) View(ctx context.Context, userID, cardID int64) (UserView, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return emptyView(cardID), err
+	}
+	defer tx.Rollback()
+	v, err := view(ctx, tx, userID, cardID, time.Now().UTC())
+	if err != nil {
+		return v, err
+	}
+	return v, tx.Commit()
+}
+
+func view(ctx context.Context, tx *sql.Tx, userID, cardID int64, now time.Time) (UserView, error) {
 	v := emptyView(cardID)
 	var primary bool
-	err := s.db.QueryRowContext(ctx, `SELECT card_type='primary' AND status='active' FROM app_user_cards WHERE id=$1 AND app_user_id=$2`, cardID, userID).Scan(&primary)
+	err := tx.QueryRowContext(ctx, `SELECT card_type='primary' AND status='active' FROM app_user_cards WHERE id=$1 AND app_user_id=$2`, cardID, userID).Scan(&primary)
 	if err != nil {
 		return v, storeError(err)
 	}
@@ -69,7 +82,7 @@ func (s *Store) View(ctx context.Context, userID, cardID int64) (UserView, error
 	}
 	var reportID int64
 	var publishedAt sql.NullTime
-	err = s.db.QueryRowContext(ctx, `SELECT enabled,status,COALESCE(published_report_id,0),published_at FROM app_growth_insight_consents WHERE app_user_id=$1`, userID).Scan(&v.Enabled, &v.Status, &reportID, &publishedAt)
+	err = tx.QueryRowContext(ctx, `SELECT enabled,status,COALESCE(published_report_id,0),published_at FROM app_growth_insight_consents WHERE app_user_id=$1`, userID).Scan(&v.Enabled, &v.Status, &reportID, &publishedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, nil
 	}
@@ -80,9 +93,10 @@ func (s *Store) View(ctx context.Context, userID, cardID int64) (UserView, error
 		return emptyView(cardID), nil
 	}
 	if reportID == 0 {
-		return v, nil
+		v.FeedbackProgress, err = loadFeedbackProgress(ctx, tx, userID, cardID, 0, nil, now)
+		return v, err
 	}
-	r, err := s.Report(ctx, reportID)
+	r, err := loadReport(ctx, tx, reportID)
 	if errors.Is(err, ErrNotFound) {
 		v.Status = "pending"
 		return v, nil
@@ -93,7 +107,7 @@ func (s *Store) View(ctx context.Context, userID, cardID int64) (UserView, error
 	if r.CardID != cardID || r.AppUserID != userID {
 		return emptyView(cardID), nil
 	}
-	actions, err := s.actions(ctx, reportID)
+	actions, err := loadActions(ctx, tx, reportID)
 	if err != nil {
 		return v, err
 	}
@@ -101,13 +115,18 @@ func (s *Store) View(ctx context.Context, userID, cardID int64) (UserView, error
 	if publishedAt.Valid {
 		v.NextUpdateAt = stamp(publishedAt.Time.Add(publicationPeriod))
 	}
-	return v, nil
+	v.FeedbackProgress, err = loadFeedbackProgress(ctx, tx, userID, cardID, reportID, r.Evidence, now)
+	return v, err
 }
 
 func (s *Store) Report(ctx context.Context, reportID int64) (Report, error) {
+	return loadReport(ctx, s.db, reportID)
+}
+
+func loadReport(ctx context.Context, q rowQueryer, reportID int64) (Report, error) {
 	var r Report
 	var body []byte
-	err := s.db.QueryRowContext(ctx, `SELECT r.id,r.payload,c.published_report_id=r.id
+	err := q.QueryRowContext(ctx, `SELECT r.id,r.payload,c.published_report_id=r.id
 FROM app_growth_insight_reports r JOIN app_growth_insight_consents c ON c.app_user_id=r.app_user_id
 JOIN app_users u ON u.id=r.app_user_id AND u.status='active'
 JOIN app_user_cards card ON card.id=r.card_id AND card.app_user_id=r.app_user_id AND card.card_type='primary' AND card.status='active'
@@ -161,9 +180,9 @@ func scanAction(row scanner) (Action, error) {
 	return a, storeError(err)
 }
 
-func (s *Store) actions(ctx context.Context, reportID int64) ([]Action, error) {
+func loadActions(ctx context.Context, q queryer, reportID int64) ([]Action, error) {
 	result := []Action{}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+actionColumns+` FROM app_growth_insight_actions WHERE report_id=$1 ORDER BY id`, reportID)
+	rows, err := q.QueryContext(ctx, `SELECT `+actionColumns+` FROM app_growth_insight_actions WHERE report_id=$1 ORDER BY id`, reportID)
 	if err != nil {
 		return nil, err
 	}
