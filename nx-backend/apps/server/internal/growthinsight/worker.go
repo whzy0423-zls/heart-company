@@ -76,9 +76,10 @@ UPDATE app_growth_insight_consents SET status='failed' WHERE app_user_id IN (SEL
 	_, err = tx.ExecContext(ctx, `INSERT INTO app_growth_insight_jobs(app_user_id,card_id,revision,fingerprint,due_at,updated_at)
 VALUES($1,$2,$3,$4,$5,$6)
 ON CONFLICT(app_user_id) DO UPDATE SET card_id=EXCLUDED.card_id,revision=EXCLUDED.revision,fingerprint=EXCLUDED.fingerprint,
- due_at=CASE WHEN app_growth_insight_jobs.fingerprint=EXCLUDED.fingerprint AND NOT $7 THEN greatest(app_growth_insight_jobs.due_at,EXCLUDED.due_at) ELSE EXCLUDED.due_at END,
+ due_at=CASE WHEN app_growth_insight_jobs.error_code IN ('user_daily_budget_exhausted','global_daily_budget_exhausted') AND app_growth_insight_jobs.due_at>$6 THEN app_growth_insight_jobs.due_at
+ WHEN app_growth_insight_jobs.fingerprint=EXCLUDED.fingerprint AND NOT $7 THEN greatest(app_growth_insight_jobs.due_at,EXCLUDED.due_at) ELSE EXCLUDED.due_at END,
  status='pending',attempts=CASE WHEN app_growth_insight_jobs.fingerprint<>EXCLUDED.fingerprint OR $7 THEN 0 ELSE app_growth_insight_jobs.attempts END,
- claim_token='',lease_until=NULL,error_code='',updated_at=EXCLUDED.updated_at
+ claim_token='',lease_until=NULL,error_code=CASE WHEN app_growth_insight_jobs.error_code IN ('user_daily_budget_exhausted','global_daily_budget_exhausted') AND app_growth_insight_jobs.due_at>$6 THEN app_growth_insight_jobs.error_code ELSE '' END,updated_at=EXCLUDED.updated_at
 WHERE (app_growth_insight_jobs.status<>'analyzing' OR app_growth_insight_jobs.lease_until<=$6)
  AND (app_growth_insight_jobs.fingerprint<>EXCLUDED.fingerprint OR $7 OR app_growth_insight_jobs.status='pending' OR (app_growth_insight_jobs.status='analyzing' AND app_growth_insight_jobs.attempts<$8))`, userID, cardID, revision, sources.Fingerprint, due, now, manual, maxAttempts)
 	if err != nil {
@@ -93,7 +94,11 @@ WHERE (app_growth_insight_jobs.status<>'analyzing' OR app_growth_insight_jobs.le
 
 // Tick scans a bounded set and executes one job; callers can run it periodically without chat-request coupling.
 func (s *Store) Tick(ctx context.Context, complete CompleteFunc, now time.Time) error {
+	tickStartedAt := time.Now()
 	now = now.UTC()
+	if err := s.pruneAttempts(ctx, now); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, `UPDATE app_growth_insight_consents c SET published_report_id=latest_report_id,published_at=$1,status='ready'
 WHERE c.enabled AND c.latest_report_id IS NOT NULL AND c.latest_report_id IS DISTINCT FROM c.published_report_id
  AND (c.published_at IS NULL OR c.published_at<=$1::timestamptz-interval '7 days')
@@ -133,6 +138,8 @@ ORDER BY c.last_scanned_at,c.app_user_id LIMIT 100`)
 	if err != nil {
 		return err
 	}
+	// The supplied clock anchors this tick, so lease and budget checks include scanning time too.
+	j.claimedAt = tickStartedAt
 	sources, err := collect(ctx, s.db, j.userID, j.cardID, now)
 	if err != nil {
 		return s.fail(ctx, j, now, "source_error", err)
@@ -142,6 +149,9 @@ ORDER BY c.last_scanned_at,c.app_user_id LIMIT 100`)
 	}
 	if sources.BehaviorCount < 2 {
 		return s.finish(ctx, j, sources, Analysis{}, now, true)
+	}
+	if err = s.reserveAttempt(ctx, j, now); err != nil {
+		return err
 	}
 	modelCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()

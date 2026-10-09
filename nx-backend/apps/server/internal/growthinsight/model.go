@@ -11,11 +11,12 @@ import (
 const DisclosureVersion = "growth-analysis-2026-10-09"
 
 var (
-	ErrNotFound      = errors.New("growth insight not found")
-	ErrDisabled      = errors.New("growth analysis disabled")
-	ErrInvalid       = errors.New("invalid growth insight input")
-	ErrStale         = errors.New("growth insight source changed")
-	ErrNoNewEvidence = errors.New("no new growth insight evidence")
+	ErrNotFound        = errors.New("growth insight not found")
+	ErrDisabled        = errors.New("growth analysis disabled")
+	ErrInvalid         = errors.New("invalid growth insight input")
+	ErrStale           = errors.New("growth insight source changed")
+	ErrNoNewEvidence   = errors.New("no new growth insight evidence")
+	ErrBudgetExhausted = errors.New("growth insight daily attempt budget exhausted")
 )
 
 type CompleteFunc func(context.Context, string) (string, error)

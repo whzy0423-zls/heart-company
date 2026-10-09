@@ -29,6 +29,16 @@ CREATE TABLE IF NOT EXISTS app_growth_insight_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_growth_insight_jobs_due ON app_growth_insight_jobs(status,due_at);
 
+-- Attempt budgets use UTC calendar days, independently of the rolling successful-analysis cadence.
+-- Withdrawal does not erase this minimal ledger. Account deletion removes owner linkage, not spent global capacity.
+CREATE TABLE IF NOT EXISTS app_growth_insight_attempts (
+  claim_token TEXT PRIMARY KEY,
+  app_user_id BIGINT REFERENCES app_users(id) ON DELETE SET NULL,
+  budget_day DATE NOT NULL,
+  reserved_at TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_growth_insight_attempts_day_user ON app_growth_insight_attempts(budget_day,app_user_id);
+
 CREATE TABLE IF NOT EXISTS app_growth_insight_reports (
   id BIGSERIAL PRIMARY KEY,
   app_user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
@@ -156,6 +166,11 @@ BEGIN
   IF TG_OP='DELETE' OR NEW.status<>'active' THEN
     UPDATE app_growth_insight_consents SET enabled=false WHERE app_user_id=OLD.id;
     PERFORM growth_insight_invalidate(OLD.id);
+  END IF;
+  -- Account deletion anonymizes and disables app_users; ordinary suspension keeps per-user spend.
+  IF TG_OP='UPDATE' AND NEW.status='disabled'
+    AND (to_jsonb(NEW)->>'phone') LIKE 'deleted-'||OLD.id::text||'-%' THEN
+    UPDATE app_growth_insight_attempts SET app_user_id=NULL WHERE app_user_id=OLD.id;
   END IF;
   IF TG_OP='DELETE' THEN RETURN OLD; END IF;
   RETURN NEW;

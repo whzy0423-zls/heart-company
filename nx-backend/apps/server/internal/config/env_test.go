@@ -10,6 +10,62 @@ import (
 	"testing"
 )
 
+func TestLoadGrowthInsightsDefaultsAndOverrides(t *testing.T) {
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+	for _, key := range []string{"GROWTH_INSIGHTS_WORKER_ENABLED", "GROWTH_INSIGHTS_MAX_OUTPUT_TOKENS", "GROWTH_INSIGHTS_DAILY_ATTEMPT_LIMIT", "GROWTH_INSIGHTS_USER_DAILY_ATTEMPT_LIMIT"} {
+		t.Setenv(key, "")
+	}
+	env := Load()
+	if env.GrowthInsightsWorkerEnabled || env.GrowthInsightsMaxOutputTokens != 4096 || env.GrowthInsightsDailyAttemptLimit != 100 || env.GrowthInsightsUserDailyAttemptLimit != 3 {
+		t.Fatal("growth analysis must default to a disabled worker with finite limits")
+	}
+	t.Setenv("GROWTH_INSIGHTS_WORKER_ENABLED", "true")
+	t.Setenv("GROWTH_INSIGHTS_MAX_OUTPUT_TOKENS", "2048")
+	t.Setenv("GROWTH_INSIGHTS_DAILY_ATTEMPT_LIMIT", "12")
+	t.Setenv("GROWTH_INSIGHTS_USER_DAILY_ATTEMPT_LIMIT", "2")
+	env = Load()
+	if !env.GrowthInsightsWorkerEnabled || env.GrowthInsightsMaxOutputTokens != 2048 || env.GrowthInsightsDailyAttemptLimit != 12 || env.GrowthInsightsUserDailyAttemptLimit != 2 {
+		t.Fatal("growth analysis overrides were not loaded")
+	}
+	if err := ValidateGrowthInsights(env); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLoadGrowthInsightsRejectsInvalidLimitsEvenWhenWorkerDisabled(t *testing.T) {
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("APP_ENV", "test")
+	t.Setenv("GROWTH_INSIGHTS_WORKER_ENABLED", "false")
+	keys := []string{"GROWTH_INSIGHTS_MAX_OUTPUT_TOKENS", "GROWTH_INSIGHTS_DAILY_ATTEMPT_LIMIT", "GROWTH_INSIGHTS_USER_DAILY_ATTEMPT_LIMIT"}
+	for _, key := range keys {
+		t.Setenv(key, "")
+	}
+	for _, key := range keys {
+		for _, value := range []string{"0", "-1", "1.5", "not-a-number", "999999999999999999999999"} {
+			t.Run(key+"/"+value, func(t *testing.T) {
+				t.Setenv(key, value)
+				err := ValidateProduction(Load())
+				if err == nil || !strings.Contains(err.Error(), key) || strings.Contains(err.Error(), value) {
+					t.Fatal("invalid growth limit must fail startup without echoing its value")
+				}
+			})
+		}
+	}
+	t.Setenv("GROWTH_INSIGHTS_WORKER_ENABLED", "not-a-bool")
+	if err := ValidateProduction(Load()); err == nil || !strings.Contains(err.Error(), "GROWTH_INSIGHTS_WORKER_ENABLED") {
+		t.Fatal("invalid worker switch must fail startup")
+	}
+}
+
+func TestValidateGrowthInsightsPreservesZeroValueEnvButRequiresEnabledLimits(t *testing.T) {
+	if err := ValidateGrowthInsights(Env{}); err != nil {
+		t.Fatal("zero-value Env must remain compatible with disabled integrations")
+	}
+	if err := ValidateGrowthInsights(Env{GrowthInsightsWorkerEnabled: true}); err == nil {
+		t.Fatal("an enabled worker must have explicit positive limits")
+	}
+}
+
 func TestLoadKnowledgeDefaults(t *testing.T) {
 	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
 	for _, key := range []string{

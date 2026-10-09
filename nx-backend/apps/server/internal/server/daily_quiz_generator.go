@@ -184,6 +184,10 @@ func callAdminModelJSON(ctx context.Context, cfg modelconfig.AdminModelConfig, s
 }
 
 func callOpenAICompatibleJSON(ctx context.Context, client *http.Client, cfg modelconfig.AdminModelConfig, systemPrompt, userPrompt string) (string, error) {
+	return callOpenAICompatibleJSONWithLimit(ctx, client, cfg, systemPrompt, userPrompt, 0)
+}
+
+func callOpenAICompatibleJSONWithLimit(ctx context.Context, client *http.Client, cfg modelconfig.AdminModelConfig, systemPrompt, userPrompt string, maxTokens int) (string, error) {
 	body := map[string]any{
 		"model":       cfg.Model,
 		"temperature": 0.35,
@@ -192,6 +196,9 @@ func callOpenAICompatibleJSON(ctx context.Context, client *http.Client, cfg mode
 			{"role": "user", "content": userPrompt},
 		},
 		"response_format": map[string]string{"type": "json_object"},
+	}
+	if maxTokens > 0 {
+		body["max_tokens"] = maxTokens
 	}
 	raw, err := doJSONRequest(ctx, client, http.MethodPost, adminModelEndpoint(cfg.APIBase, "/v1/chat/completions"), "Bearer "+cfg.APIKey, body, nil)
 	if err != nil {
@@ -209,9 +216,13 @@ func callOpenAICompatibleJSON(ctx context.Context, client *http.Client, cfg mode
 }
 
 func callAnthropicJSON(ctx context.Context, client *http.Client, cfg modelconfig.AdminModelConfig, systemPrompt, userPrompt string) (string, error) {
+	return callAnthropicJSONWithLimit(ctx, client, cfg, systemPrompt, userPrompt, 2600)
+}
+
+func callAnthropicJSONWithLimit(ctx context.Context, client *http.Client, cfg modelconfig.AdminModelConfig, systemPrompt, userPrompt string, maxTokens int) (string, error) {
 	body := map[string]any{
 		"model":       cfg.Model,
-		"max_tokens":  2600,
+		"max_tokens":  maxTokens,
 		"temperature": 0.35,
 		"system":      systemPrompt,
 		"messages": []map[string]string{
@@ -235,10 +246,19 @@ func callAnthropicJSON(ctx context.Context, client *http.Client, cfg modelconfig
 }
 
 func callMiniMaxJSON(ctx context.Context, client *http.Client, cfg modelconfig.AdminModelConfig, systemPrompt, userPrompt string) (string, error) {
+	return callMiniMaxJSONWithTokenField(ctx, client, cfg, systemPrompt, userPrompt, 1800, "tokens_to_generate")
+}
+
+func callMiniMaxJSONWithLimit(ctx context.Context, client *http.Client, cfg modelconfig.AdminModelConfig, systemPrompt, userPrompt string, maxTokens int) (string, error) {
+	// The growth path targets text/chatcompletion_v2's max_tokens contract.
+	return callMiniMaxJSONWithTokenField(ctx, client, cfg, systemPrompt, userPrompt, maxTokens, "max_tokens")
+}
+
+func callMiniMaxJSONWithTokenField(ctx context.Context, client *http.Client, cfg modelconfig.AdminModelConfig, systemPrompt, userPrompt string, maxTokens int, tokenField string) (string, error) {
 	body := map[string]any{
-		"model":              cfg.Model,
-		"temperature":        0.35,
-		"tokens_to_generate": 1800,
+		"model":       cfg.Model,
+		"temperature": 0.35,
+		tokenField:    maxTokens,
 		"messages": []map[string]string{
 			{"role": "system", "content": systemPrompt},
 			{"role": "user", "content": userPrompt},

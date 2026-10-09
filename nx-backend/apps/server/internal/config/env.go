@@ -69,6 +69,68 @@ type Env struct {
 	DBMaxIdleConns         int
 	TTSMaxConcurrent       int
 	XinzhiliMaxConnections int
+
+	GrowthInsightsWorkerEnabled         bool
+	GrowthInsightsMaxOutputTokens       int
+	GrowthInsightsDailyAttemptLimit     int
+	GrowthInsightsUserDailyAttemptLimit int
+	growthInsightsConfigError           error
+}
+
+const DefaultGrowthInsightsMaxOutputTokens = 4096
+
+// Invalid explicit values fail validation rather than silently disabling a cap.
+func loadGrowthInsightsConfig() (bool, int, int, int, error) {
+	var configErr error
+	enabled := false
+	if raw := strings.TrimSpace(os.Getenv("GROWTH_INSIGHTS_WORKER_ENABLED")); raw != "" {
+		var err error
+		enabled, err = strconv.ParseBool(raw)
+		if err != nil {
+			configErr = fmt.Errorf("GROWTH_INSIGHTS_WORKER_ENABLED must be a boolean")
+		}
+	}
+	positive := func(key string, fallback int) int {
+		raw := strings.TrimSpace(os.Getenv(key))
+		if raw == "" {
+			return fallback
+		}
+		value, err := strconv.Atoi(raw)
+		if err != nil || value <= 0 {
+			if configErr == nil {
+				configErr = fmt.Errorf("%s must be a positive integer", key)
+			}
+			return 0
+		}
+		return value
+	}
+	output := positive("GROWTH_INSIGHTS_MAX_OUTPUT_TOKENS", DefaultGrowthInsightsMaxOutputTokens)
+	daily := positive("GROWTH_INSIGHTS_DAILY_ATTEMPT_LIMIT", 100)
+	userDaily := positive("GROWTH_INSIGHTS_USER_DAILY_ATTEMPT_LIMIT", 3)
+	return enabled, output, daily, userDaily, configErr
+}
+
+func ValidateGrowthInsights(env Env) error {
+	if env.growthInsightsConfigError != nil {
+		return env.growthInsightsConfigError
+	}
+	// Preserve directly constructed zero-value Env fixtures; Load always sets defaults.
+	if !env.GrowthInsightsWorkerEnabled && env.GrowthInsightsMaxOutputTokens == 0 && env.GrowthInsightsDailyAttemptLimit == 0 && env.GrowthInsightsUserDailyAttemptLimit == 0 {
+		return nil
+	}
+	for _, item := range []struct {
+		name  string
+		value int
+	}{
+		{"GROWTH_INSIGHTS_MAX_OUTPUT_TOKENS", env.GrowthInsightsMaxOutputTokens},
+		{"GROWTH_INSIGHTS_DAILY_ATTEMPT_LIMIT", env.GrowthInsightsDailyAttemptLimit},
+		{"GROWTH_INSIGHTS_USER_DAILY_ATTEMPT_LIMIT", env.GrowthInsightsUserDailyAttemptLimit},
+	} {
+		if item.value <= 0 {
+			return fmt.Errorf("%s must be a positive integer", item.name)
+		}
+	}
+	return nil
 }
 
 func minInt(a, b int) int {
@@ -356,6 +418,7 @@ func positiveInt64Env(key string, fallback int64) int64 {
 
 func Load() Env {
 	loadDotEnv()
+	growthEnabled, growthOutput, growthDaily, growthUserDaily, growthErr := loadGrowthInsightsConfig()
 
 	port, err := strconv.Atoi(getenv("PORT", "5320"))
 	if err != nil {
@@ -510,6 +573,12 @@ func Load() Env {
 	classroomMedia := ClassroomMediaConfig{Endpoint: getenv("CLASSROOM_MEDIA_ENDPOINT", getenv("OSS_ENDPOINT", "")), Bucket: getenv("CLASSROOM_MEDIA_BUCKET", getenv("OSS_BUCKET", "")), Region: getenv("CLASSROOM_MEDIA_REGION", getenv("OSS_REGION", "")), PartSizeBytes: int64(classroomPartMB) * 1024 * 1024, MaxParts: classroomMaxParts, CredentialTTLSeconds: classroomTTL, CoverURLTTLSeconds: classroomCoverTTL, MaxVideoBytes: classroomVideoMB * 1024 * 1024, MaxAudioBytes: classroomAudioMB * 1024 * 1024}
 
 	return Env{
+		GrowthInsightsWorkerEnabled:         growthEnabled,
+		GrowthInsightsMaxOutputTokens:       growthOutput,
+		GrowthInsightsDailyAttemptLimit:     growthDaily,
+		GrowthInsightsUserDailyAttemptLimit: growthUserDaily,
+		growthInsightsConfigError:           growthErr,
+
 		AdminPassword: getenv("ADMIN_PASSWORD", "123456"),
 		AdminUsername: getenv("ADMIN_USERNAME", "admin"),
 		AppEnv:        appEnv,
@@ -609,6 +678,9 @@ func Load() Env {
 }
 
 func ValidateProduction(env Env) error {
+	if err := ValidateGrowthInsights(env); err != nil {
+		return err
+	}
 	appEnv := NormalizeAppEnv(env.AppEnv)
 	if err := validateAppEnv(appEnv); err != nil {
 		return err

@@ -10,9 +10,21 @@ import (
 	"unicode/utf8"
 )
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db           *sql.DB
+	budgetLimits BudgetLimits
+}
 
-func NewStore(db *sql.DB) *Store { return &Store{db: db} }
+func NewStore(db *sql.DB) *Store {
+	return &Store{db: db, budgetLimits: BudgetLimits{DailyAttempts: DefaultDailyAttemptLimit, UserDailyAttempts: DefaultUserDailyAttemptLimit}}
+}
+
+func NewStoreWithBudgetLimits(db *sql.DB, limits BudgetLimits) (*Store, error) {
+	if limits.DailyAttempts <= 0 || limits.UserDailyAttempts <= 0 {
+		return nil, ErrInvalid
+	}
+	return &Store{db: db, budgetLimits: limits}, nil
+}
 
 func (s *Store) Consent(ctx context.Context, userID int64) (bool, error) {
 	v, err := s.ConsentMetadata(ctx, userID)
