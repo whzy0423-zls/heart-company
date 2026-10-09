@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AppUserInsight, QuizCard } from '#/api';
 
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onMounted, reactive, ref, watch } from 'vue';
 
 import {
   Alert,
@@ -66,6 +66,11 @@ const insightStatusColors: Record<string, string> = {
 };
 
 const route = useRoute();
+const UserInsightReport = defineAsyncComponent(
+  () => import('./components/user-insight-report.vue'),
+);
+const reportOpen = ref(false);
+const reportUser = ref<AppUserInsight>();
 const loading = ref(false);
 const loadError = ref('');
 const insights = ref<AppUserInsight[]>([]);
@@ -95,7 +100,7 @@ const columns = [
   { dataIndex: 'memoryCount', title: '沉淀', width: 110 },
   { dataIndex: 'messageCount', title: '对话', width: 110 },
   { dataIndex: 'latestQuizTime', title: '最近测评', width: 170 },
-  { fixed: 'right' as const, key: 'action', title: '操作', width: 150 },
+  { fixed: 'right' as const, key: 'action', title: '操作', width: 225 },
 ];
 
 const selectedStrengths = computed(() =>
@@ -226,6 +231,11 @@ function openDetail(record: AppUserInsight) {
   detailOpen.value = true;
 }
 
+function openReport(record: AppUserInsight) {
+  reportUser.value = record;
+  reportOpen.value = true;
+}
+
 function autoOpenRouteDetail() {
   const userId = routeUserId().trim();
   const keyword = routeKeyword().trim();
@@ -255,6 +265,8 @@ function insightRecord(record: Record<string, any>): AppUserInsight {
 watch(
   () => [route.query.keyword, route.query.userId, route.query.open],
   () => {
+    reportOpen.value = false;
+    reportUser.value = undefined;
     const routeUserIdValue = routeUserId().trim();
     if (applyRouteKeyword() || routeUserIdValue !== loadedRouteUserId) {
       load();
@@ -329,7 +341,7 @@ onMounted(() => {
             showSizeChanger: true,
             total,
           }"
-          :scroll="{ x: 1190 }"
+          :scroll="{ x: 1265 }"
           row-key="id"
           table-layout="fixed"
           @change="handleTableChange"
@@ -371,12 +383,22 @@ onMounted(() => {
                 <Button size="small" type="link" @click="openCards(insightRecord(record))">
                   命运卡片
                 </Button>
+                <Button size="small" type="link" @click="openReport(insightRecord(record))">
+                  分析报告
+                </Button>
               </Space>
             </template>
           </template>
         </Table>
       </Card>
     </div>
+
+    <UserInsightReport
+      v-if="reportUser"
+      v-model:open="reportOpen"
+      :app-user-id="reportUser.id"
+      :user-name="reportUser.nickname || reportUser.phone"
+    />
 
     <Drawer
       v-model:open="detailOpen"

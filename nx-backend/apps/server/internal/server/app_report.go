@@ -269,6 +269,13 @@ func (s *Server) appReportDetail(w http.ResponseWriter, r *http.Request, reportI
 		detail.Insights = ""
 		detail.Suggestions = ""
 	}
+	// Legacy report previews remain compatible. Personalized content is a
+	// separate paid projection and may only replace its explicit review week.
+	if view, ok := s.growthViewForMember(r.Context(), userInfo.ID, cardID); ok {
+		if review := growthWeeklyReview(view, targetWeekStart); review != "" {
+			detail.Insights = review
+		}
+	}
 
 	httpx.OK(w, detail)
 }

@@ -17,6 +17,9 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
+//go:embed growth_insight_schema.sql
+var growthInsightSchemaSQL string
+
 const preSchemaCompatibilitySQL = `
 ALTER TABLE IF EXISTS video_project_characters
   ADD COLUMN IF NOT EXISTS breakdown_item_key TEXT NOT NULL DEFAULT '';
@@ -106,6 +109,9 @@ func migrateSchema(ctx context.Context, database *sql.DB) error {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, schemaSQL); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, growthInsightSchemaSQL); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -256,6 +262,7 @@ var defaultMenus = []seedMenu{
 	{ID: 503, PID: 502, Name: "CustomerAppUsersEdit", AuthCode: "Customer:App:Write", Type: "button", Sort: 1, Icon: "lucide:pencil", Title: "编辑 App 客户"},
 	{ID: 512, PID: 502, Name: "CustomerAppTrialCreditGrant", AuthCode: "Customer:AppTrialCredit:Grant", Type: "button", Sort: 2, Icon: "lucide:gift", Title: "赠送试用额度"},
 	{ID: 504, PID: 1600, Name: "CustomerUserInsights", Path: "/customer/user-insights", Component: "/customer/user-insights", AuthCode: "Customer:UserInsights:List", Type: "menu", Sort: 3, Icon: "lucide:user-search", Title: "用户提炼数据"},
+	{ID: 515, PID: 504, Name: "CustomerUserInsightsGenerate", AuthCode: "Customer:UserInsights:Generate", Type: "button", Sort: 1, Icon: "lucide:refresh-cw", Title: "生成成长分析"},
 	{ID: 505, PID: 1600, Name: "CustomerAppOrders", Path: "/customer/app-orders", Component: "/customer/app-orders", AuthCode: "Customer:AppOrders:List", Type: "menu", Sort: 4, Icon: "lucide:receipt-text", Title: "App 订单"},
 	{ID: 506, PID: 505, Name: "CustomerAppOrdersGrant", AuthCode: "Customer:AppOrders:Write", Type: "button", Sort: 1, Icon: "lucide:badge-check", Title: "补发订单权益"},
 	{ID: 507, PID: 1600, Name: "CustomerAppChat", Path: "/customer/app-chat", Component: "/customer/app-chat", AuthCode: "Customer:AppChat:List", Type: "menu", Sort: 7, Icon: "lucide:messages-square", Title: "聊天质检"},

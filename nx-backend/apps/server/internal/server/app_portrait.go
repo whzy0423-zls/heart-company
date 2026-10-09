@@ -73,6 +73,9 @@ func (s *Server) appCardPortrait(w http.ResponseWriter, r *http.Request, userID 
 		return
 	}
 	resp.membershipResourceMetadata = access
+	if view, ok := s.growthViewForMember(r.Context(), userID, id); ok {
+		applyGrowthPortrait(&resp, view)
+	}
 	if s.appUsers != nil {
 		if care, careErr := s.appUsers.CareSnapshot(r.Context(), userID); careErr == nil {
 			resp.CareLevel = care.CareLevel

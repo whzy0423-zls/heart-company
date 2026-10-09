@@ -195,6 +195,9 @@ type Server struct {
 	problemFollowupWorkers         sync.WaitGroup
 	problemFollowupEvaluate        func(context.Context, problemfollowup.Input) (problemfollowup.Decision, error)
 	problemFollowupPush            func(context.Context, problemfollowup.Delivery) error
+	growthInsights                 growthInsightStore
+	growthInsightCancel            context.CancelFunc
+	growthInsightWorkers           sync.WaitGroup
 	directMedia                    *directmedia.Store
 	chatAppearance                 *chatappearance.Store
 	realtimeTickets                *realtime.TicketStore
@@ -616,6 +619,7 @@ func newServer(env config.Env, database *sql.DB) *Server {
 		careCtx, careCancel := context.WithCancel(context.Background())
 		s.careWorkerCancel = careCancel
 		s.startProblemFollowups()
+		s.startGrowthInsights()
 		go s.runCareEvaluationSweep(careCtx)
 	}
 	if database != nil {
@@ -1161,6 +1165,8 @@ func (s *Server) routes() {
 	// 成长周报
 	s.mux.HandleFunc("/api/app/reports", s.method(http.MethodGet, s.requireAppAuth(s.appReportList)))
 	s.mux.HandleFunc("/api/app/reports/", s.requireAppAuth(s.appReportRouter))
+	s.mux.HandleFunc("/api/app/growth-loop", s.requireAppAuth(s.appGrowthLoop))
+	s.mux.HandleFunc("/api/app/growth-loop/", s.requireAppAuth(s.appGrowthLoop))
 	// 推送设备令牌注册/注销
 	s.mux.HandleFunc("/api/app/push/register", s.method(http.MethodPost, s.requireAppAuth(s.appPushRegister)))
 	s.mux.HandleFunc("/api/app/push/unregister", s.method(http.MethodPost, s.requireAppAuth(s.appPushUnregister)))
@@ -1338,6 +1344,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/app-memories/list", s.method(http.MethodGet, s.requirePermission("Customer:AppMemory:List", s.adminAppMemories)))
 	s.mux.HandleFunc("/api/app-memories/", s.method(http.MethodPut, s.requirePermission("Customer:AppMemory:Write", s.adminAppMemoryStatus)))
 	s.mux.HandleFunc("/api/app-users/insights", s.method(http.MethodGet, s.requirePermission("Customer:UserInsights:List", s.appUsers.HandleAppUserInsights)))
+	s.mux.HandleFunc("/api/app-user-reports", s.requireMethodPermission(map[string]string{
+		http.MethodGet:  "Customer:UserInsights:List",
+		http.MethodPost: "Customer:UserInsights:Generate",
+	}, s.adminUserReports))
+	s.mux.HandleFunc("/api/app-user-reports/", s.method(http.MethodGet, s.requirePermission("Customer:UserInsights:List", s.adminUserReports)))
 	s.mux.HandleFunc("/api/app-users/", s.adminAppUserByID)
 	s.mux.HandleFunc("/api/admin/teachers", s.requireAnyPermission([]string{"Miniapp:Teacher:Manage", "Miniapp:Classroom:Write"}, s.adminTeacherCollection))
 	s.mux.HandleFunc("/api/admin/teachers/", s.requireAnyPermission([]string{"Miniapp:Teacher:Manage", "Miniapp:Classroom:Write"}, s.adminTeacherRouter))
@@ -1368,6 +1379,10 @@ func (s *Server) routes() {
 }
 
 func (s *Server) Shutdown() {
+	if s.growthInsightCancel != nil {
+		s.growthInsightCancel()
+	}
+	s.growthInsightWorkers.Wait()
 	if s.problemFollowupCancel != nil {
 		s.problemFollowupCancel()
 	}

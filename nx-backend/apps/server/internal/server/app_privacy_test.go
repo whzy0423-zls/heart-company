@@ -80,7 +80,7 @@ func TestAppPrivacyPolicyDisclosesXinzhiliVoiceDataHandling(t *testing.T) {
 	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Data.Version != "2026-07-23" || body.Data.EffectiveAt != "2026-07-23" {
+	if body.Data.Version != "2026-10-09" || body.Data.EffectiveAt != "2026-10-09" {
 		t.Fatalf("privacy policy dates = version %q effective %q", body.Data.Version, body.Data.EffectiveAt)
 	}
 

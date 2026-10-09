@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"nine-xing/nx-backend/apps/server/internal/appuser"
+	"nine-xing/nx-backend/apps/server/internal/growthinsight"
 	"nine-xing/nx-backend/apps/server/internal/httpx"
 	"nine-xing/nx-backend/apps/server/internal/lifestory"
 	"nine-xing/nx-backend/apps/server/internal/quiz"
@@ -21,16 +23,17 @@ type appPrivacyPolicyResponse struct {
 }
 
 type appPrivacyExportResponse struct {
-	GeneratedAt   string                   `json:"generatedAt"`
-	User          appuser.User             `json:"user"`
-	Cards         []appPrivacyCard         `json:"cards"`
-	Memories      []appMemoryItem          `json:"memories"`
-	Preferences   []appPrivacyPreference   `json:"preferences"`
-	SkillSessions []appPrivacySkillSession `json:"skillSessions"`
-	SkillMessages []appPrivacySkillMessage `json:"skillMessages"`
-	LifeStories   []lifestory.Story        `json:"lifeStories"`
-	SessionCount  int                      `json:"sessionCount"`
-	MessageCount  int                      `json:"messageCount"`
+	GeneratedAt    string                    `json:"generatedAt"`
+	User           appuser.User              `json:"user"`
+	Cards          []appPrivacyCard          `json:"cards"`
+	Memories       []appMemoryItem           `json:"memories"`
+	Preferences    []appPrivacyPreference    `json:"preferences"`
+	SkillSessions  []appPrivacySkillSession  `json:"skillSessions"`
+	SkillMessages  []appPrivacySkillMessage  `json:"skillMessages"`
+	LifeStories    []lifestory.Story         `json:"lifeStories"`
+	SessionCount   int                       `json:"sessionCount"`
+	MessageCount   int                       `json:"messageCount"`
+	GrowthAnalysis *growthinsight.ExportData `json:"growthAnalysis,omitempty"`
 }
 
 type appPrivacySkillSession struct {
@@ -83,9 +86,11 @@ type appPrivacyPreference struct {
 func (s *Server) appPrivacyPolicy(w http.ResponseWriter, _ *http.Request) {
 	httpx.OK(w, appPrivacyPolicyResponse{
 		Title:       "九型芯之力 App 隐私政策",
-		Version:     "2026-07-23",
-		EffectiveAt: "2026-07-23",
+		Version:     "2026-10-09",
+		EffectiveAt: "2026-10-09",
 		Content: `我们仅为账号登录、九型测评、成长卡片、对话服务、学习到的沟通偏好、消息推送和服务改进处理必要信息。
+
+个性化成长分析默认关闭。你主动开启后，我们会在后台分析本人主卡测评、近期普通主会话中你发送的内容（含已保存的语音转写），以及你主动提交的行动反馈和纠正意见，生成成长画像、周期复盘和练习建议。分析不读取好友消息、副卡对话或独立技能会话，不将 AI 回答当作你的事实，也不会自动改变测评型号。必要文字可能发送给后台配置的模型服务商；具备用户提炼数据权限的工作人员可查看完整分析及依据，访问会留审计记录。报告仅供非临床自我反思，不作为诊断。你可以在隐私中心随时关闭此功能并删除相关衍生报告、行动和分析任务，会员过期后仍可关闭和提交纠正。删除来源对话、注销或更换本人主卡会使相关分析失效。个人分析不会进入公共知识库。
 
 使用芯之力语音对话时，服务会临时处理你提交的音频，用于语音识别（ASR）、生成回答和语音合成（TTS）。我们的自有后台不持久化保存原始录音。即使页面不展示文字，成功完成并保存的芯之力对话仍会将转写文字、AI 回答和回答来源保存为隐藏对话历史。服务可能保存你明确表达的沟通偏好，并在回答时使用已有对话历史和已有专属记忆（如适用），以保持上下文并提供更贴合你的后续回答。
 
@@ -160,18 +165,30 @@ func (s *Server) appPrivacyExport(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, "server error")
 		return
 	}
+	var growthAnalysis *growthinsight.ExportData
+	if exporter, ok := s.growthInsights.(interface {
+		Export(context.Context, int64) (growthinsight.ExportData, error)
+	}); ok {
+		data, exportErr := exporter.Export(r.Context(), userInfo.ID)
+		if exportErr != nil {
+			httpx.Fail(w, http.StatusServiceUnavailable, "成长分析导出暂时失败，请重试")
+			return
+		}
+		growthAnalysis = &data
+	}
 
 	httpx.OK(w, appPrivacyExportResponse{
-		GeneratedAt:   appMemoryTime(time.Now()),
-		User:          user,
-		Cards:         cards,
-		Memories:      memories,
-		Preferences:   preferences,
-		SkillSessions: skillSessions,
-		SkillMessages: skillMessages,
-		LifeStories:   lifeStories,
-		SessionCount:  sessionCount,
-		MessageCount:  messageCount,
+		GeneratedAt:    appMemoryTime(time.Now()),
+		User:           user,
+		Cards:          cards,
+		Memories:       memories,
+		Preferences:    preferences,
+		SkillSessions:  skillSessions,
+		SkillMessages:  skillMessages,
+		LifeStories:    lifeStories,
+		SessionCount:   sessionCount,
+		MessageCount:   messageCount,
+		GrowthAnalysis: growthAnalysis,
 	})
 }
 

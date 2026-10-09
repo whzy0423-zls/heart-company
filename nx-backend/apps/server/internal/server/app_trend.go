@@ -17,9 +17,11 @@ type appTrendPoint struct {
 }
 
 type appTrendSeries struct {
-	Label     string          `json:"label"`
-	Dimension string          `json:"dimension"`
-	Points    []appTrendPoint `json:"points"`
+	Label             string          `json:"label"`
+	Dimension         string          `json:"dimension"`
+	Points            []appTrendPoint `json:"points"`
+	Explanation       string          `json:"explanation,omitempty"`
+	AnalysisUpdatedAt string          `json:"analysisUpdatedAt,omitempty"`
 	membershipResourceMetadata
 }
 
@@ -95,7 +97,12 @@ func (s *Server) appCardTrend(w http.ResponseWriter, r *http.Request, userID int
 	}
 
 	series := buildAppTrendSeries(startTime, endExclusive, signals)
+	view, hasAnalysis := s.growthViewForMember(r.Context(), userID, cardID)
 	for i := range series {
+		if hasAnalysis {
+			series[i].Explanation = view.TrendExplanation
+			series[i].AnalysisUpdatedAt = view.GeneratedAt
+		}
 		series[i].membershipResourceMetadata = access
 		redactAppTrendSeries(&series[i], access)
 	}
@@ -110,6 +117,8 @@ func redactAppTrendSeries(series *appTrendSeries, access membershipResourceMetad
 		return
 	}
 	series.Points = []appTrendPoint{}
+	series.Explanation = ""
+	series.AnalysisUpdatedAt = ""
 }
 
 func appTrendLocation() *time.Location {
